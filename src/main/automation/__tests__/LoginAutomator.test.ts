@@ -254,6 +254,47 @@ describe('a BBS whose menus are nothing like Paradigm’s', () => {
   });
 });
 
+/*
+ * `{{username}}` / `{{password}}`, for a BBS whose login prompt is nothing
+ * like `Please enter your username or "new":` — WorldGroup's own wording, for
+ * one — and therefore never classifies as `prompt-username`/`prompt-password`
+ * at all. Without a token, the only way to answer such a prompt was to retype
+ * the account into the step's `send` verbatim: a second, plaintext copy of the
+ * password, sitting in the server's config rather than the one field it is
+ * meant to live in.
+ */
+describe('a BBS prompt the classifier has never met', () => {
+  const worldgroup: LoginConfig = {
+    enabled: true,
+    username: 'vaelor',
+    password: 'secret',
+    steps: [
+      { when: 'otherwise type "new"', send: '{{username}}' },
+      { when: 'please enter your password', send: '{{password}}' }
+    ]
+  };
+
+  it('fills the token from the one field the account lives in', () => {
+    const login = new LoginAutomator(worldgroup, queue, { notice: (m) => notices.push(m) });
+    login.onBlock(block('unknown', 'Otherwise type "new": '));
+    vi.advanceTimersByTime(50);
+    login.onBlock(block('unknown', 'Please enter your password: '));
+    vi.advanceTimersByTime(50);
+    expect(sent).toEqual(['vaelor', 'secret']);
+  });
+
+  it('leaves a step with no token untouched', () => {
+    const login = new LoginAutomator(
+      { ...worldgroup, steps: [{ when: 'continue', send: '{{username}}-ish' }] },
+      queue,
+      {}
+    );
+    login.onBlock(block('unknown', 'Continue?'));
+    vi.advanceTimersByTime(50);
+    expect(sent).toEqual(['vaelor-ish']);
+  });
+});
+
 describe('leaving on purpose', () => {
   it('stands down at the menu that follows an exit, and says so once', () => {
     login.onBlock(block('status-line', '[HP=34]:'));

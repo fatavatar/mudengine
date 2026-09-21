@@ -3409,7 +3409,11 @@ settings:
     loginLegend: Login Menus
     loginNote:
       When the realm prints the text on the left, the client sends what is on the right. Leave
-      the answer blank to send a bare Enter, which several menus want.
+      the answer blank to send a bare Enter, which several menus want. If this realm's own
+      username or password prompt does not look like "Please enter your username or "new":" or
+      "Please enter your password:", the client will never recognise it on its own — add a step
+      that matches what it actually says, with {{username}} or {{password}} on the right to send
+      the account without retyping it here.
     loopsNote:
       Every character that plays here can walk these, without being told to. A character may
       add loops of its own on its own page.
