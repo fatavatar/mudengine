@@ -469,7 +469,8 @@ export class SessionHost {
       this.options.playersFor(id),
       this.options.spellLoreFor?.(id) ?? NO_SPELL_LORE,
       this.options.findsFor?.(id),
-      this.options.sentences?.() ?? NO_SHIPPED_SENTENCES
+      this.options.sentences?.() ?? NO_SHIPPED_SENTENCES,
+      config.connection.locate
     );
 
     manager.configureInternal(this.options.internal());
@@ -583,7 +584,12 @@ export class SessionHost {
   reconfigure(): void {
     for (const slot of this.slots.values()) {
       const config = this.options.configFor(slot.id);
-      slot.manager.configure(config.automation, config.connection.login, config.ui.rewrites);
+      slot.manager.configure(
+        config.automation,
+        config.connection.login,
+        config.ui.rewrites,
+        config.connection.locate
+      );
       slot.manager.configureInternal(this.options.internal());
     }
   }

@@ -67,6 +67,17 @@ export type BlockType =
    */
   | 'user-experience-table'
   | 'user-profile'
+  /**
+   * `Room <n>  Map: <n>` — the first line of `sys status`, MajorMUD's own
+   * volunteer of exact coordinates on a realm with no `rm` to ask for them.
+   *
+   * A type of its own rather than folded into `user-profile`: that one is
+   * `pro`'s output, this is a different command's, and the two happen to
+   * agree only in the fact they carry, not in what produced it. Read the same
+   * way regardless — `resolveFromCoordinates`, taken outright — because the
+   * realm stated it either way.
+   */
+  | 'user-location'
   /** `pro`'s `Statusline:` row: what the realm says the prompt is. */
   | 'user-statline'
   | 'user-encumbrance'
@@ -816,6 +827,7 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'user-experience': 'status',
   'user-experience-table': 'status',
   'user-profile': 'status',
+  'user-location': 'status',
   'user-statline': 'status',
   'user-encumbrance': 'status',
   'user-health': 'status',

@@ -12,11 +12,12 @@
 terminal:
   quiet:
     # Commands the client sends on its own behalf whose echo and answer stay
-    # out of the console — `rm` is asked on every arrival so the map knows
-    # where it is, and answers with a line nobody reads. Only what automation
-    # sends is ever quiet; anything you type is always shown, and so is
-    # anything the server volunteers in the middle of an answer — a monster
-    # walking in, somebody talking — because that is not the answer.
+    # out of the console — `rm` or `sys` is asked on every arrival so the map
+    # knows where it is (whichever a realm's own `locate:` setting names), and
+    # answers with lines nobody reads. Only what automation sends is ever
+    # quiet; anything you type is always shown, and so is anything the server
+    # volunteers in the middle of an answer — a monster walking in, somebody
+    # talking — because that is not the answer.
     enabled: true
     # The first word of the command, as the client sends it.
     #
@@ -27,10 +28,16 @@ terminal:
     # no first word, so it answers to `enter` here -- add it to keep the idle
     # and mid-fight re-reads out of the console as well.
     #
+    # `sys` is `sys status`, the MajorMUD-lineage locate a realm's own
+    # `locate: sys-status` setting sends in place of `rm` — the first word is
+    # the same regardless of which command the setting picks, so one entry
+    # covers both.
+    #
     # `pro` and `set` are the status-line routine's: thirty lines of profile
     # and a `Done.`, sent only when `automation.statline.control` is on.
     commands:
       - rm
+      - sys
       - look
       - pro
       - set

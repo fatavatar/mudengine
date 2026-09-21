@@ -67,6 +67,7 @@ import {
   type BankingConfig,
   type DropConfig,
   type EngagePolicy,
+  type LocateMethod,
   type LootConfig,
   type MobPriority,
   type RetreatStrategy,
@@ -1092,6 +1093,10 @@ function emptyServerForm(defaults: GlobalDraft | null): ServerDraft {
     port: defaults?.connection.port || 23,
     encoding: defaults?.connection.encoding ?? 'cp437',
     login: (defaults?.connection.login.steps ?? []).map((step) => ({ ...step })),
+    // `rm`, the same reason `database` and `mobPriority` below carry nothing
+    // from Global: which word this BBS answers to is a fact about that one
+    // place, and a realm just being created has not said which it is yet.
+    locate: 'rm',
     loops: [],
     // Empty is the world the client ships, which is right for a new realm until
     // somebody says otherwise. There is no Global default to copy: a map is a
@@ -4146,6 +4151,32 @@ export default function SettingsScreen({
                       <span>{t('settings.login.addStep')}</span>
                     </button>
                   </fieldset>
+
+                  {/*
+                    Which word this realm answers exact coordinates with.
+
+                    On the realm, for the same reason the menu script above is:
+                    every character here is talking to the same dispatch table,
+                    so every character gets the same answer. Not auto-detected
+                    -- see `LocateMethod` -- because the one case this exists
+                    for is a realm whose word is not `rm`, and trying `rm`
+                    first is exactly the broadcast a player who already knows
+                    that should never have to spend.
+                  */}
+                  <SelectField
+                    hint={t('settings.realms.locateHint')}
+                    label={t('settings.realms.locateLabel')}
+                    name="locate"
+                    onChange={(value) =>
+                      setServerForm({ ...serverForm, locate: value as LocateMethod })
+                    }
+                    options={[
+                      { value: 'rm', label: t('settings.realms.locateOptions.rm') },
+                      { value: 'sys-status', label: t('settings.realms.locateOptions.sysStatus') },
+                      { value: 'none', label: t('settings.realms.locateOptions.none') }
+                    ]}
+                    value={serverForm.locate}
+                  />
 
                   {/*
                     The loops that belong to the *place*.

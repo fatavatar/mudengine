@@ -211,6 +211,7 @@ export function migrateHome(options: MigrationOptions): void {
   statedTheReplanDrift(home, note);
   theActionsBecameAFamily(home, note);
   statedTheLightWait(home, note);
+  quietedTheLocateProbe(home, note);
 }
 
 /**
@@ -1520,6 +1521,35 @@ function quietedTheStatusLineAsks(home: Home, note: (message: string) => void): 
 
   if (!added) return;
   note(t('notices.migration.statusLineAsksQuieted', { file: home.internal }));
+}
+
+/**
+ * `sys` onto `internal.yaml`'s quiet list, where the list is still the one
+ * the client shipped before it.
+ *
+ * `sys status` is MajorMUD's own locate, asked on arrival exactly where `rm`
+ * was — for a realm whose own `locate:` setting names it — and the first word
+ * is `sys` regardless of which of the two the setting picked, so one entry
+ * covers both. Same reasoning as `quietedTheStatusLineAsks`, and the same
+ * caveat: this touches only a list that reads exactly `rm, look, pro, set`,
+ * because a list cannot say "I removed that" and a list somebody has edited,
+ * in either direction, is theirs and is left alone.
+ */
+function quietedTheLocateProbe(home: Home, note: (message: string) => void): void {
+  let added = false;
+
+  edit(home.internal, (document) => {
+    const commands = document.getIn(['terminal', 'quiet', 'commands'], true);
+    if (!isSeq(commands)) return false;
+    const words = commands.items.map((item) => (isScalar(item) ? String(item.value) : ''));
+    if (words.join(' ') !== 'rm look pro set') return false;
+    commands.items.push(document.createNode('sys'));
+    added = true;
+    return true;
+  });
+
+  if (!added) return;
+  note(t('notices.migration.locateProbeQuieted', { file: home.internal }));
 }
 
 /**

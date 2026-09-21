@@ -736,6 +736,15 @@ export class SettingsEditor {
         }
 
         /*
+         * Which word this realm answers *where am I standing* with, written
+         * only when it is not the default `rm` — the same rule `database` and
+         * `mobPriority` follow, so a file nobody has touched stays exactly the
+         * two lines a fresh save writes.
+         */
+        if (draft.locate !== 'rm') document.setIn(['locate'], draft.locate);
+        else if (document.hasIn(['locate'])) document.deleteIn(['locate']);
+
+        /*
          * The realm's own map, written only when it names one — an empty
          * `database` is the world the client ships, which is what a realm with
          * no key already gets, and a key restating a default is noise in a file

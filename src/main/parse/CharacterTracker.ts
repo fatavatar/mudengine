@@ -3681,6 +3681,10 @@ export class CharacterTracker {
         };
       }
 
+      // `sys status`'s coordinates and `pro`'s `Location:` are the same fact
+      // from two different commands, read the same way either way: the game
+      // stated it outright.
+      case 'user-location':
       case 'user-profile': {
         const map = int(g['map']);
         const number = int(g['room']);

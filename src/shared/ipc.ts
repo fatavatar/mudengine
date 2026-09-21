@@ -868,6 +868,8 @@ export const Invoke = {
   names: 'world:names',
   /** A probe command asked for from a card, sent through the arbiter. */
   ask: 'session:ask',
+  /** *Where am I standing*, in whichever word this realm's own setting names. */
+  locate: 'session:locate',
   /**
    * A gear button: put the kit back on, put it all on, take it all off, or one
    * item.
@@ -1348,6 +1350,20 @@ export interface IpcApi {
   names(session: SessionId): Promise<WorldNames>;
   /** Whether the arbiter took it. */
   ask(session: SessionId, command: string): Promise<boolean>;
+  /**
+   * *Where am I standing*, asked in whichever word this realm's own `locate`
+   * setting names — `rm`, `sys status`, or nothing at all.
+   *
+   * Its own channel rather than `ask`, which is gated to a bare verb of at
+   * most eight lowercase letters: `sys status` has a space in it and is
+   * eleven characters, so that gate would refuse it outright, and the answer
+   * is the same one the gear button found — main decides which word this is,
+   * not the window. Resolves to whether anything was actually asked: a realm
+   * configured for `'none'`, or one whose configured word the wire has
+   * already refused this connection, asks nothing and says so by returning
+   * `false`.
+   */
+  locate(session: SessionId): Promise<boolean>;
   /** A gear button. Resolves to how many commands were queued. See the channel. */
   gear(session: SessionId, action: GearAction, item?: string): Promise<number>;
   /** A console button main runs. Whether it was taken; a refusal says so itself. */

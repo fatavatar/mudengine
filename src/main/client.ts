@@ -2272,6 +2272,17 @@ function registerIpc(): void {
   });
 
   /*
+   * *Where am I standing*, in whichever word the realm's own `locate` setting
+   * names. No argument crosses from the window — `ask`'s gate is a bare verb
+   * because that is what lets a window's own string reach the socket at all,
+   * and `sys status` would fail it outright; here main reads the setting and
+   * picks the word itself, exactly as the gear button decides its own.
+   */
+  handle(Invoke.locate, (_caller, session: SessionId) => {
+    return host?.get(session)?.manager.askWhereIAm() ?? false;
+  });
+
+  /*
    * A gear button: the kit back on, all of it on, all of it off, or one item.
    *
    * **Decided here, not in the renderer**, for the reason `actions.ts` gives

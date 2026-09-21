@@ -80,6 +80,27 @@ export interface LoginStep {
 }
 
 /**
+ * Which word this realm asks for exact coordinates with, or whether to ask at
+ * all.
+ *
+ * Not auto-detected. It used to be — `rm` tried, retired on the wire's own
+ * refusal, nothing else offered — which is exactly right for a command the
+ * client can safely *try*, and exactly wrong for one whose failure mode is
+ * being spoken aloud in the room: a realm the client has not yet dialled
+ * cannot be spared that first broadcast by anything it learns afterwards. A
+ * player who already knows their BBS says so once, here, and neither
+ * automatic answer is asked to guess it.
+ *
+ * - `'rm'` — GreaterMUD/Paradigm's word. `Location: <map>,<room>`.
+ * - `'sys-status'` — the MajorMUD lineage's, for a realm with no `rm` at all
+ *   (`bbs.thelucks.org`, WorldGroup, captured live 2026-09-21). `sys status`'s
+ *   first line, `Room <n>  Map: <n>`.
+ * - `'none'` — neither. The client falls back to dead reckoning and says so,
+ *   the same as a realm that refused the configured word.
+ */
+export type LocateMethod = 'rm' | 'sys-status' | 'none';
+
+/**
  * Answers to the login sequence.
  *
  * On a resolved character this is whole: `resolveProfile` fills `username`,
@@ -126,6 +147,8 @@ export interface ConnectionConfig {
    * was retired 2026-08-29.
    */
   login: LoginConfig;
+  /** See `LocateMethod`. Resolved from the server's own setting; see `Server.locate`. */
+  locate: LocateMethod;
 }
 
 /**
@@ -162,6 +185,15 @@ export interface Server {
    * needs.
    */
   login: LoginStep[];
+  /**
+   * How this realm answers *where am I standing*, if at all.
+   *
+   * **On the realm, for the same reason `login` is.** Every character here is
+   * talking to the same dispatch table, so every character gets the same
+   * answer to whether `rm` or `sys status` is the word that works — this is a
+   * fact about the BBS, not about the account playing it.
+   */
+  locate: LocateMethod;
   /**
    * The world every character on this realm walks: empty, a bundled world's
    * name, or a path to a realm database — `.mdb`, `.accdb`, `.sqlite` or
@@ -2323,7 +2355,9 @@ export const DEFAULT_CONFIG: AppConfig = {
         { when: 'Accept these realm rules to continue', send: '1' },
         { when: '(N)onstop, (Q)uit, or (C)ontinue?', send: '' }
       ]
-    }
+    },
+    // Paradigm's word. A realm without it says so in its own `locate:`.
+    locate: 'rm'
   },
   /*
    * None. A realm is a directory under `realms/`, and the client seeds one
@@ -2846,7 +2880,12 @@ export function normalizeConfig(input: unknown): AppConfig {
         ['cp437', 'utf8', 'latin1'],
         DEFAULT_CONFIG.connection.encoding
       ),
-      login: normalizeLogin(connection['login'])
+      login: normalizeLogin(connection['login']),
+      locate: oneOf<LocateMethod>(
+        connection['locate'],
+        ['rm', 'sys-status', 'none'],
+        DEFAULT_CONFIG.connection.locate
+      )
     },
     // Both keys, oldest last: `profiles:` was this block's name before a
     // profile came to mean a character.
@@ -3140,6 +3179,11 @@ function normalizeServer(value: unknown): Server | null {
     // Empty is a real answer: a server with no menus at all, which is every
     // MUD reached directly rather than through a BBS front end.
     login: readLoginSteps(value['login']) ?? [],
+    locate: oneOf<LocateMethod>(
+      value['locate'],
+      ['rm', 'sys-status', 'none'],
+      DEFAULT_CONFIG.connection.locate
+    ),
     /*
      * Empty is a real answer here too: the realm the client ships.
      *
