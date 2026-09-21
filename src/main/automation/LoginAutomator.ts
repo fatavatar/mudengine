@@ -27,6 +27,17 @@
  *
  * Answers go through the arbiter at `user` priority: they are on the player's
  * behalf, and must outrank anything automated.
+ *
+ * ## A BBS whose prompt never classifies
+ *
+ * `prompt-username`/`prompt-password` match one literal wording. A front end
+ * that asks differently — WorldGroup's own account prompt, for one — never
+ * produces that block type, and the two schema fields above go unanswered no
+ * matter how they are configured. The way in there is the same `steps`
+ * mechanism every other realm-specific menu uses, matched on the prompt's own
+ * text, with `{{username}}`/`{{password}}` in `send` filled from this config —
+ * see `expand()` — so the account still lives in one field rather than a
+ * second, plaintext copy typed into the step itself.
  */
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
@@ -192,9 +203,32 @@ export class LoginAutomator {
       // `Please select a realm`. Being strict here would fail silently.
       if (step.when.length === 0 || !text.includes(step.when.toLowerCase())) continue;
       this.usedExtra.add(index);
-      this.send(step.send, t('automation.login.reasonMenu', { promptText: step.when }));
+      this.send(
+        this.expand(step.send),
+        t('automation.login.reasonMenu', { promptText: step.when })
+      );
       return;
     }
+  }
+
+  /**
+   * `{{username}}` / `{{password}}` in a step's `send`, filled from the one
+   * field the account actually lives in.
+   *
+   * A BBS whose login has nothing that classifies as `prompt-username` or
+   * `prompt-password` — WorldGroup's own wording, for one — can still only be
+   * answered through `steps`, matched on its real prompt text. Without this, the
+   * only way to answer such a prompt was to retype the account into the step's
+   * `send` verbatim: a second copy of the password, in plain text, in the
+   * server's config rather than the character's. The token is filled here
+   * rather than earlier so a step that names neither is untouched, and an
+   * empty credential expands to nothing rather than sending a token literally.
+   */
+  private expand(send: string): string {
+    if (!send.includes('{{')) return send;
+    return send
+      .replace(/\{\{username\}\}/g, this.config.username)
+      .replace(/\{\{password\}\}/g, this.config.password);
   }
 
   private respond(type: BlockType, value: string, describe: string): void {
