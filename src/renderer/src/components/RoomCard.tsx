@@ -46,11 +46,19 @@ export interface RoomCardProps extends CardChrome {
    */
   forget?(discovery: Pick<Discovery, 'from' | 'command'>): void;
   /**
-   * Sends a probe through the arbiter — `rm`, to ask the realm where the
-   * character is. Quiet in the console when `internal.yaml` says so; this is
-   * the button that exercises that.
+   * Sends a short probe through the arbiter — a text exit, a phrase this room
+   * or somebody in it answers to. Quiet in the console when `internal.yaml`
+   * says so.
    */
   ask?(command: string): void;
+  /**
+   * *Where am I standing*, in whichever word this realm's own setting names —
+   * `rm`, `sys status`, or nothing at all. The button below reads main's
+   * answer rather than sending `rm` itself: a card in a window cannot know
+   * which word this realm actually has, and a window that guessed would be
+   * the broadcast the setting exists to avoid.
+   */
+  locate?(): void;
   /**
    * Ways through the realm this character has found that the realm data does
    * not have.
@@ -115,6 +123,7 @@ function RoomCard({
   inspect,
   forget,
   ask,
+  locate,
   asks,
   learned,
   finds,
@@ -290,13 +299,13 @@ function RoomCard({
         ) : undefined
       }
       actions={
-        ask && character.phase === 'in-game'
+        locate && character.phase === 'in-game'
           ? [
               {
-                id: 'rm',
+                id: 'locate',
                 label: t('cards.room.actions.askLocationTooltip'),
                 icon: 'search',
-                run: () => ask('rm')
+                run: () => locate()
               }
             ]
           : undefined

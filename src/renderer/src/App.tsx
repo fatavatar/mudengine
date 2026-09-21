@@ -435,6 +435,8 @@ interface CardContext {
   meter: StreamMeter;
   quiet: boolean;
   ask(command: string): void;
+  /** *Where am I standing*, in whichever word this realm's own setting names. */
+  locate(): void;
   /**
    * A gear button, addressed at this character.
    *
@@ -566,6 +568,8 @@ interface BuilderApi {
  */
 interface AddressedActions {
   ask(command: string): void;
+  /** *Where am I standing*, in whichever word this realm's own setting names. */
+  locate(): void;
   forget(discovery: Discovery): void;
   forgetFind(find: Pick<Find, 'room' | 'name'>): void;
   gear(action: GearAction, item?: string): void;
@@ -644,6 +648,7 @@ function cardElement(id: CardId, ctx: CardContext): ReactNode {
         <RoomCard
           {...chrome}
           ask={ctx.ask}
+          locate={ctx.locate}
           character={character}
           session={ctx.session}
           forget={ctx.forget}
@@ -3106,6 +3111,10 @@ export default function App() {
     },
     [api, session]
   );
+  /** *Where am I standing*, in whichever word this realm's own setting names. */
+  const locate = useCallback(() => {
+    void api.locate(session);
+  }, [api, session]);
   /**
    * A name clicked in the console. The console has no element to anchor to
    * — xterm paints cells — so it hands up the box of the cells instead.
@@ -4808,6 +4817,7 @@ export default function App() {
       if (cached) return cached;
       const bound: AddressedActions = {
         ask: (command) => void api.ask(sid, command),
+        locate: () => void api.locate(sid),
         forget: (discovery) => void api.forget(sid, discovery),
         forgetFind: (find) => void api.forgetFind(sid, find),
         gear: (action, item) => void api.gear(sid, action, item),
@@ -4918,6 +4928,7 @@ export default function App() {
         meter: shown ? meter : ZERO_METER,
         quiet: pressure === 'high',
         ask: shown ? ask : bound.ask,
+        locate: shown ? locate : bound.locate,
         forget: shown ? forget : bound.forget,
         forgetFind: bound.forgetFind,
         inspect,
@@ -5019,6 +5030,7 @@ export default function App() {
     [
       api,
       ask,
+      locate,
       boundFor,
       builderApi,
       meter,

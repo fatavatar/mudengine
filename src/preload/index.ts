@@ -143,6 +143,7 @@ const api: IpcApi = {
   forgetCharacter: (session) => ipcRenderer.invoke(Invoke.forgetCharacter, session),
   names: (session) => ipcRenderer.invoke(Invoke.names, session),
   ask: (session, command) => ipcRenderer.invoke(Invoke.ask, session, command),
+  locate: (session) => ipcRenderer.invoke(Invoke.locate, session),
   gear: (session, action, item) => ipcRenderer.invoke(Invoke.gear, session, action, item),
   terminalAct: (session, action) => ipcRenderer.invoke(Invoke.terminalAct, session, action),
   askRemote: (session, who, name) => ipcRenderer.invoke(Invoke.askRemote, session, who, name),

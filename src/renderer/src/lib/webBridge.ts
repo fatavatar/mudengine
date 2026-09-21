@@ -276,6 +276,7 @@ export function createWebBridge(): IpcApi {
     forgetCharacter: (session) => invoke(Invoke.forgetCharacter, session),
     names: (session) => invoke(Invoke.names, session),
     ask: (session, command) => invoke(Invoke.ask, session, command),
+    locate: (session) => invoke(Invoke.locate, session),
     gear: (session, action, item) => invoke(Invoke.gear, session, action, item),
     terminalAct: (session, action) => invoke(Invoke.terminalAct, session, action),
     askRemote: (session, who, name) => invoke(Invoke.askRemote, session, who, name),
