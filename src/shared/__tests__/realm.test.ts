@@ -148,6 +148,13 @@ describe('the family the wire states', () => {
     expect(familyToldBy(block('user-profile'))).toBeNull();
   });
 
+  it("reads sys status's coordinates as MajorMUD — rm's mirror", () => {
+    expect(familyToldBy(block('user-location', { map: '16', room: '796' }))).toEqual({
+      family: 'majormud',
+      tell: 'sys-status-answered'
+    });
+  });
+
   it('reads a GreaterMUD-only command said out loud as the MajorMUD lineage', () => {
     for (const message of ['rm', 'room', 'ab', 'deaths']) {
       // Every spelling, because the word is resolved through the realm's own

@@ -4341,18 +4341,102 @@ describe('a command this realm has no word for', () => {
 });
 
 /*
- * A corridor the server refuses is avoided for the session — and taken back the
- * moment the server prints it.
- *
- * todo 04, reported with the room number in it: `Crypt, Stone Hallway` 1/1056
- * leaves north through `Hidden/Needs 2 Actions`, the walk was refused, and the
- * console said *the realm data promised an exit n that the realm refuses*. The
- * exit is in the file with both its levers; what the server said was that the
- * way is **shut**. Two things were wrong with writing that down: the sentence
- * accused the data of the one thing it had right, and nothing ever took the
- * entry out again — so a player who walked over and pulled the levers by hand
- * found every route still avoiding the corridor until they reconnected.
+ * The realm setting that says which word asks *where am I*, or whether to ask
+ * at all — and, load-bearingly, that the setting is not just consulted by the
+ * walker-desync path but actually changes what the shipped `onEnterRealm`
+ * list sends: that list spells the entry probe `rm` because Paradigm is what
+ * it ships for, and a realm configured away from `rm` must not have the
+ * literal word tried on arrival just because the list still says so.
  */
+describe('the locate setting', () => {
+  const dial = () => ({ host: '127.0.0.1', port, encoding: 'cp437' as const });
+
+  it('sends sys status on arrival instead of rm, once configured', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      DEFAULT_CONFIG.automation,
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'sys-status'
+    );
+    await manager.connect(dial());
+    const socket = await client();
+    const received: Buffer[] = [];
+    socket.on('data', (chunk) => received.push(chunk));
+    socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.phase === 'in-game');
+
+    const typed = (): string => Buffer.concat(received).toString('latin1');
+    await until(() => /(^|\n)sys status\r\n/.test(typed()));
+    expect(typed()).not.toMatch(/(^|\n)rm\r\n/);
+  });
+
+  it('asks nothing at all when configured to none', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      DEFAULT_CONFIG.automation,
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'none'
+    );
+    await manager.connect(dial());
+    const socket = await client();
+    const received: Buffer[] = [];
+    socket.on('data', (chunk) => received.push(chunk));
+    socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.phase === 'in-game');
+    // `st` is next in the shipped list, so its arrival proves the entry probes
+    // ran at all — the absence being asserted is `rm`'s alone.
+    await until(() => /(^|\n)st\r\n/.test(Buffer.concat(received).toString('latin1')));
+    expect(Buffer.concat(received).toString('latin1')).not.toMatch(/(^|\n)rm\r\n/);
+  });
+
+  /*
+   * The Room card's own locate button, addressed by `Invoke.locate` rather
+   * than the generic `ask` — see `ipc.ts`: `ask` is gated to a bare word of
+   * at most eight lowercase letters, which `sys status` would fail outright,
+   * so the card asks main to send *a* locate word rather than naming one.
+   */
+  it("sends the button's own probe in whichever word is configured", async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      { ...DEFAULT_CONFIG.automation, onEnterRealm: [] },
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'sys-status'
+    );
+    await manager.connect(dial());
+    const socket = await client();
+    const received: Buffer[] = [];
+    socket.on('data', (chunk) => received.push(chunk));
+    socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.phase === 'in-game');
+
+    expect(manager.askWhereIAm()).toBe(true);
+    await until(() => /(^|\n)sys status\r\n/.test(Buffer.concat(received).toString('latin1')));
+  });
+
+  it('asks nothing, and says so by refusing, when configured to none', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      { ...DEFAULT_CONFIG.automation, onEnterRealm: [] },
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'none'
+    );
+    await manager.connect(dial());
+    const socket = await client();
+    socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.phase === 'in-game');
+
+    expect(manager.askWhereIAm()).toBe(false);
+  });
+});
+
 describe('a corridor the server refused', () => {
   const shut = (): WorldGraph => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-shut-'));

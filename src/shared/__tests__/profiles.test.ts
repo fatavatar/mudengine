@@ -134,6 +134,25 @@ describe('resolveProfile', () => {
     expect(login.username).toBe('');
   });
 
+  /*
+   * On the server, same as the menu script: every character on one BBS gets
+   * the same answer to which word asks it where it is standing.
+   */
+  it("carries the server's own locate setting to every character on it", () => {
+    const withLocate = {
+      servers: [
+        { name: 'WorldGroup Realm', host: 'bbs.thelucks.org', port: 2424, locate: 'sys-status' }
+      ]
+    };
+    expect(resolve({ server: 'WorldGroup Realm' }, withLocate).config.connection.locate).toBe(
+      'sys-status'
+    );
+  });
+
+  it('defaults to rm when the server states no locate setting', () => {
+    expect(resolve({ server: 'GreaterMUD (local)' }).config.connection.locate).toBe('rm');
+  });
+
   it('lets two characters state the same account and differ by slot', () => {
     // There is no shared account store: two characters on one BBS account each
     // state their own username and password inline, and only the character

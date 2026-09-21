@@ -260,6 +260,22 @@ export const RULES: Rule[] = [
     pattern: /^(?:Recent Deaths:|Location:\s+(?<map>\d{1,3}),(?<room>\d{1,6}))/
   },
   /*
+   * `sys status`'s first line — the MajorMUD-lineage locate for a realm with
+   * no `rm` (`bbs.thelucks.org`, captured live 2026-09-21). Everything after
+   * it (spawn counts, controlling room, item ids) is that command's own
+   * business and unread here; only the coordinates are the fact this client
+   * wants, and they are printed room-then-map, reversed from `pro`'s
+   * `Location: <map>,<room>`.
+   *
+   * Matched on its own line regardless of what surrounds it: the reply can
+   * land mixed in with other room chatter, so nothing here assumes it is the
+   * first or only thing in the block.
+   */
+  {
+    type: 'user-location',
+    pattern: /^Room\s+(?<room>\d{1,6})\s+Map:\s+(?<map>\d{1,4})/
+  },
+  /*
    * `pro`'s own statement of the prompt — `Statusline:          full`, read
    * live on GreaterMUD (2026-09-09). The value is the class-default word or
    * the template somebody set, verbatim (`ProfileCommand.cs:54` prints the

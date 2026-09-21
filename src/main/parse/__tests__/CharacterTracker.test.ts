@@ -416,6 +416,19 @@ describe('room assembly', () => {
     expect(tracker.current.room.number).toBe(1201);
   });
 
+  /*
+   * `sys status`'s own locate, for a realm with no `rm` at all
+   * (`bbs.thelucks.org`, WorldGroup, captured live 2026-09-21). Same fact as
+   * `Location:`, read the same way, from a command whose reply is printed
+   * room-then-map rather than map-then-room.
+   */
+  it('applies sys status’s coordinates the same way, room-then-map', () => {
+    const tracker = play(['Room 796  Map: 16']);
+    expect(tracker.current.room.map).toBe(16);
+    expect(tracker.current.room.number).toBe(796);
+    expect(tracker.current.room.resolvedBy).toBe(null);
+  });
+
   it('clears stale coordinates when a new room arrives', () => {
     // `Location: 5,1201` describes where you were. Carrying it into the next
     // room is a confidently wrong location, which sends the pathfinder

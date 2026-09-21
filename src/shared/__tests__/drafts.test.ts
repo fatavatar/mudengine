@@ -52,6 +52,8 @@ describe('a saved server', () => {
     expect(asServerDraft(good)).toEqual({
       ...good,
       login: [],
+      // Absent above: the default word, `rm`.
+      locate: 'rm',
       loops: [],
       database: '',
       // Absent above: a realm ranks nothing until somebody playing it says so.
@@ -91,6 +93,13 @@ describe('a saved server', () => {
 
   it('takes a port typed into a text field', () => {
     expect(asServerDraft({ ...good, port: '2427' })?.port).toBe(2427);
+  });
+
+  it('takes the locate setting, and falls back to rm for anything else', () => {
+    expect(asServerDraft({ ...good, locate: 'sys-status' })?.locate).toBe('sys-status');
+    expect(asServerDraft({ ...good, locate: 'none' })?.locate).toBe('none');
+    expect(asServerDraft({ ...good, locate: 'nonsense' })?.locate).toBe('rm');
+    expect(asServerDraft({ ...good, locate: undefined })?.locate).toBe('rm');
   });
 
   /*

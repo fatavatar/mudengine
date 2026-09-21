@@ -29,6 +29,7 @@ import {
   normalizeMobPriorities,
   normalizeConfig,
   type AppConfig,
+  type LocateMethod,
   type LoginStep,
   type MobPriority,
   type Server
@@ -151,6 +152,7 @@ function resolveServer(
   target: ConnectionTarget;
   name: string;
   login: LoginStep[];
+  locate: LocateMethod;
   database: string;
   mobPriority: MobPriority[];
 } | null {
@@ -161,6 +163,7 @@ function resolveServer(
           target: { host: found.host, port: found.port, encoding: found.encoding },
           name: found.name,
           login: found.login,
+          locate: found.locate,
           database: found.database,
           mobPriority: found.mobPriority
         }
@@ -178,6 +181,9 @@ function resolveServer(
       // An address spelled out inline names no server entry, so there is no
       // script to inherit — the character's own, or the global default, wins.
       login: [],
+      // Same reasoning: nothing to inherit, so the global default answers
+      // which word this address is tried with.
+      locate: DEFAULT_CONFIG.connection.locate,
       /*
        * The realm database, which an inline address *may* state.
        *
@@ -353,6 +359,10 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
         host: target.host,
         port: target.port,
         encoding: target.encoding,
+        // On the server, same as `login.steps` — every character dialling this
+        // BBS gets the same answer to which locate word works, because it is a
+        // fact about the BBS and not about the account.
+        locate: server.locate,
         login: {
           enabled: credentials.username.length > 0,
           /*

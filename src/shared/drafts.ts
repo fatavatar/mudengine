@@ -30,6 +30,7 @@ import {
   type PotionWhen,
   type PvpAction,
   type EncumbranceGate,
+  type LocateMethod,
   type TabsPreference
 } from './config';
 import { DENOMINATIONS, type Denomination } from './character';
@@ -111,6 +112,8 @@ export interface ServerDraft {
    * BBS meets the same menus. See `Server.login`.
    */
   login: LoginStepDraft[];
+  /** How this realm answers *where am I standing*, if at all. See `Server.locate`. */
+  locate: LocateMethod;
   /**
    * The loops every character on this server may walk.
    *
@@ -668,6 +671,7 @@ export function asServerDraft(value: unknown): ServerDraft | null {
     port: number,
     encoding: stream,
     login: asLoginSteps(value['login']),
+    locate: asLocateMethod(value['locate']),
     // Bounded like a character's, and for the same reason: this crossed the
     // IPC boundary, so it is parsed rather than trusted.
     loops: asLoops(value['loops'], LOOP_LIMITS),
@@ -677,6 +681,11 @@ export function asServerDraft(value: unknown): ServerDraft | null {
     // goes through, so a row means one thing whichever door it arrived at.
     mobPriority: normalizeMobPriorities(value['mobPriority'])
   };
+}
+
+/** `LocateMethod`, crossed the IPC boundary — an unrecognised value is `'rm'`. */
+function asLocateMethod(value: unknown): LocateMethod {
+  return value === 'sys-status' || value === 'none' ? value : 'rm';
 }
 
 /**

@@ -181,6 +181,8 @@ describe('normalizeConfig', () => {
         port: 4000,
         encoding: 'utf8',
         login: [],
+        // The default: this realm's own `locate:` key is absent.
+        locate: 'rm',
         database: '',
         // Empty for the same reason the menus are: a realm ranks nothing until
         // somebody playing it says so.
@@ -261,6 +263,17 @@ describe('normalizeConfig', () => {
     });
     expect(config.servers).toHaveLength(1);
     expect(config.servers[0]?.host).toBe('first.test');
+  });
+
+  it("takes a server's own locate setting, and falls back to rm for anything else", () => {
+    const config = normalizeConfig({
+      servers: [
+        { name: 'A', host: 'a.test', locate: 'sys-status' },
+        { name: 'B', host: 'b.test', locate: 'none' },
+        { name: 'C', host: 'c.test', locate: 'nonsense' }
+      ]
+    });
+    expect(config.servers.map((server) => server.locate)).toEqual(['sys-status', 'none', 'rm']);
   });
 
   it('falls back to the built-in servers when the key is not a list', () => {

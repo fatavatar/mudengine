@@ -199,6 +199,8 @@ export type FamilyTell =
   | 'experience-table'
   /** `rm` answered with coordinates, so this server has the word. */
   | 'locate-answered'
+  /** `sys status` answered with coordinates — MajorMUD's own locate. */
+  | 'sys-status-answered'
   /**
    * A command only GreaterMUD has was said out loud in the room, so this
    * server does not have it.
@@ -218,7 +220,7 @@ export interface FamilyReading {
 /**
  * The server's family, from a block the client was already going to read.
  *
- * **Three positive tells and no negative ones.** Each says *this family*, and
+ * **Four positive tells and no negative ones.** Each says *this family*, and
  * absence says nothing — which is why it is written this way rather than as a
  * count of tables seen. An `exp` summary arriving with no table yet is not
  * evidence of GreaterMUD, it is evidence of nothing having arrived; a fold
@@ -240,6 +242,12 @@ export interface FamilyReading {
  *   character's own preferences — and simply puts no `Location:` in it.
  *   Testing the type would have read that as GreaterMUD; testing the groups
  *   reads it as nothing, which is right.
+ * - **`user-location` carrying coordinates ⇒ MajorMUD.** `sys status`'s
+ *   `Room <n>  Map: <n>` is that lineage's own locate, for a realm with no
+ *   `rm` at all — `bbs.thelucks.org`, captured live 2026-09-21. The mirror of
+ *   the tell above: `rm` answering says GreaterMUD, `sys status` answering
+ *   says MajorMUD, and a realm gives at most one of the two because only one
+ *   of the two commands is there to ask.
  * - **A GreaterMUD-only command refused ⇒ MajorMUD**, in **two** shapes,
  *   because the two lineages refuse a word they do not have differently and
  *   this client believed for a while that they did it the same way.
@@ -278,6 +286,9 @@ export function familyToldBy(block: Block, answering: string | null = null): Fam
   }
   if (block.type === 'user-profile' && block.groups['room'] !== undefined) {
     return { family: 'greatermud', tell: 'locate-answered' };
+  }
+  if (block.type === 'user-location' && block.groups['room'] !== undefined) {
+    return { family: 'majormud', tell: 'sys-status-answered' };
   }
   if (block.type === 'command-not-understood') {
     const spoken = commandOf(block.groups['message'] ?? '');

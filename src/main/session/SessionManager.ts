@@ -161,6 +161,7 @@ import { Rewriter } from './Rewriter';
 import {
   DEFAULT_CONFIG,
   type AutomationConfig,
+  type LocateMethod,
   type LoginConfig,
   type SupplyItem,
   type RewritesUiConfig
@@ -952,45 +953,94 @@ export class SessionManager {
   private readonly unavailable = new Set<CommandName>();
   /** The words already spoken about, so a refusal is said once and not per ask. */
   private readonly saidUnavailable = new Set<CommandName>();
+  /**
+   * Which word this realm answers *where am I standing* with, or `'none'` for
+   * neither. A realm setting, not a guess — see `LocateMethod` and
+   * `locateWord`.
+   */
+  private locateMethod: LocateMethod;
 
   /**
-   * The command that asks this realm where the character is standing, or null
-   * where the realm has no such word.
+   * The command the configured method sends, or null where it has none to
+   * send — the method is `'none'`, or the wire has already refused the word
+   * this connection.
    *
-   * Derived rather than stored: the fact lives in `unavailable` and two copies
-   * of one fact agree until one of them is edited.
+   * The refusal half is still derived from `unavailable` rather than stored a
+   * second time: two copies of one fact agree only until one of them is
+   * edited.
    */
   private get locateWord(): string | null {
+    if (this.locateMethod === 'none') return null;
+    if (this.locateMethod === 'sys-status') {
+      return this.unavailable.has('Sys') ? null : 'sys status';
+    }
     return this.unavailable.has('Room') ? null : 'rm';
   }
 
   /**
    * Ask the realm where the character is standing.
    *
-   * `rm` answers with coordinates — the only exact statement of position this
-   * server makes — and the tracker takes them outright (`user-profile`).
+   * `rm` (GreaterMUD/Paradigm) or `sys status` (MajorMUD) answers with
+   * coordinates — the only exact statement of position this server makes —
+   * and the tracker takes them outright (`user-profile`/`user-location`).
+   * Which of the two, or neither, is `locateMethod`: a realm whose word is
+   * not `rm` said so once in its own settings rather than have the client
+   * find out by trying it first, which on the MajorMUD lineage is *said out
+   * loud in the room*.
    *
-   * Only where the realm has the word. **MajorMUD does not**, and a command
-   * this server family does not have is not refused quietly: it is *said out
-   * loud in the room*. So the first `You say "rm"` retires it for the session,
-   * and whoever asked falls back to what it does anyway — waiting for the next
-   * room block and re-deriving. That fallback is the whole client on a realm
-   * with no locate command, which is why the reckoning above it had to be
-   * right rather than merely recoverable.
+   * If the configured word is refused anyway — a setting can be wrong — the
+   * first refusal retires it for the connection the same way an unconfigured
+   * `rm` always did, and whoever asked falls back to what it does anyway —
+   * waiting for the next room block and re-deriving. That fallback is the
+   * whole client on a realm with no working locate command, which is why the
+   * reckoning above it had to be right rather than merely recoverable.
    *
    * One coalesce key for both callers, because it is one question: a lap that
    * lost its place and a walk that has just been scattered want the same
    * sentence back, and two keys would spend two commands on it.
+   *
+   * **Public**, in addition to those two callers, for the Room card's own
+   * locate button (`Invoke.locate`): a window may ask *that* a location be
+   * asked for, but never *which word* — main is what read the realm's
+   * setting, so main is what has to pick.
    */
-  private askWhereIAm(): void {
-    if (this.locateWord === null) return;
-    this.queue.enqueue({
+  askWhereIAm(): boolean {
+    if (this.locateWord === null) return false;
+    return this.queue.enqueue({
       command: this.locateWord,
       priority: 'probe',
       coalesceKey: 'loop-locate',
       expiresAt: Date.now() + 10_000,
       reason: t('session.loop.locateReason')
     });
+  }
+
+  /**
+   * `onEnterRealm`, with its own word for *ask where I am* resolved to
+   * whatever `locateMethod` actually sends.
+   *
+   * The shipped list states `rm` because Paradigm is what it is built for,
+   * but that spelling is the label somebody reads in Settings, not a promise
+   * about the wire — a realm configured for `sys status`, or for asking
+   * nothing at all, must not have `rm` tried anyway just because the list
+   * still says so. Every other entry point to *where am I* already reads
+   * `locateWord` (`askWhereIAm`); this is what keeps the third one, the entry
+   * probe, from being the one place that still hard-codes the answer.
+   *
+   * Matched with `commandOf`, the same filter `wordUnavailable` uses: `rm`,
+   * `roo` and `room` are one command to the server and every one of them
+   * means *this entry names the locate probe*, whichever the list happens to
+   * spell. An `onEnterRealm` a character customised away from `rm` entirely
+   * is untouched — locate simply is not one of that character's entry
+   * probes, which is its own choice to keep.
+   */
+  private entryProbes(automation: AutomationConfig): AutomationConfig {
+    const onEnterRealm = automation.onEnterRealm.flatMap((command) => {
+      if (commandOf(command) !== 'Room') return [command];
+      const word = this.locateWord;
+      return word === null ? [] : [word];
+    });
+    return { ...automation, onEnterRealm };
   }
 
   /**
@@ -1114,8 +1164,15 @@ export class SessionManager {
      * every session. Defaulting to none, which reads exactly as the frames
      * alone did.
      */
-    sentences: ShippedSentences = NO_SHIPPED_SENTENCES
+    sentences: ShippedSentences = NO_SHIPPED_SENTENCES,
+    /**
+     * Which word this realm answers *where am I standing* with. See
+     * `LocateMethod`. Defaulting to `'rm'`, which is what every realm answered
+     * before this was a setting rather than a guess.
+     */
+    locate: LocateMethod = DEFAULT_CONFIG.connection.locate
   ) {
+    this.locateMethod = locate;
     this.tracker = new CharacterTracker(
       world,
       lore,
@@ -1289,7 +1346,7 @@ export class SessionManager {
       unavailable: (command) => this.wordUnavailable(command)
     });
 
-    this.routines = new Routines(automation, this.queue, {
+    this.routines = new Routines(this.entryProbes(automation), this.queue, {
       notice: (message) => this.sink.notice(message)
     });
 
@@ -3402,9 +3459,11 @@ export class SessionManager {
   configure(
     automation: AutomationConfig,
     login: LoginConfig,
-    rewrites: RewritesUiConfig = DEFAULT_CONFIG.ui.rewrites
+    rewrites: RewritesUiConfig = DEFAULT_CONFIG.ui.rewrites,
+    locate: LocateMethod = DEFAULT_CONFIG.connection.locate
   ): void {
     this.automationConfig = automation;
+    this.locateMethod = locate;
     this.rewriter.configure(rewrites);
     // A new design gets to be refused once, out loud, if it is too wide. By
     // value: every reload resolves a fresh object for an unchanged file.
@@ -3415,7 +3474,7 @@ export class SessionManager {
     // prefers; derived again the next time a route is planned.
     this.preferred = null;
     this.queue.configure(automation);
-    this.routines.configure(automation);
+    this.routines.configure(this.entryProbes(automation));
     this.walker.configure(automation);
     this.combat.configure(
       automation.combat,
@@ -4618,7 +4677,12 @@ export class SessionManager {
    * announced (CLAUDE.md, "A character can name its own realm").
    */
   private noticeRealmMismatch(block: Block): void {
-    if (block.type !== 'user-profile' || this.realmMismatchSaid || !this.world) return;
+    if (
+      (block.type !== 'user-profile' && block.type !== 'user-location') ||
+      this.realmMismatchSaid ||
+      !this.world
+    )
+      return;
     const map = block.groups['map'];
     const room = block.groups['room'];
     if (map === undefined || room === undefined) return;

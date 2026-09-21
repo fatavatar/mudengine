@@ -1187,11 +1187,15 @@ describe('owning the status line', () => {
       'utf8'
     );
     migrate();
-    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set']);
+    // Cascades straight through `quietedTheLocateProbe` too, in the same
+    // pass: a file this far behind picks up every quiet-list default it
+    // missed in one launch rather than one per restart.
+    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set', 'sys']);
     expect(said.some((m) => m.includes('pro and set'))).toBe(true);
-    // Once: the list is no longer the shipped one, so it is theirs now.
+    expect(said.some((m) => m.includes('sys was added'))).toBe(true);
+    // Once: the list is no longer either shipped shape, so it is theirs now.
     migrate();
-    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set']);
+    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set', 'sys']);
 
     fs.writeFileSync(
       home.internal,
@@ -1944,6 +1948,49 @@ describe("the Talk card's hold", () => {
     fs.writeFileSync(home.internal, 'tuning:\n  view:\n    talkFollowResumeMs: 5000\n', 'utf8');
     migrate();
     expect(held()).toBe(5000);
+  });
+});
+
+/*
+ * `sys` onto the quiet list, the mirror of `pro`/`set` joining `rm`/`look`
+ * before it: `sys status` is a realm's own locate for a server with no `rm`,
+ * asked on arrival exactly where `rm` was, and the console has no more
+ * business showing it than it ever did `rm`'s.
+ */
+describe('the locate probe joining the quiet list', () => {
+  const quiet = (): unknown =>
+    (
+      parse(fs.readFileSync(home.internal, 'utf8')) as {
+        terminal: { quiet: { commands: string[] } };
+      }
+    ).terminal.quiet.commands;
+
+  beforeEach(() => {
+    fs.mkdirSync(path.dirname(home.internal), { recursive: true });
+  });
+
+  it('is added where the list still reads exactly what shipped before it', () => {
+    fs.writeFileSync(
+      home.internal,
+      'terminal:\n  quiet:\n    commands:\n      - rm\n      - look\n      - pro\n      - set\n',
+      'utf8'
+    );
+    migrate();
+    expect(quiet()).toEqual(['rm', 'look', 'pro', 'set', 'sys']);
+    expect(said.join(' ')).toContain('sys was added to the quiet list');
+  });
+
+  /* A list cannot say "I removed that", so a shorter list is theirs, kept. */
+  it('leaves a list the player has already edited alone', () => {
+    fs.writeFileSync(home.internal, 'terminal:\n  quiet:\n    commands:\n      - rm\n', 'utf8');
+    migrate();
+    expect(quiet()).toEqual(['rm']);
+  });
+
+  it('does nothing where the file states no quiet list at all', () => {
+    fs.writeFileSync(home.internal, "# The user's own note\n", 'utf8');
+    migrate();
+    expect(fs.readFileSync(home.internal, 'utf8')).toContain("The user's own note");
   });
 });
 

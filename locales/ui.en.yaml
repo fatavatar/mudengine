@@ -299,6 +299,9 @@ notices:
     statusLineAsksQuieted:
       "pro and set were added to the quiet list in {file}: the status-line routine's own asks stay
       out of the console. Remove them there to see them."
+    locateProbeQuieted:
+      "sys was added to the quiet list in {file}: sys status, a realm's own locate on a server
+      with no rm, stays out of the console the same way rm always has. Remove it there to see it."
     diagnosticsPreferenceDropped:
       many:
         '"ui.showDiagnostics" was removed from {count} files: the diagnostics cards are now hidden on
@@ -3406,6 +3409,16 @@ settings:
     databaseBrowse: Browse…
     databaseClear: Clear
     empty: Choose a realm, or add one.
+    locateHint:
+      What tells the client exactly where a character is standing, instead of it guessing from a
+      name and an exit list. Not detected automatically — a realm whose word is not rm should say
+      so here rather than have the client find out by trying it first, which on some realms is
+      said aloud in the room.
+    locateLabel: Locate command
+    locateOptions:
+      none: None — guess from name and exits only
+      rm: 'rm (GreaterMUD/Paradigm: Location: map,room)'
+      sysStatus: 'sys status (MajorMUD: Room n  Map: n)'
     loginLegend: Login Menus
     loginNote:
       When the realm prints the text on the left, the client sends what is on the right. Leave

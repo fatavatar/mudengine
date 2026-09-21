@@ -333,6 +333,7 @@ describe('servers, one directory each', () => {
     port: 23,
     encoding: 'cp437',
     login: [],
+    locate: 'rm',
     loops: [],
     database: '',
     mobPriority: [],
@@ -443,6 +444,7 @@ describe('servers, one directory each', () => {
       port: 2427,
       encoding: 'cp437',
       login: [],
+      locate: 'rm',
       loops: [],
       database: '',
       mobPriority: []
@@ -516,6 +518,7 @@ describe('credentials in the messages', () => {
       port: 2500,
       encoding: 'cp437',
       login: [],
+      locate: 'rm',
       loops: [],
       database: '',
       mobPriority: []
@@ -912,6 +915,7 @@ describe('the loops a character owns', () => {
       port: 2427,
       encoding: 'cp437',
       login: [],
+      locate: 'rm',
       loops: [arena],
       database: '',
       mobPriority: []
@@ -992,6 +996,7 @@ describe('filing one loop from the Loops modal', () => {
       port: 2427,
       encoding: 'cp437',
       login: [],
+      locate: 'rm',
       loops: [],
       database: '',
       mobPriority: []
