@@ -1370,6 +1370,24 @@ const TUNING_DEFAULTS = {
     /** How long a `safe-haven` retreat waits for the escape move to land. */
     retreatSettleMs: 5_000,
     /**
+     * How long picking a Goto destination or pressing play on a Loop waits
+     * for an ambiguous room to resolve before planning from it anyway.
+     *
+     * A room the client cannot place cannot be routed from — `planFromHere`
+     * already refuses outright rather than guess — and until now that refusal
+     * was the whole of it: the player had to notice the ambiguous badge, press
+     * the Room card's own locate button, and pick the destination again. This
+     * is that button, pressed on the player's behalf the moment a plan needs
+     * the room it does not have, so the ordinary case is a plan that goes out
+     * a beat later rather than a refusal that sends the player back to fix it
+     * by hand. Long enough for a round trip on a slow board; short enough that
+     * a realm with nothing to ask (`locate: none`, or a connection that has
+     * already learned the configured word does not work) is not a wait for
+     * nothing — `SessionManager.ensureLocated` returns immediately in both of
+     * those cases rather than counting down this figure at all.
+     */
+    locateResolveMs: 4_000,
+    /**
      * Minimum gap between decision-trace publishes. The queue changes several
      * times a second in combat and every change interests a diagnostics card
      * and nothing else.

@@ -4435,6 +4435,93 @@ describe('the locate setting', () => {
 
     expect(manager.askWhereIAm()).toBe(false);
   });
+
+  /*
+   * `ensureLocated` — what a Goto pick or a Loop's play button spends before
+   * `planFromHere` gets a chance to refuse an ambiguous room outright.
+   */
+  describe('resolving an ambiguous room before something plans from it', () => {
+    it('returns at once when the room is already known', async () => {
+      const { sink } = collect();
+      manager = new SessionManager(sink);
+      manager.configure(
+        { ...DEFAULT_CONFIG.automation, onEnterRealm: [] },
+        DEFAULT_CONFIG.connection.login,
+        DEFAULT_CONFIG.ui.rewrites,
+        'sys-status'
+      );
+      await manager.connect(dial());
+      const socket = await client();
+      socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT + 'Room 796  Map: 16\r\n');
+      await until(() => manager!.character.room.map === 16);
+
+      const started = Date.now();
+      expect(await manager.ensureLocated(3000)).toBe(true);
+      // Not a real wait: nothing was sent for it to wait on.
+      expect(Date.now() - started).toBeLessThan(150);
+    });
+
+    it('asks the realm and resolves once the configured word answers', async () => {
+      const { sink } = collect();
+      manager = new SessionManager(sink);
+      manager.configure(
+        { ...DEFAULT_CONFIG.automation, onEnterRealm: [] },
+        DEFAULT_CONFIG.connection.login,
+        DEFAULT_CONFIG.ui.rewrites,
+        'sys-status'
+      );
+      await manager.connect(dial());
+      const socket = await client();
+      // In the realm, but no room has printed yet -- the ordinary shape of
+      // "ambiguous": nothing here says where the character is standing.
+      socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+      await until(() => manager!.character.phase === 'in-game');
+      expect(manager.character.room.map).toBeNull();
+
+      const waited = manager.ensureLocated(3000);
+      socket.write('Room 796  Map: 16\r\n');
+      expect(await waited).toBe(true);
+      expect(manager.character.room.map).toBe(16);
+      expect(manager.character.room.number).toBe(796);
+    });
+
+    it('gives up and returns false once the timeout passes', async () => {
+      const { sink } = collect();
+      manager = new SessionManager(sink);
+      manager.configure(
+        { ...DEFAULT_CONFIG.automation, onEnterRealm: [] },
+        DEFAULT_CONFIG.connection.login,
+        DEFAULT_CONFIG.ui.rewrites,
+        'sys-status'
+      );
+      await manager.connect(dial());
+      const socket = await client();
+      socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+      await until(() => manager!.character.phase === 'in-game');
+
+      expect(await manager.ensureLocated(300)).toBe(false);
+    });
+
+    it('returns false at once when there is nothing to ask', async () => {
+      const { sink } = collect();
+      manager = new SessionManager(sink);
+      manager.configure(
+        { ...DEFAULT_CONFIG.automation, onEnterRealm: [] },
+        DEFAULT_CONFIG.connection.login,
+        DEFAULT_CONFIG.ui.rewrites,
+        'none'
+      );
+      await manager.connect(dial());
+      const socket = await client();
+      socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+      await until(() => manager!.character.phase === 'in-game');
+
+      const started = Date.now();
+      expect(await manager.ensureLocated(3000)).toBe(false);
+      // The realm has nothing to ask, so this must not spend the timeout.
+      expect(Date.now() - started).toBeLessThan(150);
+    });
+  });
 });
 
 describe('a corridor the server refused', () => {
