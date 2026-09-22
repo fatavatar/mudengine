@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { stillFled, type FledRoom } from '../walk';
+import { afflictionHolding, stillFled, type FledRoom } from '../walk';
+import { NO_AFFLICTIONS, type StatedEffect } from '../character';
 
 /*
  * The rooms an escape must not run back into, and *when* that list forgets.
@@ -56,5 +57,50 @@ describe('the rooms still too recently fled to go back into', () => {
     const rooms = [fled('1/3', 1_000)];
     stillFled(rooms, 99_000, 10_000);
     expect(rooms).toHaveLength(1);
+  });
+});
+
+describe("what the realm's messages say stands a walk still", () => {
+  const movement = { walkWhileBlind: false, walkWhilePoisoned: false, walkWhileConfused: false };
+  const stated = (patch: Partial<StatedEffect>): StatedEffect => ({
+    name: 'row',
+    effects: [],
+    action: 'none',
+    since: 0,
+    ...patch
+  });
+
+  it('holds for confusion, unless the player said to walk on', () => {
+    const confused = [stated({ effects: ['confused'] })];
+    expect(afflictionHolding(NO_AFFLICTIONS, movement, confused)).toBe('condition');
+    expect(
+      afflictionHolding(NO_AFFLICTIONS, { ...movement, walkWhileConfused: true }, confused)
+    ).toBeNull();
+  });
+
+  it('holds while losing hit points, and for a row that says to wait or rest', () => {
+    expect(afflictionHolding(NO_AFFLICTIONS, movement, [stated({ effects: ['losing-hp'] })])).toBe(
+      'condition'
+    );
+    expect(afflictionHolding(NO_AFFLICTIONS, movement, [stated({ action: 'wait' })])).toBe(
+      'condition'
+    );
+    expect(afflictionHolding(NO_AFFLICTIONS, movement, [stated({ action: 'rest-hp' })])).toBe(
+      'condition'
+    );
+  });
+
+  it('does not hold for what is not a movement matter', () => {
+    expect(
+      afflictionHolding(NO_AFFLICTIONS, movement, [stated({ effects: ['hp-regen', 'no-attack'] })])
+    ).toBeNull();
+  });
+
+  it("names the wire's own affliction ahead of a stated condition", () => {
+    expect(
+      afflictionHolding({ ...NO_AFFLICTIONS, held: 'yes' }, movement, [
+        stated({ effects: ['confused'] })
+      ])
+    ).toBe('held');
   });
 });

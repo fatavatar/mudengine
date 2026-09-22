@@ -349,6 +349,9 @@ export class Recovery {
     if (!this.enabled || state.phase !== 'in-game') return false;
     if (fightIsHere(state) || this.refused.has('rest')) return false;
     const { hp, hpMax, resting } = state.vitals;
+    if (statedRest(state, 'rest-hp') !== null && hp !== null && hpMax !== null && hp < hpMax) {
+      return true;
+    }
     if (this.needed !== null && hp !== null && hp < this.needed) return true;
     if (this.below(hp, hpMax, this.config.restBelow)) return true;
     const { restTo } = this.config;
@@ -407,6 +410,35 @@ export class Recovery {
      * fight, rest, all evening. A rest about to be broken is a command spent.
      */
     if (countThreats(state) > 0) return;
+
+    /*
+     * A row of the realm's message table said to rest until full — MegaMUD's
+     * *rest until full HP's* and *rest until full mana*. Held until the
+     * figure is full (`SessionManager.releaseRestsIfFull`), so this asks only
+     * while it is not. Mana is meditated for where the class can, rested for
+     * where it cannot. A poisoned rest is left to the branch below, which
+     * knows what to say about it.
+     */
+    const forHp = statedRest(state, 'rest-hp');
+    if (
+      forHp !== null &&
+      hp !== null &&
+      hpMax !== null &&
+      hp < hpMax &&
+      !this.refused.has('rest') &&
+      !this.restIsPoisoned(state)
+    ) {
+      this.propose('rest', t('automation.recovery.reasonMessage', { name: forHp }));
+      return;
+    }
+    const forMana = statedRest(state, 'rest-mana');
+    if (forMana !== null && mana !== null && manaMax !== null && mana < manaMax) {
+      const verb = this.refused.has('med') ? 'rest' : 'med';
+      if (!this.refused.has(verb) && !(verb === 'rest' && this.restIsPoisoned(state))) {
+        this.propose(verb, t('automation.recovery.reasonMessage', { name: forMana }));
+        return;
+      }
+    }
 
     if (this.wantsRest(hp, hpMax) && !this.refused.has('rest')) {
       /*
@@ -571,4 +603,10 @@ export class Recovery {
     // And a refusal inside that window is this verb's — see `proposed`.
     this.proposed = { command, until: this.askedUntil };
   }
+}
+
+/** The name of a held message row saying to rest to full, of this kind, or null. */
+function statedRest(state: CharacterState, action: 'rest-hp' | 'rest-mana'): string | null {
+  const row = state.stated.find((entry) => entry.action === action);
+  return row === undefined ? null : row.name || action;
 }

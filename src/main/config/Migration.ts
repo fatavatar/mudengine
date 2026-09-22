@@ -212,6 +212,8 @@ export function migrateHome(options: MigrationOptions): void {
   theActionsBecameAFamily(home, note);
   statedTheLightWait(home, note);
   quietedTheLocateProbe(home, note);
+  statedTheConfusionWait(home, note);
+  statedTheFreedomCure(home, note);
 }
 
 /**
@@ -4216,6 +4218,13 @@ const CONDITION_WAIT_DEFAULTS: ReadonlyArray<readonly [string, boolean]> = [
 const KEY_PICKUP_DEFAULTS: ReadonlyArray<readonly [string, boolean]> = [['collectKeys', true]];
 
 /** The template's own words for it, so the two files read alike. */
+const CONFUSION_WAIT_COMMENT = ` And confusion -- MegaMUD's Ignore Confusion, off by default as MegaMUD's
+ is. Nothing on the wire says a character is confused in words this
+ client knows; a realm's message table does (import MegaMUD's
+ Messages.md on the realm's settings page), and while it says so a route
+ or a loop stands still. A confused character's commands misfire.`;
+
+/** The template's own words for it, so the two files read alike. */
 const KEY_PICKUP_COMMENT = ` The key to the door in front of you.
 
  A keyed exit with no key and nothing a picklock can do about it is a wall the
@@ -5299,6 +5308,84 @@ function statedTheConditionWaits(home: Home, note: (message: string) => void): v
  * set it to `false` — a key stays added whatever its value. Nothing stated is
  * overwritten.
  */
+/**
+ * Waiting a confusion out, 2026-09-22 — the third condition wait, and the
+ * first a realm's message table rather than the wire decides.
+ *
+ * `walkWhileConfused` ships off, so a file that predates it waits confusion
+ * out from the built-in default and says nothing about it: the
+ * invisible-setting failure `statedTheConditionWaits` was written for, one
+ * key along. Placed after `walkWhilePoisoned` where that key is stated, so
+ * the three waits read as the one paragraph they are; at the end of the
+ * block otherwise.
+ *
+ * Idempotent against somebody who has since set it — a key stays added
+ * whatever its value — and nothing stated is overwritten.
+ */
+function statedTheConfusionWait(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const movement = document.getIn(['automation', 'movement'], true);
+      if (!isMap(movement) || movement.has('walkWhileConfused')) return false;
+      const pair = document.createPair('walkWhileConfused', false) as Pair;
+      if (isScalar(pair.key)) pair.key.commentBefore = CONFUSION_WAIT_COMMENT;
+      const after = movement.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'walkWhilePoisoned'
+      );
+      if (after === -1) movement.items.push(pair);
+      else movement.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.confusionWaitStated.one', params)
+      : t('notices.migration.confusionWaitStated.many', params)
+  );
+}
+
+/**
+ * MegaMUD's Freedom, 2026-09-22: a fourth cure, for a character that cannot
+ * move. Blank, so nothing is cast until a spell is named — but a `cures:`
+ * block that predates it would go on listing three with nothing to say a
+ * fourth exists, so it is written in after `disease`, where a player
+ * reading the block will find it. Idempotent; nothing stated is overwritten.
+ */
+function statedTheFreedomCure(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const cures = document.getIn(['automation', 'spells', 'cures'], true);
+      if (!isMap(cures) || cures.has('freedom')) return false;
+      const pair = document.createPair('freedom', '') as Pair;
+      const after = cures.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'disease'
+      );
+      if (after === -1) cures.items.push(pair);
+      else cures.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.freedomCureStated.one', params)
+      : t('notices.migration.freedomCureStated.many', params)
+  );
+}
+
 function statedTheKeyPickup(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
   const stated: string[] = [];

@@ -163,6 +163,8 @@ const POISON = 19;
 const BLIND_USER = 107;
 const REMOVES_SPELL = 122;
 const HEALS = 18;
+/** `Freedom`: ends whatever holds the character in place (`HoldPerson`). */
+const FREEDOM = 81;
 
 export type AbilityPairs = ReadonlyArray<readonly [number, number]>;
 
@@ -180,6 +182,8 @@ export interface CureGates {
   poison: boolean;
   blindness: boolean;
   disease: boolean;
+  /** A positive claim, like poison's: the realm's own `Freedom` mark (81). */
+  freedom: boolean;
 }
 
 /**
@@ -197,16 +201,18 @@ export interface CureGates {
  * realm states `RemovesSpell`, a generic dispel, so a row carrying it *might*
  * end a disease. Offered, and it is why the list for disease is long.
  *
- * `held` serves nothing: no capture names a spell that ends a hold, and
- * `Cures` has never had a slot for it.
+ * `held` is the realm's own `Freedom` mark (81) — the `freedom` spell and the
+ * items that cast it — which is MegaMUD's Freedom slot, cast when the
+ * character cannot move.
  */
 export function spellServes(abilities: AbilityPairs | undefined): {
   hp: boolean;
   poisoned: boolean;
   blind: boolean;
   diseased: boolean;
+  held: boolean;
 } {
-  const serves = { hp: false, poisoned: false, blind: false, diseased: false };
+  const serves = { hp: false, poisoned: false, blind: false, diseased: false, held: false };
   if (abilities === undefined) return serves;
   for (const [id, value] of abilities) {
     if (id === HEALS) serves.hp = true;
@@ -214,6 +220,7 @@ export function spellServes(abilities: AbilityPairs | undefined): {
     if (id === DISPELL_MAGIC && value === POISON) serves.poisoned = true;
     if (id === DISPELL_MAGIC && value === BLIND_USER) serves.blind = true;
     if (id === REMOVES_SPELL) serves.diseased = true;
+    if (id === FREEDOM) serves.held = true;
   }
   return serves;
 }
@@ -222,16 +229,20 @@ export function cureGates(spells: ReadonlyArray<AbilityPairs | undefined>): Cure
   let poison = false;
   let blindness = false;
   let disease = false;
+  let freedom = false;
   for (const abilities of spells) {
-    if (abilities === undefined) return { poison: true, blindness: true, disease: true };
+    if (abilities === undefined) {
+      return { poison: true, blindness: true, disease: true, freedom: true };
+    }
     for (const [id, value] of abilities) {
       if (id === CURE_POISON) poison = true;
       if (id === DISPELL_MAGIC && value === POISON) poison = true;
       if (id === DISPELL_MAGIC && value === BLIND_USER) blindness = true;
       if (id === REMOVES_SPELL) disease = true;
+      if (id === FREEDOM) freedom = true;
     }
   }
-  return { poison, blindness, disease };
+  return { poison, blindness, disease, freedom };
 }
 
 /**

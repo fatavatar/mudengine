@@ -4,6 +4,7 @@ import BentoCard, { type CardChrome, type CardTab } from './BentoCard';
 import CardTable, { type Column } from './CardTable';
 import {
   EXP_RATE_SETTLE_MS,
+  isStated,
   ratio,
   vitalLevel,
   type CharacterState,
@@ -164,7 +165,14 @@ function VitalsCard({ character, session, thresholds, ask, ...chrome }: VitalsCa
     afflictions.blind === 'yes' ? t('cards.vitals.afflicted.blind') : null,
     afflictions.poisoned === 'yes' ? t('cards.vitals.afflicted.poisoned') : null,
     afflictions.diseased === 'yes' ? t('cards.vitals.afflicted.diseased') : null,
-    afflictions.held === 'yes' ? t('cards.vitals.afflicted.held') : null
+    afflictions.held === 'yes' ? t('cards.vitals.afflicted.held') : null,
+    // What only the realm's message table says; see `CharacterState.stated`.
+    isStated(character, 'confused') ? t('cards.vitals.stated.confused') : null,
+    isStated(character, 'losing-hp') ? t('cards.vitals.stated.losingHp') : null,
+    isStated(character, 'no-attack') ? t('cards.vitals.stated.noAttack') : null,
+    isStated(character, 'hp-regen') || isStated(character, 'mana-regen')
+      ? t('cards.vitals.stated.regenerating')
+      : null
   ].filter((word): word is string => word !== null);
 
   const badge = inCombat ? (

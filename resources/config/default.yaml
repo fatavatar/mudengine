@@ -800,6 +800,13 @@ automation:
     walkWhileBlind: false
     walkWhilePoisoned: false
 
+    # And confusion -- MegaMUD's Ignore Confusion, off by default as MegaMUD's
+    # is. Nothing on the wire says a character is confused in words this
+    # client knows; a realm's message table does (import MegaMUD's
+    # Messages.md on the realm's settings page), and while it says so a route
+    # or a loop stands still. A confused character's commands misfire.
+    walkWhileConfused: false
+
     # The key to the door in front of you.
     #
     # A keyed exit with no key and nothing a picklock can do about it is a wall
@@ -1459,12 +1466,14 @@ automation:
     # `The dizzying poison runs its course.`, `You are inflicted with a hideous
     # rotting disease!` / `The disease dies down.`. Cast bare once per onset
     # (a targetless cast lands on you), again after thirty seconds if the condition is still
-    # stated. Blank casts nothing. Paralysis (`Your legs are paralyzed!`) is
-    # tracked and has no cure here: no capture names a spell that ends it.
+    # stated. Blank casts nothing. `freedom` is MegaMUD's Freedom: cast when
+    # the character cannot move (`Your legs are paralyzed!`, a net, webbing,
+    # or anything a realm's message table says holds it).
     cures:
       blindness: ''
       poison: ''
       disease: ''
+      freedom: ''
 
     # Blessings kept up on this character and the party, in priority order --
     # the first entry is recast first when several are down. The spell names

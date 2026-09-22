@@ -1760,6 +1760,12 @@ export interface MovementConfig {
    */
   walkWhilePoisoned: boolean;
   /**
+   * Walk on while the realm's message table says the character is confused —
+   * MegaMUD's *Ignore Confusion*. Off by default, as MegaMUD's is: a confused
+   * character's commands misfire, and a walk spends them. See `afflictionHolding`.
+   */
+  walkWhileConfused: boolean;
+  /**
    * Pick up a key an exit of this room needs, when it is lying on the floor of
    * it — and only then.
    *
@@ -2042,10 +2048,10 @@ export interface SpellsConfig {
    * onset (a targetless cast lands on the caster), and again after thirty seconds while the server
    * still says the condition is on — a cure it answers with nothing leaves the
    * flag where it was, and casting once per status line would spend the
-   * fight's budget on it. Blank casts nothing. Paralysis is tracked (`held`)
-   * and has no cure here: no capture names a spell that ends it.
+   * fight's budget on it. Blank casts nothing. `freedom` is MegaMUD's Freedom
+   * slot: the spell cast when the character cannot move (`held`).
    */
-  cures: { blindness: string; poison: string; disease: string };
+  cures: { blindness: string; poison: string; disease: string; freedom: string };
   /**
    * The blessings kept up on this character and on the party it travels with,
    * in priority order — index 0 is recast first when several are down.
@@ -2635,6 +2641,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       recoverGearFloor: 2,
       walkWhileBlind: false,
       walkWhilePoisoned: false,
+      walkWhileConfused: false,
       collectKeys: true
     },
     hunting: {
@@ -2664,7 +2671,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       healParty: false,
       invokeItems: false,
       minMana: 0.15,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false
     }
@@ -3800,6 +3807,7 @@ function normalizeMovement(value: unknown): MovementConfig {
     recoverGearFloor: int(raw['recoverGearFloor'], d.recoverGearFloor, 0, 99),
     walkWhileBlind: bool(raw['walkWhileBlind'], d.walkWhileBlind),
     walkWhilePoisoned: bool(raw['walkWhilePoisoned'], d.walkWhilePoisoned),
+    walkWhileConfused: bool(raw['walkWhileConfused'], d.walkWhileConfused),
     collectKeys: bool(raw['collectKeys'], d.collectKeys)
   };
 }
@@ -3946,7 +3954,8 @@ function normalizeCures(value: unknown): SpellsConfig['cures'] {
   return {
     blindness: str(raw['blindness'], '').trim(),
     poison: str(raw['poison'], '').trim(),
-    disease: str(raw['disease'], '').trim()
+    disease: str(raw['disease'], '').trim(),
+    freedom: str(raw['freedom'], '').trim()
   };
 }
 

@@ -6,7 +6,7 @@
  * import. Dependency-free, like everything else here.
  */
 import type { RoomId } from './world';
-import type { Afflictions } from './character';
+import type { Afflictions, StatedEffect } from './character';
 import type { MovementConfig } from './config';
 
 export type WalkStatus =
@@ -162,6 +162,8 @@ export type WalkHold =
   | 'resting'
   /** A room too dark to read, while the light that fixes it is on its way. */
   | 'dark'
+  /** Waiting out what the realm's message table says is on the character. */
+  | 'condition'
   | null;
 
 /**
@@ -184,12 +186,33 @@ export type WalkHold =
  */
 export function afflictionHolding(
   afflictions: Afflictions,
-  movement: Pick<MovementConfig, 'walkWhileBlind' | 'walkWhilePoisoned'>
-): 'blind' | 'held' | 'poisoned' | null {
+  movement: Pick<MovementConfig, 'walkWhileBlind' | 'walkWhilePoisoned' | 'walkWhileConfused'>,
+  stated: readonly StatedEffect[] = []
+): 'blind' | 'held' | 'poisoned' | 'condition' | null {
   if (afflictions.held === 'yes') return 'held';
   if (afflictions.blind === 'yes' && !movement.walkWhileBlind) return 'blind';
   if (afflictions.poisoned === 'yes' && !movement.walkWhilePoisoned) return 'poisoned';
-  return null;
+  return stated.some((entry) => statedHolds(entry, movement)) ? 'condition' : null;
+}
+
+/**
+ * Whether one row of the realm's message table stands a walk still.
+ *
+ * MegaMUD's own readings of its boxes: a confused character waits the
+ * confusion out unless the player said to ignore it (`walkWhileConfused`, its
+ * *Ignore Confusion*); one losing hit points to fire, acid or a wound rests
+ * until it stops; and a row whose action is *wait until it wears off* or
+ * *rest until full* means exactly that. The rest of what a row can mean is
+ * not a movement matter — blind, poisoned and held reach the walk as the
+ * afflictions above, which a row sets too.
+ */
+function statedHolds(
+  entry: StatedEffect,
+  movement: Pick<MovementConfig, 'walkWhileConfused'>
+): boolean {
+  if (entry.effects.includes('confused') && !movement.walkWhileConfused) return true;
+  if (entry.effects.includes('losing-hp')) return true;
+  return entry.action === 'wait' || entry.action === 'rest-hp' || entry.action === 'rest-mana';
 }
 
 /** A room this character ran out of, and the moment it did. See `stillFled`. */

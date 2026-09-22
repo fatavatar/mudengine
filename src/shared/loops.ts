@@ -522,6 +522,8 @@ export type LoopHold =
   | 'blind'
   | 'held'
   | 'poisoned'
+  /** Waiting out what the realm's message table says is on the character. */
+  | 'condition'
   | null;
 
 export interface LoopProgress {

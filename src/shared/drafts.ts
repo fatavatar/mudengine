@@ -294,6 +294,7 @@ export interface CuresDraft {
   blindness: string;
   poison: string;
   disease: string;
+  freedom: string;
 }
 
 /** A blessing kept up by events with a clock behind it; see `BlessingConfig`. */
@@ -459,6 +460,7 @@ export interface ProfileDraft {
     /** Conditions as waits, inverted: off waits the condition out. See `MovementConfig`. */
     walkWhileBlind: boolean;
     walkWhilePoisoned: boolean;
+    walkWhileConfused: boolean;
     /** Bend down for a key an exit here needs. See `MovementConfig`. */
     collectKeys: boolean;
   };
@@ -920,6 +922,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       // Off by default, MegaMUD's own: a blank field waits the condition out.
       walkWhileBlind: movement['walkWhileBlind'] === true,
       walkWhilePoisoned: movement['walkWhilePoisoned'] === true,
+      walkWhileConfused: movement['walkWhileConfused'] === true,
       lightDimRooms: movement['lightDimRooms'] === true,
       extinguishInLight: movement['extinguishInLight'] === true,
       // Off unless said: it walks the character back to where it died.
@@ -1352,7 +1355,8 @@ function asCures(value: unknown): CuresDraft {
   return {
     blindness: text(raw['blindness']).slice(0, 40),
     poison: text(raw['poison']).slice(0, 40),
-    disease: text(raw['disease']).slice(0, 40)
+    disease: text(raw['disease']).slice(0, 40),
+    freedom: text(raw['freedom']).slice(0, 40)
   };
 }
 
