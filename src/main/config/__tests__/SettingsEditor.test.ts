@@ -53,6 +53,7 @@ const draft = (over: Partial<ProfileDraft> = {}): ProfileDraft => ({
     strategy: 'step-back',
     safeHavenRoom: ''
   },
+  fleeGoto: { enabled: false, belowHealth: 0.2, destination: '' },
   pvp: { notifyGang: false, action: 'none' },
   // The shipped defaults, so a draft that says nothing about combat writes no
   // `combat:` block at all -- which is the behaviour the tests below assert.

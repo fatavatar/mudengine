@@ -72,6 +72,9 @@ const SWITCH_ICONS: Record<AutomationSwitch, IconName> = {
   combat: 'sword',
   retaliate: 'shield',
   retreat: 'run',
+  // The flag again, deliberately: this is a jump to a named destination, the
+  // same idea a loop's own goto marker draws, not a second `run`.
+  fleeGoto: 'flag',
   hangUp: 'unplug',
   loot: 'coins',
   /*
@@ -125,6 +128,8 @@ function switchLabel(name: AutomationSwitch): string {
       return t('toolbar.retaliate');
     case 'retreat':
       return t('toolbar.retreat');
+    case 'fleeGoto':
+      return t('toolbar.flee');
     case 'hangUp':
       return t('toolbar.hangUp');
     case 'loot':

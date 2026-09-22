@@ -460,6 +460,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   health: [
     { id: 'health-recover', label: t('settings.health.recoverLegend') },
     { id: 'health-retreat', label: t('settings.health.retreatLegend') },
+    { id: 'health-flee', label: t('settings.health.fleeLegend') },
     { id: 'health-hangup', label: t('settings.health.hangUpLegend') },
     { id: 'health-potions', label: t('settings.health.potionRuleLegend') }
   ],
@@ -529,6 +530,9 @@ interface CharacterForm {
   retreatOutnumbered: string;
   retreatStrategy: string;
   retreatHaven: string;
+  fleeGoto: boolean;
+  fleeGotoBelow: string;
+  fleeGotoDestination: string;
   /**
    * Auto-combat, as the form holds it.
    *
@@ -715,6 +719,9 @@ function formOf(entry: ProfileEditable): CharacterForm {
     retreatOutnumbered: String(entry.retreat.whenOutnumbered),
     retreatStrategy: entry.retreat.strategy,
     retreatHaven: entry.retreat.safeHavenRoom,
+    fleeGoto: entry.fleeGoto.enabled,
+    fleeGotoBelow: String(Math.round(entry.fleeGoto.belowHealth * 100)),
+    fleeGotoDestination: entry.fleeGoto.destination,
     hangUp: entry.hangUp.enabled,
     // As a percentage, because that is how somebody thinks about health. The
     // file keeps a fraction, so the whole client holds one representation.
@@ -897,6 +904,11 @@ function draftOf(form: CharacterForm): ProfileDraft {
         ? (form.retreatStrategy as RetreatStrategy)
         : 'step-back',
       safeHavenRoom: form.retreatHaven.trim()
+    },
+    fleeGoto: {
+      enabled: form.fleeGoto,
+      belowHealth: (Number.parseInt(form.fleeGotoBelow, 10) || 0) / 100,
+      destination: form.fleeGotoDestination.trim()
     },
     combat: {
       enabled: form.combat,
@@ -1146,6 +1158,7 @@ function emptyForm(
   const statline = defaults?.automation.statline ?? DEFAULT_CONFIG.automation.statline;
   const rewrites = defaults?.ui.rewrites ?? DEFAULT_CONFIG.ui.rewrites;
   const retreat = defaults?.automation.retreat ?? DEFAULT_CONFIG.automation.safety.retreat;
+  const fleeGoto = defaults?.automation.fleeGoto ?? DEFAULT_CONFIG.automation.safety.fleeGoto;
   const hangUp = defaults?.automation.hangUp ?? DEFAULT_CONFIG.automation.safety.hangUp;
   const pvp = defaults?.automation.pvp ?? DEFAULT_CONFIG.automation.safety.pvp;
   const loot = defaults?.automation.loot ?? DEFAULT_CONFIG.automation.loot;
@@ -1200,6 +1213,9 @@ function emptyForm(
     retreatOutnumbered: String(retreat.whenOutnumbered),
     retreatStrategy: retreat.strategy,
     retreatHaven: retreat.safeHavenRoom,
+    fleeGoto: fleeGoto.enabled,
+    fleeGotoBelow: percent(fleeGoto.belowHealth),
+    fleeGotoDestination: fleeGoto.destination,
     hangUp: hangUp.enabled,
     hangUpBelow: percent(hangUp.belowHealth),
     hangUpOnlyWhenClean: hangUp.onlyWhenClean,
@@ -2943,6 +2959,41 @@ export default function SettingsScreen({
                               />
                             )}
                           </>
+                        )}
+                      </fieldset>
+
+                      <fieldset className="settings-menus" data-fieldset="health-flee">
+                        <legend>{t('settings.health.fleeLegend')}</legend>
+                        <p className="settings-note">{t('settings.health.fleeHint')}</p>
+                        <div className="settings-inline">
+                          <CheckField
+                            checked={form.fleeGoto}
+                            label={t('settings.health.fleeLabel')}
+                            name="flee-goto"
+                            onChange={(value) => patch({ fleeGoto: value })}
+                          />
+                          {form.fleeGoto && (
+                            <NumberField
+                              label={t('settings.health.belowHealthLabel')}
+                              name="flee-health"
+                              bar={barOfHealth(form.fleeGotoBelow)}
+                              figure={ofHealth(form.fleeGotoBelow)}
+                              onChange={(value) => patch({ fleeGotoBelow: value })}
+                              value={form.fleeGotoBelow}
+                            />
+                          )}
+                        </div>
+                        {form.fleeGoto && (
+                          <TextField
+                            hint={t('settings.health.fleeDestinationHint')}
+                            label={t('settings.health.fleeDestinationLabel')}
+                            name="flee-destination"
+                            onChange={(value) => patch({ fleeGotoDestination: value })}
+                            placeholder={t('settings.health.fleeDestinationPlaceholder')}
+                            spellCheck={false}
+                            value={form.fleeGotoDestination}
+                            wide
+                          />
                         )}
                       </fieldset>
 

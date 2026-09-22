@@ -853,6 +853,7 @@ toolbar:
   disconnect: Disconnect
   drop: Auto-Drop Junk
   retreat: Auto-Retreat (Combat)
+  flee: Auto-Flee (Sys Goto)
   gangpath: Allow Remotes on Gangpath
   hangUp: Auto-Hangup (Panic Disconnect)
   healParty: Auto-Heal Party Members
@@ -3023,6 +3024,16 @@ settings:
     safeHavenHint: Named as a loop stop is, with the map/room so a shared name is not guessed at.
     safeHavenLabel: Safe Room / Retreat Room
     safeHavenPlaceholder: Newhaven, Town Gates 1/2150
+    fleeHint:
+      A second, more desperate escape for realms that answer sys status — sys goto is a real
+      command there, not a direction. Breaks off combat the same way Auto-Retreat does, then once
+      the fight is over sends sys goto to the destination below instead of walking. Set this lower
+      than Auto-Retreat's own threshold, or it never gets the chance to fire first.
+    fleeLabel: Auto-Flee
+    fleeLegend: Auto-Flee
+    fleeDestinationHint: The keyword sys goto is sent with, e.g. sil. Empty means never send it.
+    fleeDestinationLabel: Sys Goto Destination
+    fleeDestinationPlaceholder: sil
     hangUpCleanHint: Leave this on. The five-minute PvP window is invisible on screen.
     hangUpCleanLabel: Refuse Likely Penalties
     hangUpLabel: Auto-Hangup / Emergency Disconnect
@@ -3806,6 +3817,10 @@ session:
     retreatPlanned: 'Retreating to {room}: {stepCount} steps.'
     retreatRefused: 'Could not retreat to {room}: {reason}'
     retreatUnplaced: 'Not retreating to {room}: the room never resolved after the move.'
+    fleeGoto: 'Fleeing to {destination}.'
+    fleeGotoReason: 'flee: sys goto {destination}'
+    fleeGaveUp: 'Not fleeing to {destination}: the fight never ended.'
+    fleeDropped: 'Not fleeing to {destination}: you were killed, and the realm has moved you.'
     hangingUp: 'Hanging up: {why}. Penalty likely — {reasons}.'
     hangUpRefused: Not hanging up — {why}. {reasons}. Disconnecting now would be penalised; walk out instead.
     hangingUpClean: 'Hanging up: {why}.'

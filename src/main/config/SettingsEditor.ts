@@ -316,6 +316,18 @@ export class SettingsEditor {
 
         if (
           creating ||
+          draft.fleeGoto.enabled ||
+          document.hasIn(['automation', 'safety', 'fleeGoto'])
+        ) {
+          document.setIn(['automation', 'safety', 'fleeGoto'], {
+            enabled: draft.fleeGoto.enabled,
+            belowHealth: draft.fleeGoto.belowHealth,
+            destination: draft.fleeGoto.destination
+          });
+        }
+
+        if (
+          creating ||
           draft.hangUp.enabled ||
           document.hasIn(['automation', 'safety', 'hangUp'])
         ) {
@@ -947,6 +959,7 @@ export class SettingsEditor {
           onPlayerInRoom: config.automation.safety.hangUp.onPlayerInRoom
         },
         retreat: retreatOf(config.automation.safety.retreat),
+        fleeGoto: { ...config.automation.safety.fleeGoto },
         pvp: { ...config.automation.safety.pvp },
         combat: { ...config.automation.combat },
         party: { ...config.automation.party },
@@ -1050,6 +1063,7 @@ export class SettingsEditor {
         set(['automation', 'walk'], { ...draft.automation.walk });
         set(['automation', 'safety', 'hangUp'], { ...draft.automation.hangUp });
         set(['automation', 'safety', 'retreat'], { ...draft.automation.retreat });
+        set(['automation', 'safety', 'fleeGoto'], { ...draft.automation.fleeGoto });
         set(['automation', 'safety', 'pvp'], { ...draft.automation.pvp });
         set(['automation', 'combat'], { ...draft.automation.combat });
         set(['automation', 'party'], { ...draft.automation.party });
@@ -1184,6 +1198,8 @@ export class SettingsEditor {
         retreat: retreatOf(
           effective?.automation.safety.retreat ?? DEFAULT_CONFIG.automation.safety.retreat
         ),
+        fleeGoto:
+          effective?.automation.safety.fleeGoto ?? DEFAULT_CONFIG.automation.safety.fleeGoto,
         pvp: effective?.automation.safety.pvp ?? DEFAULT_CONFIG.automation.safety.pvp,
         /*
          * The resolved combat block, except for the priority list, which is
@@ -1356,6 +1372,7 @@ function blank(id: string): ProfileEditable {
     login: [],
     hangUp: DEFAULT_CONFIG.automation.safety.hangUp,
     retreat: retreatOf(DEFAULT_CONFIG.automation.safety.retreat),
+    fleeGoto: DEFAULT_CONFIG.automation.safety.fleeGoto,
     pvp: DEFAULT_CONFIG.automation.safety.pvp,
     combat: DEFAULT_CONFIG.automation.combat,
     party: DEFAULT_CONFIG.automation.party,

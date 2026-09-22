@@ -395,6 +395,8 @@ export interface ProfileEditable {
     strategy: RetreatStrategy;
     safeHavenRoom: string;
   };
+  /** Fleeing outright — see `FleeGotoConfig`. Resolved, like the two above. */
+  fleeGoto: { enabled: boolean; belowHealth: number; destination: string };
   /** What to do when a player opens on this character. Resolved, like the two above. */
   pvp: { notifyGang: boolean; action: PvpAction };
   /**

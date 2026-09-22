@@ -220,6 +220,7 @@ export interface GlobalDraft {
     walk: { stepTimeoutMs: number; clearAfterSeconds: number; minExpPerHour: number };
     hangUp: ProfileDraft['hangUp'];
     retreat: ProfileDraft['retreat'];
+    fleeGoto: ProfileDraft['fleeGoto'];
     pvp: ProfileDraft['pvp'];
     combat: ProfileDraft['combat'];
     party: ProfileDraft['party'];
@@ -369,6 +370,15 @@ export interface ProfileDraft {
     whenOutnumbered: number;
     strategy: RetreatStrategy;
     safeHavenRoom: string;
+  };
+  /**
+   * Fleeing outright — see `FleeGotoConfig`: a second, more desperate escape for
+   * the realms where `sys goto` is a real command, not a rung of `retreat`.
+   */
+  fleeGoto: {
+    enabled: boolean;
+    belowHealth: number;
+    destination: string;
   };
   /** What to do the moment a player opens on this character — `automation.safety.pvp`. */
   pvp: { notifyGang: boolean; action: PvpAction };
@@ -738,6 +748,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
 
   const hangUp = isRecord(value['hangUp']) ? value['hangUp'] : {};
   const retreat = isRecord(value['retreat']) ? value['retreat'] : {};
+  const fleeGoto = isRecord(value['fleeGoto']) ? value['fleeGoto'] : {};
   const pvp = isRecord(value['pvp']) ? value['pvp'] : {};
   const combat = isRecord(value['combat']) ? value['combat'] : {};
   const health = isRecord(value['health']) ? value['health'] : {};
@@ -795,6 +806,11 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
         ? (retreat['strategy'] as RetreatStrategy)
         : 'step-back',
       safeHavenRoom: text(retreat['safeHavenRoom']).slice(0, 80)
+    },
+    fleeGoto: {
+      enabled: fleeGoto['enabled'] === true,
+      belowHealth: Math.min(1, Math.max(0, Number(fleeGoto['belowHealth']) || 0)),
+      destination: text(fleeGoto['destination']).slice(0, 80)
     },
     pvp: {
       notifyGang: pvp['notifyGang'] === true,
@@ -1185,6 +1201,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
       },
       hangUp: asIf.hangUp,
       retreat: asIf.retreat,
+      fleeGoto: asIf.fleeGoto,
       pvp: asIf.pvp,
       combat: asIf.combat,
       party: asIf.party,
