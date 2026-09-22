@@ -70,6 +70,16 @@ export interface Intent {
   /** Free-text note, for the decision trace. */
   reason?: string;
   /**
+   * The earliest this may go out.
+   *
+   * For a resend after the server threw a command away (`resendLast`), and
+   * for a message response that says to wait (`~` in MegaMUD's syntax). The
+   * queue already skips an intent that is not due and wakes for it, so a
+   * pause is a time on the intent rather than a timer somewhere else that
+   * would have to be cancelled when the session is.
+   */
+  notBefore?: number;
+  /**
    * The command has just been written to the socket.
    *
    * For a proposer whose own deadline measures the **server's** silence. The
@@ -92,16 +102,12 @@ export interface Intent {
 interface Queued extends Intent {
   seq: number;
   enqueuedAt: number;
-  /**
-   * The earliest this may go out, for an intent put back after the server
-   * threw it away (`resendLast`). Absent on everything else.
-   *
-   * `drain` **skips** an intent that is not due rather than waiting on it: an
-   * escape must never queue behind a walk step that is serving out a
-   * confusion delay, and blocking the whole queue on the head is exactly how
-   * that would happen.
+  /*
+   * `notBefore` is on `Intent`. `drain` **skips** an intent that is not due
+   * rather than waiting on it: an escape must never queue behind a walk step
+   * that is serving out a confusion delay, and blocking the whole queue on
+   * the head is exactly how that would happen.
    */
-  notBefore?: number;
 }
 
 export interface QueueEvents {
@@ -512,8 +518,9 @@ export class CommandQueue {
     this.pending.sort((a, b) => PRIORITY[b.priority] - PRIORITY[a.priority] || a.seq - b.seq);
 
     /*
-     * The first intent that is *due*. Only a resend after a fumble is ever not
-     * due (`resendLast`), and it is skipped rather than waited on: the server
+     * The first intent that is *due*. A resend after a fumble (`resendLast`)
+     * and a message response's `~` pause are the intents that can be not
+     * due, and they are skipped rather than waited on: the server
      * holds the character for a second after throwing a command away, and an
      * escape queued behind that second would be an escape that arrives after
      * the fight. A wake is scheduled for the soonest one held back so nothing

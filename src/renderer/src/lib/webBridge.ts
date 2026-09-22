@@ -257,6 +257,9 @@ export function createWebBridge(): IpcApi {
       }
       return pickRealm();
     },
+    loadMessages: (realm) => invoke(Invoke.loadMessages, realm),
+    importMessages: (realm, fileName, text) => invoke(Invoke.importMessages, realm, fileName, text),
+    saveMessages: (realm, triggers) => invoke(Invoke.saveMessages, realm, triggers),
     searchRooms: (session, query) => invoke(Invoke.searchRooms, session, query),
     mobNames: (session) => invoke(Invoke.mobNames, session),
     worldInfo: (session) => invoke(Invoke.worldInfo, session),

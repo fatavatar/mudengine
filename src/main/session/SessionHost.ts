@@ -46,6 +46,7 @@ import type { RealmPlayers } from '../../shared/players';
 import type { RealmDestinations } from '../world/DestinationBook';
 import type { BelongingsSink } from '../../shared/belongings';
 import type { TalkSink } from './TalkLog';
+import type { MessageTrigger } from '../../shared/messageTriggers';
 import { isTalkBlock } from '../../shared/talk';
 import { SessionDebug } from './SessionDebug';
 
@@ -120,6 +121,12 @@ export interface SessionHostOptions {
    * Optional: a host without them leaves both to the frames and the lore.
    */
   sentences?(): ShippedSentences;
+  /**
+   * The message table of *this character's* realm (`servers/<id>/messages.yaml`),
+   * per session for the reason `loreFor` is. Optional: a host without one
+   * answers no sentences.
+   */
+  messagesFor?(id: SessionId): readonly MessageTrigger[];
   /**
    * Where what *this character* learns about the realm is kept.
    *
@@ -474,6 +481,7 @@ export class SessionHost {
     );
 
     manager.configureInternal(this.options.internal());
+    manager.configureMessages(this.options.messagesFor?.(id) ?? []);
     const slot: SessionSlot = {
       id,
       manager,
@@ -591,6 +599,7 @@ export class SessionHost {
         config.connection.locate
       );
       slot.manager.configureInternal(this.options.internal());
+      slot.manager.configureMessages(this.options.messagesFor?.(slot.id) ?? []);
     }
   }
 

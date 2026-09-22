@@ -28,6 +28,8 @@ import type {
 } from '../../shared/automation';
 import { LoginAutomator, type StandDown } from '../automation/LoginAutomator';
 import { RuleEngine } from '../automation/RuleEngine';
+import { MessageTriggers } from '../automation/MessageTriggers';
+import type { MessageTrigger } from '../../shared/messageTriggers';
 import { HangUpWatch, PVP_WINDOW_MS, playersHere } from '../automation/HangUp';
 import { AutoCombat } from '../automation/AutoCombat';
 import { Recovery } from '../automation/Recovery';
@@ -816,6 +818,8 @@ export class SessionManager {
 
   readonly queue: CommandQueue;
   readonly rules: RuleEngine;
+  /** The realm's message table, answering the realm. See `MessageTriggers`. */
+  readonly messages: MessageTriggers;
   readonly walker: Walker;
   /**
    * Fighting on the character's behalf.
@@ -2475,6 +2479,8 @@ export class SessionManager {
       notice: (message) => this.sink.notice(message)
     });
     this.rules.load(automation.rules);
+    // Loaded by `configureMessages`: the table is the realm's, not the character's.
+    this.messages = new MessageTriggers(this.queue);
 
     /*
      * Answering the login is on the *player's* behalf, so it goes through the
@@ -2908,6 +2914,7 @@ export class SessionManager {
     this.questSaid = {};
     this.routines.reset();
     this.rules.reset();
+    this.messages.reset();
     this.walker.reset();
     this.combat.reset();
     this.recovery.reset();
@@ -3391,6 +3398,7 @@ export class SessionManager {
     // `connect` resets it, so the two lists can be read against each other.
     this.routines.reset();
     this.rules.reset();
+    this.messages.reset();
     this.combat.reset();
     this.recovery.reset();
     // A refusal arriving before the new session's first prompt is nobody's.
@@ -3514,6 +3522,15 @@ export class SessionManager {
   /** The client's own settings — which of its commands are quiet. Hot-reloaded. */
   configureInternal(internal: InternalConfig): void {
     this.internal = internal;
+  }
+
+  /**
+   * The realm's message table. Hot-reloaded, and separate from `configure`
+   * because it is the realm's rather than the character's: it arrives from
+   * the realm's own file, not from the options this character resolves.
+   */
+  configureMessages(triggers: readonly MessageTrigger[]): void {
+    this.messages.load(triggers);
   }
 
   configure(
@@ -3940,6 +3957,12 @@ export class SessionManager {
        * command ahead of it.
        */
       for (const tail of classified.tails ?? []) this.act(tail, undefined, collecting);
+      /*
+       * After the line is acted on, so a response the table sends goes out
+       * behind whatever the line itself released — the same order a rule's
+       * does. The plain text, because a sentence is matched as it reads.
+       */
+      this.messages.onLine(line.plain, classified.block.domain === 'conversation', collecting, at);
     } catch (error) {
       this.reportParserFault(error);
     }
@@ -7183,6 +7206,8 @@ export class SessionManager {
   }
 
   private stopGoingAnywhere(): void {
+    // Nothing a sentence put on the character outlives the character.
+    this.messages.clearEffects();
     const retreat = this.retreat;
     if (retreat !== null) {
       this.retreat = null;
@@ -7441,7 +7466,11 @@ export class SessionManager {
       queue: this.queue.snapshot,
       // Newest first: a trace is read backwards from whatever just happened.
       sent: [...this.sentLog].reverse(),
-      firings: this.rules.firings.reverse(),
+      // A rule's firings and the message table's share the card's list: both
+      // are *the client answered something*, and one list is one place to look.
+      firings: [...this.rules.firings, ...this.messages.firings]
+        .sort((a, b) => a.at - b.at)
+        .reverse(),
       safety: [...this.safetyLog].reverse(),
       engagements: [...this.engageLog].reverse()
     };
