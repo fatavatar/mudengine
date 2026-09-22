@@ -9670,6 +9670,34 @@ describe('a scripted teleport the walker hinted', () => {
     send('dive pool');
     expect(tracker.pendingMoves).toBe(0);
   });
+
+  /*
+   * A re-read forced out of a stalled portal step must not be read as the
+   * step's own answer — the whole reason `Walker.nudge` refused to send one
+   * at all until this guard existed (todo, `wasReread` beside `takeTeleport`
+   * in `CharacterTracker`). A premature reprint of the room being left is
+   * `Shore` again, not `Far Cavern`: were the promise spent on it, the real
+   * arrival would have nothing left to claim and would resolve by name alone.
+   */
+  it("is not spent by the nudge's own reprint, so the real arrival still claims it", () => {
+    const { tracker, feed, send } = session();
+    tracker.hintTeleport('dive pool', 2, 1);
+    send('dive pool');
+
+    // The forced re-read, answered before the portal has actually landed.
+    tracker.observeReread();
+    feed(['Shore', 'Obvious exits: east']);
+    // Resolved the ordinary way — `Shore` is still a real, unique room — and
+    // not the confident coordinate answer a spent promise would have given it.
+    expect(tracker.current.room.number).toBe(1);
+    expect(tracker.current.room.resolvedBy).not.toBe('coordinates');
+
+    // The real arrival, moments later, with the promise still armed.
+    feed(['Far Cavern', 'Obvious exits: west']);
+    expect(tracker.current.room.map).toBe(2);
+    expect(tracker.current.room.number).toBe(1);
+    expect(tracker.current.room.resolvedBy).toBe('coordinates');
+  });
 });
 
 /*

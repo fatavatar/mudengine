@@ -1016,6 +1016,47 @@ export class SessionManager {
   }
 
   /**
+   * Resolves the character's own room before something that needs it plans
+   * from it, when it is not already known.
+   *
+   * `planFromHere` and `Invoke.routeTo` both refuse outright rather than
+   * guess — a route planned from the wrong room is a confidently wrong plan,
+   * which costs more than the wait this spends to avoid one. Until now the
+   * refusal was the whole of it: picking a Goto destination or pressing play
+   * on a Loop while the room was ambiguous sent the player to the Room card's
+   * own locate button and back to try again. This is that button, pressed on
+   * the player's behalf at the one moment a plan actually needs the answer.
+   *
+   * **Two ways out cost nothing.** Already known: returns immediately,
+   * true — the ordinary case, so a resolved room never waits on this at all.
+   * Nothing to ask: `askWhereIAm` returns false when the realm is configured
+   * for `'none'`, or the wire has already refused the configured word this
+   * connection — either way there is no answer coming, and counting down
+   * `locateResolveMs` for one would only make the refusal slower to arrive.
+   *
+   * **Polled rather than awaited on an event.** The room becomes known from
+   * inside a block reducer with no promise of its own to hand out, and a
+   * one-off waiter built for this single call site would be a second way to
+   * learn the same fact the tracker already publishes on every line. A plan
+   * asked for is asked for once, so the poll's own interval costs nothing
+   * anybody is watching.
+   */
+  async ensureLocated(timeoutMs = tuning().session.locateResolveMs): Promise<boolean> {
+    const known = (): boolean => {
+      const room = this.tracker.current.room;
+      return room.map !== null && room.number !== null;
+    };
+    if (known()) return true;
+    if (!this.askWhereIAm()) return false;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (known()) return true;
+    }
+    return false;
+  }
+
+  /**
    * `onEnterRealm`, with its own word for *ask where I am* resolved to
    * whatever `locateMethod` actually sends.
    *

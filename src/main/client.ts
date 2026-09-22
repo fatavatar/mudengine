@@ -1549,7 +1549,7 @@ function registerIpc(): void {
    */
   const drafts = new Map<SessionId, LoopDraftCache>();
 
-  handle(Invoke.routeTo, (_caller, session: SessionId, map: number, room: number) => {
+  handle(Invoke.routeTo, async (_caller, session: SessionId, map: number, room: number) => {
     const manager = host?.get(session)?.manager;
     // This character's realm, not the client's: routing against the wrong one
     // sends somebody to a room that does not exist.
@@ -1557,6 +1557,11 @@ function registerIpc(): void {
     if (!world || world.size === 0) {
       return { steps: [], cost: 0, blocked: true, reason: t('app.route.noRealmData') };
     }
+    // Ambiguous rather than merely unresolved: asked for, then read again --
+    // see `ensureLocated`. A room already known returns at once, and a realm
+    // with nothing to ask (`locate: none`, or one that has already refused
+    // the configured word) does too, so the ordinary case pays nothing here.
+    if (manager && manager.character.room.map === null) await manager.ensureLocated();
     const here = manager?.character.room;
     if (!here || here.map === null || here.number === null) {
       // Routing from an unknown position would be a guess dressed as a plan.
@@ -1654,7 +1659,12 @@ function registerIpc(): void {
    */
   handle(
     Invoke.startMoving,
-    (_caller, session: SessionId, loop: unknown, confirmed: unknown): MovementStart => {
+    async (
+      _caller,
+      session: SessionId,
+      loop: unknown,
+      confirmed: unknown
+    ): Promise<MovementStart> => {
       const slot = host?.get(session);
       if (!slot) return { refused: t('app.session.notConnected') };
       if (loop !== null && typeof loop !== 'string') return { refused: t('app.loop.invalidName') };
@@ -1665,6 +1675,10 @@ function registerIpc(): void {
        * agreed to*, which is the safe reading of a malformed payload.
        */
       const agreed = typeof confirmed === 'number' && Number.isFinite(confirmed) ? confirmed : null;
+      // See `Invoke.routeTo` — the same wait, so a route resumed or a loop
+      // started from an ambiguous room gets one chance at the real answer
+      // before `planFromHere` refuses it.
+      if (slot.manager.character.room.map === null) await slot.manager.ensureLocated();
       return slot.manager.startMoving(loop, agreed);
     }
   );
@@ -1691,12 +1705,14 @@ function registerIpc(): void {
     Invoke.listLoops,
     (_caller, session: SessionId) => host?.get(session)?.manager.loopList ?? []
   );
-  handle(Invoke.startLoop, (_caller, session: SessionId, name: unknown) => {
+  handle(Invoke.startLoop, async (_caller, session: SessionId, name: unknown) => {
     const slot = host?.get(session);
     if (!slot) return t('app.session.notConnected');
     if (typeof name !== 'string') return t('app.loop.invalidName');
     const loop = slot.manager.loopNamed(name);
     if (!loop) return t('app.loop.notFound', { name });
+    // See `Invoke.routeTo` — the same wait, before the first leg is planned.
+    if (slot.manager.character.room.map === null) await slot.manager.ensureLocated();
     // Through the manager: one movement at a time, so a lap starting takes the
     // character off whatever route it was walking, out loud.
     const answer = slot.manager.startLoop(loop);
@@ -1717,11 +1733,13 @@ function registerIpc(): void {
    * this is the runner's own shape rather than a new capability. Parsed, not
    * trusted: it crossed the wire.
    */
-  handle(Invoke.runLoop, (_caller, session: SessionId, loop: unknown) => {
+  handle(Invoke.runLoop, async (_caller, session: SessionId, loop: unknown) => {
     const slot = host?.get(session);
     if (!slot) return t('app.session.notConnected');
     const parsed = asLoop(loop);
     if (parsed === null) return t('app.loop.invalidLoop');
+    // See `Invoke.routeTo` — the same wait, before the first leg is planned.
+    if (slot.manager.character.room.map === null) await slot.manager.ensureLocated();
     const answer = slot.manager.startLoop(parsed);
     return 'refused' in answer ? answer.refused : null;
   });

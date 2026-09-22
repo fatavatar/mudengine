@@ -1069,6 +1069,14 @@ tuning:
     # How long a `safe-haven` retreat waits for the escape move to land.
     retreatSettleMs: 5000
 
+    # How long picking a Goto destination or pressing play on a Loop waits for
+    # an ambiguous room to resolve before planning from it anyway. Long enough
+    # for a round trip on a slow board; short enough that a realm with nothing
+    # to ask (locate: none, or a connection that already knows the configured
+    # word does not work) is never actually counted down, because
+    # SessionManager.ensureLocated returns immediately in both of those cases.
+    locateResolveMs: 4000
+
     # Minimum gap between decision-trace publishes. The queue changes several
     # times a second in combat and every change interests a diagnostics card
     # and nothing else.
