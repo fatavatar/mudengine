@@ -936,6 +936,32 @@ describe('hitting back', () => {
     expect(sent).toEqual(['a wererat shaman']);
   });
 
+  /*
+   * Healbot, 2026-09-22: a heal ended the fight, and as the three goblins
+   * swung in turn the client sent `a nasty dark goblin`, `a dark goblin` and
+   * `a short dark goblin` inside 15ms — each switching target, the server
+   * answering with an Off and an Engaged apiece. One attack is the answer;
+   * the others are waste until it is answered.
+   */
+  it('hits back at one monster at a time', () => {
+    const auto = make(combat());
+    const goblins = [
+      unplaced('nasty dark goblin'),
+      unplaced('dark goblin'),
+      unplaced('short dark goblin')
+    ];
+    const swinging = (attackers: string[]): CharacterState =>
+      state({
+        room: { ...EMPTY_CHARACTER.room, occupants: goblins },
+        combat: { ...EMPTY_CHARACTER.combat, attackers }
+      });
+    auto.onCharacter(swinging(['nasty dark goblin']));
+    auto.onCharacter(swinging(['dark goblin', 'nasty dark goblin']));
+    auto.onCharacter(swinging(['short dark goblin', 'dark goblin', 'nasty dark goblin']));
+    drain();
+    expect(sent).toEqual(['a nasty dark goblin']);
+  });
+
   it('says nothing back once this character has a target of its own', () => {
     const auto = make(combat());
     auto.onCharacter(

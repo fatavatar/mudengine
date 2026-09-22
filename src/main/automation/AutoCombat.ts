@@ -943,6 +943,17 @@ export class AutoCombat {
      */
     if (this.retreating) return false;
     if (state.combat.target !== null) return false;
+    /*
+     * **One attack at a time**, the rule `whyNot` already makes for opening a
+     * fight. `a` switches target, so a second attack while the first is still
+     * unanswered only undoes it. Without this, hitting back had no such rule:
+     * as each of three goblins swung in turn, the attacker ranked first
+     * changed, and healbot sent `a nasty dark goblin`, `a dark goblin` and
+     * `a short dark goblin` inside 15ms, every round (2026-09-22). The
+     * engagement that answers the first attack sets the target, which is
+     * what ends the wait; a monster that leaves releases it (`onCharacter`).
+     */
+    if (this.stillEngaged(state) !== null) return false;
 
     /*
      * Which of them, when several are swinging: the one that costs the most

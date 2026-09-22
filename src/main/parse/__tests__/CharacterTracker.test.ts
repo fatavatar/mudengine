@@ -137,7 +137,8 @@ function play(
         clock += step.wait;
         continue;
       }
-      tracker.observeCommand(step.send);
+      // On the lines' own clock, so a `wait` ages a command as it ages a line.
+      tracker.observeCommand(step.send, 1_700_000_000_000 + seq + clock);
       classifier.observeCommand(step.send);
       continue;
     }
@@ -1778,14 +1779,26 @@ describe('the fight this character is in', () => {
     expect(tracker.current.combat.target).toBe('orc rogue');
   });
 
-  it('drops the binding when another command intervenes', () => {
-    // An engagement two commands after the attack is an attribution nobody
-    // can make — the same one-slot rule the unmodelled-command record follows.
+  it('keeps the binding across a command that cannot engage', () => {
+    // `*Combat Engaged*` only ever answers an attack, so a look in between
+    // changes nothing about which attack it answers. The one-slot rule this
+    // replaced lost the target to the heal auto-heal sends behind an attack —
+    // see the fight of 2026-09-22 below.
     const tracker = play(
       ['[HP=98]:', { send: 'pu orc rogue' }, { send: 'l' }, '*Combat Engaged*'],
       combatWorld()
     );
+    expect(tracker.current.combat.target).toBe('orc rogue');
+  });
+
+  it('forgets an attack nothing answered', () => {
+    // A stale attack must not bind the engagement some later command causes.
+    const tracker = play(
+      ['[HP=98]:', { send: 'pu orc rogue' }, { wait: 10_000 }, '*Combat Engaged*'],
+      combatWorld()
+    );
     expect(tracker.current.combat.target).toBeNull();
+    expect(tracker.current.inCombat).toBe(true);
   });
 
   it('binds nothing from a bare attack verb', () => {
@@ -1810,6 +1823,96 @@ describe('the fight this character is in', () => {
     // The engagement of a fight already running says nothing new; the damage
     // lines are what move the target.
     expect(tracker.current.combat.target).toBe('orc rogue');
+  });
+
+  /*
+   * Healbot against three dark goblins, 2026-09-22
+   * (`2026-09-22_22-34-44_healbot.mudcap.jsonl`). Several attacks went out
+   * before the server answered any of them, and a heal was queued among
+   * them; every engagement after the first bound nothing, so the character
+   * stood in a running fight with no target and hit back at every monster
+   * that swung, each round, until combat stopped altogether.
+   */
+  describe('the fight of 2026-09-22', () => {
+    const goblins: Step[] = [
+      '[HP=197/MA=214]:',
+      'Also here: nasty dark goblin, dark goblin, short dark goblin.',
+      'Obvious exits: north, west, southeast'
+    ];
+
+    it('binds each engagement of a burst to the attack that caused it', () => {
+      const tracker = play(
+        [
+          ...goblins,
+          { send: 'a nasty dark goblin' },
+          { send: 'a dark goblin' },
+          { send: 'a short dark goblin' },
+          '*Combat Engaged*',
+          '*Combat Off*',
+          '*Combat Engaged*',
+          '*Combat Off*',
+          '*Combat Engaged*'
+        ],
+        combatWorld()
+      );
+      // `a` switches target, so the last attack is the fight the server kept.
+      expect(tracker.current.inCombat).toBe(true);
+      expect(tracker.current.combat.target).toBe('short dark goblin');
+    });
+
+    it('binds the attack behind a heal that ended the fight in between', () => {
+      const tracker = play(
+        [
+          ...goblins,
+          { send: 'a nasty dark goblin' },
+          { send: 'a dark goblin' },
+          { send: 'c gdhe' },
+          { send: 'a short dark goblin' },
+          '*Combat Off*',
+          '*Combat Engaged*',
+          '*Combat Off*',
+          '*Combat Engaged*',
+          '*Combat Off*',
+          'You cast godheal on Healbot, healing 117 damage!',
+          '[HP=240/MA=190]:',
+          '*Combat Engaged*'
+        ],
+        combatWorld()
+      );
+      expect(tracker.current.inCombat).toBe(true);
+      expect(tracker.current.combat.target).toBe('short dark goblin');
+    });
+
+    it('takes a monster out of the room when an attack on it is said out loud', () => {
+      // The short one had died a moment before the queued attack reached the
+      // server, which answers an attack on nothing by saying it.
+      const tracker = play(
+        [
+          ...goblins,
+          { send: 'a nasty dark goblin' },
+          '*Combat Engaged*',
+          { send: 'a short dark goblin' },
+          'You say "a short dark goblin"'
+        ],
+        combatWorld()
+      );
+      expect(names(tracker.current.room.occupants)).toEqual(['nasty dark goblin', 'dark goblin']);
+      expect(tracker.current.combat.target).toBe('nasty dark goblin');
+    });
+
+    it('leaves the room alone when the verb has never engaged anything', () => {
+      // Nothing yet says this realm has the word, so the realm not having it
+      // is as good a reading as the monster not being there.
+      const tracker = play(
+        [...goblins, { send: 'a short dark goblin' }, 'You say "a short dark goblin"'],
+        combatWorld()
+      );
+      expect(names(tracker.current.room.occupants)).toEqual([
+        'nasty dark goblin',
+        'dark goblin',
+        'short dark goblin'
+      ]);
+    });
   });
 
   /*
