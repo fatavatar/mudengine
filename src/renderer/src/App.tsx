@@ -88,6 +88,7 @@ import {
 } from './hooks/useCardLayout';
 import type { CardChrome } from './components/BentoCard';
 import type { AppConfig } from '@shared/config';
+import type { MessageTrigger } from '@shared/messageTriggers';
 import type { IpcApi } from '@shared/ipc';
 import { CONSOLE_PALETTES, TERMINAL_THEMES, THEME_PREFERENCES, THEMES } from '@shared/themes';
 import { usePaneWidths } from './hooks/usePaneWidths';
@@ -2866,6 +2867,12 @@ export default function App() {
       revealConfig: () => reveal(() => api.revealConfig()),
       revealProfiles: () => reveal(() => api.revealProfiles()),
       chooseRealm: () => api.chooseRealm(),
+      // A realm's message table, asked for when its page shows it.
+      loadMessages: (realm: string) => api.loadMessages(realm),
+      importMessages: (realm: string, fileName: string, text: string) =>
+        api.importMessages(realm, fileName, text),
+      saveMessages: (realm: string, triggers: MessageTrigger[]) =>
+        api.saveMessages(realm, triggers),
       // The shelf of shipped loops, for the Movement tab. Asked for when
       // that picker opens rather than with the snapshot: four hundred
       // loops, and most visits to that screen are about a password.
@@ -5889,6 +5896,9 @@ export default function App() {
         required={mustMakeCharacter}
         revealConfig={settingsApi.revealConfig}
         chooseRealm={settingsApi.chooseRealm}
+        loadMessages={settingsApi.loadMessages}
+        importMessages={settingsApi.importMessages}
+        saveMessages={settingsApi.saveMessages}
         loadLoops={settingsApi.loadLoops}
         loadTrainers={settingsApi.loadTrainers}
         loadBanks={settingsApi.loadBanks}

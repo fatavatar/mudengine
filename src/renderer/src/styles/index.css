@@ -6175,6 +6175,155 @@ button.lookup.quest-where svg {
 }
 
 /*
+ * A realm's message table (`RealmMessages`): a bar that says what the table
+ * is and offers the import, then one line per message -- the switch, the name,
+ * the sentence, and chips for what it means and what it sends. Six hundred of
+ * them is a list to search, not to read, so a row stays one line until it is
+ * opened.
+ */
+.realm-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messages-bar,
+.messages-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.messages-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.messages-summary {
+  color: var(--text-lo);
+  flex: 1 1 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.messages-status {
+  margin: 0;
+}
+
+.messages-status.ok {
+  color: var(--ok);
+}
+
+.messages-status.bad {
+  color: var(--danger);
+}
+
+.messages-search {
+  width: 100%;
+}
+
+.messages-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.messages-list li {
+  border-bottom: 1px solid var(--ink-line);
+  padding: 4px 0;
+}
+
+.messages-list li:last-child {
+  border-bottom: none;
+}
+
+.messages-list li.off .message-summary {
+  opacity: 0.55;
+}
+
+.message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.message-row > input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+/* The row itself is the button that opens it, so it reads as text, not chrome. */
+.message-summary {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.message-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message-name {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+
+.message-match {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.message-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* A reply is the player's own text, so it keeps its case. */
+.message-chips .chip:not(.info):not(.warn):not(.quiet) {
+  text-transform: none;
+}
+
+.message-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px 26px;
+}
+
+.message-effects {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.message-effects-label {
+  color: var(--text-lo);
+  font-size: var(--font-micro);
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+  text-transform: uppercase;
+}
+
+.message-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/*
  * A blessing carries more than a menu answer, so its row is two lines: the
  * identity — order, name, spell, target — and the numbers and switches under
  * it. The list keeps the steps' rhythm; the second line is quieter and

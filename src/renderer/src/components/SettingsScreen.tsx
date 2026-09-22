@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import type { MessageImport, MessageTable, MessageTrigger } from '@shared/messageTriggers';
 import { asShippedWorld } from '@shared/worlds';
 import type { StatlineFigures } from '@shared/statline';
 import type { TerminalPalette } from '@shared/themes';
@@ -6,6 +7,7 @@ import type { BankChoice, TrainerChoice } from '@shared/world';
 import type { PotionRule, PotionWhen } from '@shared/config';
 import type { AlertRule } from '@shared/notifications';
 import AlertList from './AlertList';
+import RealmMessages from './RealmMessages';
 import MobPriorityList from './MobPriorityList';
 import SettingsNav, { type NavFieldset } from './SettingsNav';
 import PotionList from './PotionList';
@@ -293,6 +295,10 @@ export interface SettingsScreenProps {
   revealProfiles(): void;
   /** Native picker for a realm database. Resolves to null if dismissed. */
   chooseRealm(): Promise<string | null>;
+  /** A realm's message table, by name. See `RealmMessages`. */
+  loadMessages(realm: string): Promise<MessageTable>;
+  importMessages(realm: string, fileName: string, text: string): Promise<MessageImport>;
+  saveMessages(realm: string, triggers: MessageTrigger[]): Promise<string | null>;
   /**
    * The loops the client ships, for the Movement tab to offer.
    *
@@ -1378,6 +1384,9 @@ export default function SettingsScreen({
   revealConfig,
   revealProfiles,
   chooseRealm,
+  loadMessages,
+  importMessages,
+  saveMessages,
   loadLoops,
   loadTrainers,
   loadBanks,
@@ -4267,6 +4276,24 @@ export default function SettingsScreen({
                       namePrefix="realm-mob-priority"
                       onChange={(rows) => setServerForm({ ...serverForm, mobPriority: rows })}
                       rows={serverForm.mobPriority}
+                    />
+                  </fieldset>
+
+                  {/*
+                    And what the place's sentences mean: a realm's message
+                    table, imported from MegaMUD. On the realm for the reason
+                    the ranking above is -- every character here hears the
+                    same sentences -- and saved on its own rather than with
+                    this form, which saves as somebody types.
+                  */}
+                  <fieldset className="settings-menus" data-fieldset="realm-messages">
+                    <legend>{t('settings.messages.legend')}</legend>
+                    <p className="settings-note">{t('settings.messages.note')}</p>
+                    <RealmMessages
+                      importFile={importMessages}
+                      load={loadMessages}
+                      realm={serverPick === NEW_SERVER ? null : serverPick}
+                      save={saveMessages}
                     />
                   </fieldset>
 

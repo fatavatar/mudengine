@@ -35,6 +35,14 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
       "the server's message table is data — 3,979 rows of three templates (`%s`, `%d`) — " +
       'so each is compiled once when the shipped table is read (`MessageBook.add`) and held; ' +
       'the per-line path runs only the compiled ones a word index selects (todo 109)'
+  },
+  'src/shared/messageTriggers.ts': {
+    count: 1,
+    because:
+      "a realm's message table is the player's own data — MegaMUD's Messages.md, six hundred " +
+      'sentences with `{target}`/`{dmg}` tokens — so each is compiled once when the table is ' +
+      'loaded (`MessageTriggers.load`) and held; the per-line path tests a literal with ' +
+      '`includes` before any compiled one runs'
   }
 };
 

@@ -123,6 +123,10 @@ const api: IpcApi = {
   deleteServer: (name) => ipcRenderer.invoke(Invoke.deleteServer, name),
   settingsSnapshot: () => ipcRenderer.invoke(Invoke.settingsSnapshot),
   chooseRealm: () => ipcRenderer.invoke(Invoke.chooseRealm),
+  loadMessages: (realm) => ipcRenderer.invoke(Invoke.loadMessages, realm),
+  importMessages: (realm, fileName, text) =>
+    ipcRenderer.invoke(Invoke.importMessages, realm, fileName, text),
+  saveMessages: (realm, triggers) => ipcRenderer.invoke(Invoke.saveMessages, realm, triggers),
   searchRooms: (session, query) => ipcRenderer.invoke(Invoke.searchRooms, session, query),
   mobNames: (session) => ipcRenderer.invoke(Invoke.mobNames, session),
   worldInfo: (session) => ipcRenderer.invoke(Invoke.worldInfo, session),

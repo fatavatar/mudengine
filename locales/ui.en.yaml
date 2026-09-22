@@ -82,6 +82,11 @@ app:
     invalidPayload: Invalid route path.
     noRealmData: No realm data loaded
     unknownRoom: Current room unknown. Move or look to locate character.
+  messages:
+    nothingRead:
+      That file has no MegaMUD messages in it, so the realm's table was left as it was. Choose
+      the Messages.md from a MegaMUD data folder.
+    unreadable: The file could not be read.
   servers:
     invalidDraft: A realm needs a name, a host and a port between 1 and 65535.
     noSuchServer: No such realm.
@@ -106,6 +111,9 @@ app:
 # Lines the client itself prints into the terminal or pushes as one-off notices.
 notices:
   config:
+    messages:
+      lostRows: 'The message table would have saved {wrote} rows and read back {read}, so it was not saved.'
+      readError: '{file} could not be read, so this realm answers no messages until it is fixed: {message}'
     servers:
       noHost: '{file} does not name a host, so it is not a realm'
       readError: '{file} could not be read: {message}'
@@ -3024,8 +3032,7 @@ settings:
     safeHavenHint: Named as a loop stop is, with the map/room so a shared name is not guessed at.
     safeHavenLabel: Safe Room / Retreat Room
     safeHavenPlaceholder: Newhaven, Town Gates 1/2150
-    fleeHint:
-      A second, more desperate escape for realms that answer sys status — sys goto is a real
+    fleeHint: A second, more desperate escape for realms that answer sys status — sys goto is a real
       command there, not a direction. Breaks off combat the same way Auto-Retreat does, then once
       the fight is over sends sys goto to the destination below instead of walking. Set this lower
       than Auto-Retreat's own threshold, or it never gets the chance to fire first.
@@ -3190,6 +3197,72 @@ settings:
     agility: Agility
     health: Health
     charm: Charm
+  # A realm's message table (`RealmMessages`): MegaMUD's Messages.md, imported
+  # onto the realm and edited there.
+  messages:
+    actionLabel: Action
+    add: Add a message
+    cancel: Cancel
+    chaseChip: chase — not used yet
+    confirmReplace: Replace this realm's {count} messages with the ones in {file}? Edits made here are lost.
+    conversationsHint:
+      Also answer the sentence when somebody says it. Off unless you trust everyone in earshot —
+      with it on, anybody can gossip the sentence and steer this client.
+    conversationsLabel: Match in conversations
+    count:
+      many: '{count} messages'
+      one: '1 message'
+    countChase: '{count} chase rows kept but not used yet'
+    countOff: '{count} switched off'
+    effectsLabel: Means
+    enabledAria: 'Answer "{name}"'
+    enabledLabel: Answer this message
+    endsWithHint:
+      The sentence that ends what this one started, such as "The effects of confusion wear off".
+      Leave it blank when nothing lasts.
+    endsWithLabel: Ends With
+    import: Import Messages.md…
+    imported:
+      many: 'Imported {count} messages.'
+      one: 'Imported 1 message.'
+    importedChase: '{count} of them follow players through special exits, which the client cannot do yet, so they are kept but not answered.'
+    importedSkipped: '{count} lines of the file did not read as messages and were skipped (line {lines}).'
+    legend: Messages
+    loading: Reading this realm's messages…
+    matchHint:
+      Part of a line the realm prints, matched anywhere in the line and with the same capitals.
+      {target}, {source}, {dmg} and {1} to {5} stand for whatever the realm puts there.
+    matchLabel: Message
+    matchPlaceholder: You are confused
+    more: 'Showing {shown} of {count}. Search to find the rest.'
+    nameLabel: Name
+    namePlaceholder: confusion
+    needsMatch: A message needs the sentence to look for.
+    none: No messages yet. Import the Messages.md from a MegaMUD data folder, or add one.
+    noMatch: No message matches that search.
+    note:
+      What this realm's sentences mean, and what to send back when one arrives — MegaMUD's message
+      table, answered by every character that plays here. Importing replaces the whole table.
+      Replies go out when automation is on; conditions and actions are recorded for now and
+      acted on in a later update.
+    removedRow: Message removed.
+    removeRow: Remove
+    replace: Replace
+    responseChip: '→ {response}'
+    responseHint:
+      What to send, in MegaMUD's syntax. ^M is Enter and separates commands, ~ waits half a
+      second, and a||b picks one at random. {target} and the rest are what the message captured.
+    responseLabel: Reply
+    responsePlaceholder: drink water
+    saveFirst: Add the realm first; its messages are kept with it.
+    savedRow: Message saved.
+    saveRow: Save message
+    searchLabel: Search this realm's messages
+    searchPlaceholder: Search messages…
+    source: 'from {file}, {date}'
+    switchedOff: Message switched off.
+    switchedOn: Message switched on.
+    unreadable: That file could not be read.
   movement:
     provideLight: Auto-Light (Light Dark Rooms)
     provideLightHint:
@@ -4259,6 +4332,13 @@ automation:
     ambiguous:
       Not picking up {item} — the way {direction} needs one, but the realm has several things of
       that name and this one may not be it.
+  # A realm's message table answering the realm (`MessageTriggers`).
+  messages:
+    ended: '{effects} over'
+    enter: '(Enter)'
+    firing: 'Message: {name}'
+    reason: 'message: {name}'
+    started: '{effects} begins'
   loot:
     reasonCoinsDropped: 'loot: {count} {coin} on the floor'
     reasonDiscard: 'loot: shedding {count} {coin}'
@@ -4478,6 +4558,28 @@ automation:
     fallbackMove: the move
     fallbackLight: light
     fallbackBarrier: door
+# What a realm's message table calls the things its rows mean.
+messages:
+  actions:
+    hangUp: Hang up
+    look: Check who is in the room
+    none: Nothing
+    restHp: Rest until full HP
+    restMana: Rest until full mana
+    run: Don't rest — run
+    wait: Wait until it wears off
+  effects:
+    actionFailed: Last action failed
+    blind: Blinded
+    confused: Confused
+    diseased: Diseased
+    endsCombat: Ends combat
+    held: Movement prevented
+    hpRegen: HP regenerating
+    losingHp: Losing HP
+    manaRegen: Mana regenerating
+    noAttack: Attack prevented
+    poisoned: Poisoned
 # Play was pressed on a movement that was stopped a long time and a long way
 # ago. A stop keeps its place, so the lap you stopped at ten o'clock is still
 # there at midnight -- after the character has been walked to a bank, killed,

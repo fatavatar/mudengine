@@ -22,6 +22,7 @@ import { InternalStore } from './config/InternalStore';
 import { setTuning, tuning } from './app/tuning';
 import { ProfileStore, type ProfileSnapshot } from './config/ProfileStore';
 import { ServerStore } from './config/ServerStore';
+import { RealmMessageStore } from './config/RealmMessageStore';
 import { LoopStore } from './config/LoopStore';
 import { SettingsEditor, type SettingsEditorOptions } from './config/SettingsEditor';
 import { LoopCatalogue } from './config/LoopCatalogue';
@@ -100,6 +101,13 @@ import {
 import { DEFAULT_INTERNAL } from '../shared/internal';
 import { isRemoteName, REMOTE_NAMES, type RemoteGrant, type RemoteName } from '../shared/remotes';
 import type { Profile } from '../shared/profiles';
+import {
+  asMessageTriggers,
+  EMPTY_MESSAGE_TABLE,
+  parseMegaMudMessages,
+  type MessageImport,
+  type MessageTrigger
+} from '../shared/messageTriggers';
 import type { SessionSummary } from '../shared/ipc';
 import { EMPTY_CHARACTER } from '../shared/character';
 import { IDLE_WALK } from '../shared/walk';
@@ -194,6 +202,8 @@ let profiles: ProfileStore | null = null;
 let servers: ServerStore | null = null;
 /** The loops on disk, at all three scopes. See `LoopStore`. */
 let loops: LoopStore | null = null;
+/** Each realm's message table: `servers/<id>/messages.yaml`. See `RealmMessageStore`. */
+let realmMessages: RealmMessageStore | null = null;
 /**
  * Every realm the client has been asked for.
  *
@@ -1153,6 +1163,30 @@ function createServers(): ServerStore {
   return store;
 }
 
+function createRealmMessages(): RealmMessageStore {
+  const store = new RealmMessageStore(home, (message) => announce('messages', message));
+  // A table imported, edited on the settings page or by hand reaches the
+  // characters already playing that realm, the way a changed option does.
+  store.on('change', () => host?.reconfigure());
+  store.watch();
+  return store;
+}
+
+/**
+ * The message table of the realm a character plays.
+ *
+ * By the character's own realm, named in its file, and never by where the
+ * socket happens to point: a realm dialled ad hoc has no directory and so no
+ * table, which is the same answer its loops get.
+ */
+function messagesFor(id: SessionId): readonly MessageTrigger[] {
+  const profile = profileFor(id);
+  if (profile === undefined) return [];
+  const serverId = servers?.idFor(profile.serverName);
+  if (serverId === undefined) return [];
+  return realmMessages?.forServer(serverId).triggers ?? [];
+}
+
 function createLoops(): LoopStore {
   const store = new LoopStore(home, (message) => announce('loops', message));
   store.on('change', () => {
@@ -1272,6 +1306,7 @@ function createHost(): SessionHost {
     // profiles are watched, so a captured snapshot would pin every session to
     // the values it started with.
     configFor,
+    messagesFor,
     /*
      * Whether a lost connection is dialled back, per character, read through
      * for the reason `configFor` is: profiles are watched, so switching it off
@@ -2569,6 +2604,62 @@ function registerIpc(): void {
     })
   );
 
+  /*
+   * A realm's message table. Addressed by the realm's *name*, which is what
+   * the settings page holds, and resolved here to its directory — the one
+   * place the two are joined (`ServerStore.idFor`).
+   */
+  handle(Invoke.loadMessages, (_caller, realm: unknown) => {
+    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+    if (serverId === undefined || realmMessages === null) return EMPTY_MESSAGE_TABLE;
+    return realmMessages.forServer(serverId);
+  });
+
+  handle(Invoke.importMessages, (_caller, realm: unknown, fileName: unknown, text: unknown) => {
+    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+    if (serverId === undefined || realmMessages === null) {
+      return { ok: false, error: t('app.servers.noSuchServer') } satisfies MessageImport;
+    }
+    if (typeof text !== 'string') {
+      return { ok: false, error: t('app.messages.unreadable') } satisfies MessageImport;
+    }
+    const read = parseMegaMudMessages(text);
+    /*
+     * A file that yields nothing is refused rather than written: replacing a
+     * realm's table with an empty one because somebody picked the wrong file
+     * is the one outcome of an import nobody wants, and it is silent.
+     */
+    if (read.triggers.length === 0) {
+      return { ok: false, error: t('app.messages.nothingRead') } satisfies MessageImport;
+    }
+    const result = realmMessages.write(serverId, {
+      source: {
+        file: typeof fileName === 'string' && fileName.length > 0 ? fileName : 'Messages.md',
+        importedAt: new Date().toISOString()
+      },
+      triggers: read.triggers
+    });
+    if (!result.ok) return { ok: false, error: result.error } satisfies MessageImport;
+    return {
+      ok: true,
+      count: read.triggers.length,
+      chase: read.triggers.filter((trigger) => trigger.chase).length,
+      skipped: read.skipped
+    } satisfies MessageImport;
+  });
+
+  handle(Invoke.saveMessages, (_caller, realm: unknown, triggers: unknown) => {
+    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+    if (serverId === undefined || realmMessages === null) return t('app.servers.noSuchServer');
+    // Parsed, not trusted: the rows crossed the wire like any other payload.
+    const rows = asMessageTriggers(triggers);
+    const result = realmMessages.write(serverId, {
+      source: realmMessages.forServer(serverId).source,
+      triggers: rows
+    });
+    return result.ok ? null : result.error;
+  });
+
   handle(Invoke.saveProfile, (_caller, rawId: unknown, rawDraft: unknown) => {
     const id = asProfileId(rawId);
     if (id === null) return t('app.profiles.invalidId');
@@ -2920,6 +3011,7 @@ function build(): void {
   seedServers();
   servers = createServers();
   loops = createLoops();
+  realmMessages = createRealmMessages();
   publishTree();
   internal = createInternal();
   lore = createLore();
@@ -3048,6 +3140,10 @@ function teardown(): void {
   settle('profiles', () => {
     profiles?.dispose();
     profiles = null;
+  });
+  settle('messages', () => {
+    realmMessages?.dispose();
+    realmMessages = null;
   });
   settle('options', () => {
     config?.dispose();

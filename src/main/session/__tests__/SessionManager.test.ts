@@ -14,6 +14,7 @@ import {
   type SessionSink
 } from '../SessionManager';
 import { DEFAULT_CONFIG, type AutomationConfig, type RetreatConfig } from '../../../shared/config';
+import { blankTrigger } from '../../../shared/messageTriggers';
 import { WorldGraph } from '../../world/WorldGraph';
 import { t } from '../../app/i18n';
 import { PlayerBook } from '../../world/PlayerBook';
@@ -2825,6 +2826,66 @@ describe('fleeing outright', () => {
  * stops fail wholesale — never because automation worked. So it is a hold, and
  * a hold that lets go when the reason for it is over.
  */
+describe("answering the realm's messages", () => {
+  const answering: AutomationConfig = {
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+    onEnterRealm: [],
+    rules: []
+  };
+  const wire = (socket: net.Socket): (() => string) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1');
+  };
+
+  it("sends a row's reply when the realm prints its sentence, and traces it", async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(answering, DEFAULT_CONFIG.connection.login);
+    manager.configureMessages([
+      {
+        ...blankTrigger(),
+        name: 'desert damage',
+        match: 'You suffer in the desert heat...',
+        response: 'drink water',
+        action: 'run'
+      }
+    ]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('You suffer in the desert heat...\r\n');
+
+    await until(() => /(^|\n)drink water\r\n/.test(seen()));
+    expect(manager.automation.firings[0]).toMatchObject({
+      rule: 'Message: desert damage',
+      commands: ['drink water']
+    });
+  });
+
+  it('does not answer the same sentence when somebody gossips it', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(answering, DEFAULT_CONFIG.connection.login);
+    manager.configureMessages([
+      { ...blankTrigger(), match: 'You suffer in the desert heat...', response: 'drink water' }
+    ]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('Vex gossips: You suffer in the desert heat...\r\n');
+    // A status line after it, so the gossip is known to have been read.
+    socket.write('[HP=90]:\r\n');
+    await settled(90);
+    expect(manager.character.vitals.hp).toBe(90);
+    expect(seen()).not.toMatch(/drink water/);
+  });
+});
+
 describe('the lap after an escape', () => {
   const escaping = (): AutomationConfig => ({
     ...DEFAULT_CONFIG.automation,

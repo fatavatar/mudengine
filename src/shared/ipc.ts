@@ -14,6 +14,7 @@
  * App-level calls — the options file, the realm data, the log directory — take
  * no session, because they belong to the client rather than to a character.
  */
+import type { MessageImport, MessageTable, MessageTrigger } from './messageTriggers';
 import type { AutomationSnapshot } from './automation';
 import type { Block } from './blocks';
 import type { LocalMap } from './map';
@@ -829,6 +830,21 @@ export const Invoke = {
    * path, or null if the dialog was dismissed.
    */
   chooseRealm: 'settings:choose-realm',
+  /**
+   * One realm's message table, for its settings page. Asked for when the page
+   * shows the realm rather than with the snapshot: six hundred rows per realm
+   * is not what a visit to change a password needs.
+   */
+  loadMessages: 'settings:messages',
+  /**
+   * Replaces one realm's message table with what a MegaMUD `Messages.md`
+   * holds. The **contents** cross, not a path: the file is on the player's
+   * own machine, which in a browser tab is not the machine the client runs
+   * on — the one import here that the viewer's own picker is right for.
+   */
+  importMessages: 'settings:import-messages',
+  /** Writes one realm's whole message table, after an edit on its page. */
+  saveMessages: 'settings:save-messages',
   /** Where to hunt from here: the lairs within reach, priced for this character. */
   huntingGrounds: 'world:hunt',
   trainers: 'world:trainers',
@@ -1217,6 +1233,12 @@ export interface IpcApi {
   addLoop(scope: LoopScope, owner: string | null, loop: Loop): Promise<string | null>;
   settingsSnapshot(): Promise<SettingsSnapshot>;
   chooseRealm(): Promise<string | null>;
+  /** One realm's message table, by the realm's name. Empty when it has none. */
+  loadMessages(realm: string): Promise<MessageTable>;
+  /** Replaces a realm's table with a `Messages.md`'s, and says what it read. */
+  importMessages(realm: string, fileName: string, text: string): Promise<MessageImport>;
+  /** Resolves to why it refused, or null. */
+  saveMessages(realm: string, triggers: MessageTrigger[]): Promise<string | null>;
   /*
    * Addressed, like every push: with a realm per character, an unaddressed
    * query would answer from whichever realm happened to be the client's — and a
