@@ -608,6 +608,11 @@ function walkChip(walk: WalkProgress) {
   if (walk.status === 'walking' && walk.hold === 'poisoned') {
     return <span className="chip warn">{t('cards.navigation.loop.statusPoisoned')}</span>;
   }
+  // What the realm's message table says is on the character: confused,
+  // losing hit points, or a row that says to wait.
+  if (walk.status === 'walking' && walk.hold === 'condition') {
+    return <span className="chip warn">{t('cards.navigation.loop.statusCondition')}</span>;
+  }
   /*
    * A shut door the ladder could not get past this round. `warn`, with the
    * afflictions rather than with resting and fighting: the walk is waiting for
@@ -703,6 +708,9 @@ function loopChip(loop: LoopProgress) {
   }
   if (loop.status === 'running' && loop.hold === 'poisoned') {
     return <span className="chip warn">{t('cards.navigation.loop.statusPoisoned')}</span>;
+  }
+  if (loop.status === 'running' && loop.hold === 'condition') {
+    return <span className="chip warn">{t('cards.navigation.loop.statusCondition')}</span>;
   }
   if (loop.status === 'running') {
     return <span className="chip on">{t('cards.navigation.loop.statusRunning')}</span>;

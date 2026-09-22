@@ -824,3 +824,34 @@ describe('a figure a walk is waiting for', () => {
     expect(sent).toEqual([]);
   });
 });
+
+/*
+ * A row of the realm's message table saying *rest until full* — held on the
+ * character (`CharacterState.stated`) until `SessionManager` lets it go.
+ */
+describe('resting to full because a message said to', () => {
+  const told = (action: 'rest-hp' | 'rest-mana'): CharacterState['stated'] => [
+    { name: 'poison pool', effects: [], action, since: 0 }
+  ];
+
+  it('rests above restBelow while the row is held and health is not full', () => {
+    new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
+      state({ hp: 90, hpMax: 100, stated: told('rest-hp') })
+    );
+    expect(sent).toEqual(['rest']);
+  });
+
+  it('meditates for mana where the class has it', () => {
+    new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
+      state({ hp: 100, hpMax: 100, mana: 5, manaMax: 50, stated: told('rest-mana') })
+    );
+    expect(sent).toEqual(['med']);
+  });
+
+  it('does nothing without the row', () => {
+    new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
+      state({ hp: 90, hpMax: 100 })
+    );
+    expect(sent).toEqual([]);
+  });
+});

@@ -7,6 +7,7 @@ export interface CuresValue {
   blindness: string;
   poison: string;
   disease: string;
+  freedom: string;
 }
 
 export interface CureFieldsProps {
@@ -21,7 +22,7 @@ export interface CureFieldsProps {
   namePrefix: string;
 }
 
-const CURES = ['blindness', 'poison', 'disease'] as const;
+const CURES = ['blindness', 'poison', 'disease', 'freedom'] as const;
 
 /**
  * Which `spellServes` flag each field's own question reads.
@@ -30,10 +31,11 @@ const CURES = ['blindness', 'poison', 'disease'] as const;
  * settings vocabulary is the condition as a player says it (*poison*), the
  * wire's is the state the character is in (*poisoned*).
  */
-const SERVES: Record<(typeof CURES)[number], 'blind' | 'poisoned' | 'diseased'> = {
+const SERVES: Record<(typeof CURES)[number], 'blind' | 'poisoned' | 'diseased' | 'held'> = {
   blindness: 'blind',
   poison: 'poisoned',
-  disease: 'diseased'
+  disease: 'diseased',
+  freedom: 'held'
 };
 
 /**
@@ -89,7 +91,9 @@ export default function CureFields({
                 ? t('settings.spells.cureBlindnessLabel')
                 : cure === 'poison'
                   ? t('settings.spells.curePoisonLabel')
-                  : t('settings.spells.cureDiseaseLabel')
+                  : cure === 'disease'
+                    ? t('settings.spells.cureDiseaseLabel')
+                    : t('settings.spells.cureFreedomLabel')
             }
             name={`${namePrefix}-cure-${cure}`}
             onChange={(value) => onChange({ ...cures, [cure]: value })}

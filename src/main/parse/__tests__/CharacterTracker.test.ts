@@ -10990,3 +10990,52 @@ describe('a step that hands the character to a draw', () => {
     expect(tracker.current.room.resolvedBy).not.toBe('scattered');
   });
 });
+
+/*
+ * What the realm's message table says is on the character (`noteStated`),
+ * and the fight a message says is over (`endFightStated`).
+ */
+describe("the realm's messages on the character", () => {
+  const confusion = {
+    name: 'confusion',
+    effects: ['confused'] as const,
+    action: 'wait' as const,
+    since: 1
+  };
+  const net = { name: 'net', effects: ['held'] as const, action: 'wait' as const, since: 2 };
+
+  it('publishes what is held, and reports whether anything changed', () => {
+    const tracker = new CharacterTracker();
+    expect(tracker.noteStated([confusion], ['confused'], [])).toBe(true);
+    expect(tracker.current.stated).toEqual([confusion]);
+    // The same list again is no change.
+    expect(tracker.noteStated([confusion], [], [])).toBe(false);
+  });
+
+  it('moves the affliction it shares on the edges only', () => {
+    const tracker = new CharacterTracker();
+    tracker.noteStated([net], ['held'], []);
+    expect(tracker.current.afflictions.held).toBe('yes');
+    tracker.noteStated([], [], ['held']);
+    expect(tracker.current.afflictions.held).toBe('no');
+    // A later list that merely lacks it leaves the flag to the wire.
+    tracker.noteStated([confusion], ['confused'], []);
+    expect(tracker.current.afflictions.held).toBe('no');
+  });
+
+  it('keeps an affliction another row still holds when one of them ends', () => {
+    const tracker = new CharacterTracker();
+    const web = { ...net, name: 'web', since: 3 };
+    tracker.noteStated([net, web], ['held'], []);
+    tracker.noteStated([web], [], ['held']);
+    expect(tracker.current.afflictions.held).toBe('yes');
+  });
+
+  it('ends a fight a message says is over, as *Combat Off* would', () => {
+    const tracker = play(['*Combat Engaged*']);
+    expect(tracker.current.inCombat).toBe(true);
+    expect(tracker.endFightStated(Date.now())).toBe(true);
+    expect(tracker.current.inCombat).toBe(false);
+    expect(tracker.endFightStated(Date.now())).toBe(false);
+  });
+});

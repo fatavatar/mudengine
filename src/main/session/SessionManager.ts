@@ -542,6 +542,12 @@ interface HuntPriced extends HuntPrice {
   rooms: HuntingRoom[];
 }
 
+/** How many times running one refused command is put back for a message's *last action failed*. */
+const MESSAGE_RETRIES = 3;
+
+/** How long a message's *don't rest, run* keeps a room from being rested in. */
+const MESSAGE_NO_REST_MS = 60_000;
+
 export class SessionManager {
   private readonly client = new TelnetClient();
   private readonly telnetLog: TelnetEvent[] = [];
@@ -2482,7 +2488,14 @@ export class SessionManager {
     });
     this.rules.load(automation.rules);
     // Loaded by `configureMessages`: the table is the realm's, not the character's.
-    this.messages = new MessageTriggers(this.queue);
+    this.messages = new MessageTriggers(this.queue, Math.random, {
+      // What the table says is on the character goes onto the character, and
+      // everything that decides reads it the way it reads a status line.
+      stated: (held, started, ended) => {
+        if (this.tracker.noteStated(held, started, ended)) this.reactToState();
+      },
+      fired: (trigger) => this.onMessageFired(trigger)
+    });
 
     /*
      * Answering the login is on the *player's* behalf, so it goes through the
@@ -2917,6 +2930,8 @@ export class SessionManager {
     this.routines.reset();
     this.rules.reset();
     this.messages.reset();
+    this.restBarred = null;
+    this.messageRetries = null;
     this.walker.reset();
     this.combat.reset();
     this.recovery.reset();
@@ -3401,6 +3416,8 @@ export class SessionManager {
     this.routines.reset();
     this.rules.reset();
     this.messages.reset();
+    this.restBarred = null;
+    this.messageRetries = null;
     this.combat.reset();
     this.recovery.reset();
     // A refusal arriving before the new session's first prompt is nobody's.
@@ -3533,6 +3550,117 @@ export class SessionManager {
    */
   configureMessages(triggers: readonly MessageTrigger[]): void {
     this.messages.load(triggers);
+  }
+
+  /**
+   * A room a message said not to rest in — MegaMUD's *Don't rest, run!* —
+   * and until when. By the room's name, which is what the character is
+   * standing in when the sentence arrives; a new room is a new question.
+   */
+  private restBarred: { room: string; until: number } | null = null;
+  /** Consecutive resends for one refused command, so a lasting fear is not a loop. */
+  private messageRetries: { command: string; count: number } | null = null;
+
+  /** Lets go of a message's rest to full that has reached full. See `reactToState`. */
+  private releaseRestsIfFull(state: CharacterState): boolean {
+    const { hp, hpMax, mana, manaMax } = state.vitals;
+    // A figure the character does not have (a warrior's mana) is as full as it gets.
+    const full = (value: number | null, max: number | null): boolean =>
+      max === null || max <= 0 || (value !== null && value >= max);
+    return this.messages.release(
+      (effect) =>
+        (effect.action === 'rest-hp' && full(hp, hpMax)) ||
+        (effect.action === 'rest-mana' && full(mana, manaMax))
+    );
+  }
+
+  private restBarredHere(): boolean {
+    const barred = this.restBarred;
+    if (barred === null) return false;
+    if (Date.now() >= barred.until || barred.room !== this.tracker.current.room.name) {
+      this.restBarred = null;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * A row of the realm's message table matched: what it says happens *now*,
+   * rather than what it says lasts (which `MessageTriggers` holds, and the
+   * modules read off `CharacterState.stated`).
+   */
+  private onMessageFired(trigger: MessageTrigger): void {
+    if (this.tracker.current.phase !== 'in-game') return;
+    const now = Date.now();
+
+    /*
+     * The fight is over without a `*Combat Off*`: a target turned to stone,
+     * an illusion gone, a monster that became another. Read as the server's
+     * own sentence is, so auto-combat looks again at what is left.
+     */
+    if (trigger.effects.includes('ends-combat') && this.tracker.endFightStated(now)) {
+      this.reactToState();
+    }
+
+    /*
+     * The realm refused the last command without saying *fumble* — too
+     * afraid, retching, a trap that went off in the hand. Put back exactly
+     * as a fumble's is (`CommandQueue.resendLast`): only the command this
+     * client sent, after the server's own delay, and at most
+     * `MESSAGE_RETRIES` times running, because a fear that lasts a minute
+     * would otherwise be a resend a second for that minute.
+     */
+    if (trigger.effects.includes('action-failed') && this.automationConfig.enabled) {
+      const command = this.answering;
+      const run =
+        command !== null && this.messageRetries?.command === command
+          ? this.messageRetries.count + 1
+          : 1;
+      if (command !== null && run <= MESSAGE_RETRIES) {
+        this.messageRetries = { command, count: run };
+        this.tracker.noteFumbled(command);
+        if (this.queue.resendLast(command)) {
+          this.sink.notice(
+            t('session.messages.retrying', { command, name: trigger.name || trigger.match })
+          );
+        }
+      }
+    }
+
+    if (!this.automationConfig.enabled) return;
+    switch (trigger.action) {
+      /*
+       * *Check who is in the room*: a spawn, a summons, something arriving
+       * by a way no exit announces. The same silent re-read auto-combat asks
+       * for (`REREAD_ROOM`), because a `look` is said to everybody here.
+       */
+      case 'look':
+        this.queue.enqueue({
+          command: REREAD_ROOM,
+          priority: 'combat',
+          coalesceKey: 'message-look',
+          expiresAt: now + tuning().session.retreatPatienceMs,
+          reason: t('session.messages.lookReason', { name: trigger.name || trigger.match })
+        });
+        return;
+      case 'run': {
+        const room = this.tracker.current.room.name;
+        if (room === null || room.length === 0) return;
+        if (this.restBarred?.room !== room) {
+          this.sink.notice(t('session.messages.noRest', { name: trigger.name || trigger.match }));
+        }
+        this.restBarred = { room, until: now + MESSAGE_NO_REST_MS };
+        return;
+      }
+      case 'hang-up':
+        this.hangUpBecause(
+          this.tracker.current,
+          t('session.messages.hangUpWhy', { name: trigger.name || trigger.match })
+        );
+        return;
+      default:
+        return;
+    }
   }
 
   configure(
@@ -4379,189 +4507,205 @@ export class SessionManager {
     // Republish only on a real change: during a combat burst most lines say
     // nothing new, and a HUD re-render per line is exactly the stall the
     // architecture exists to prevent.
-    if (changed) {
-      const state = this.tracker.current;
-      this.publishCharacter();
-      /*
-       * Walking out to the menu is a character *leaving*, and everything
-       * automated is about the one that was here. Before the modules below
-       * read the new state, because half of them would otherwise act once on
-       * a character that has gone.
-       */
-      this.noteRealmPhase(state);
-      /*
-       * Before anything automated reads the new state: a walk or a loop the
-       * player has just steered out from under stands down *now*, so the
-       * walker reports "you moved the character yourself" rather than the
-       * wrong-room stop it would reach a line later, which describes the
-       * symptom instead of what happened.
-       */
-      this.notePlayerSteering(state);
-      /*
-       * And what a lost connection left owed, before anything automated reads
-       * the state: the route is handed back to the walker and the loop's hold
-       * is let go here, so `walker.onCharacter` and `loops.onCharacter` below
-       * decide on the leg from the same line that placed the character.
-       */
-      this.pickUpAfterLoss(state);
-      /*
-       * **And nothing at all while the character is on the ground** (todo 20).
-       *
-       * `You drop to the ground!` is the server saying every command from here
-       * is refused (`Player.MortallyWounded` guards the top of `RestCommand`,
-       * `HideCommand`, `BashCommand`, the cast path and the rest), and the
-       * client went on proposing: *Retreating ne, the way we came: health at
-       * -8%*, sent, refused, twice in one run. Every threshold below is a
-       * share of maximum and they all keep saying *act, urgently* the further
-       * past zero the figure goes.
-       *
-       * An early return rather than a queue hold, because the queue's hold is
-       * one slot and the stat screen owns it — two holds in one slot would
-       * release each other. This is also the smaller claim: the player's own
-       * keystrokes still go out, exactly as they do under the stat screen's
-       * hold, and the only thing standing down is the automation that would
-       * spend the budget on refusals.
-       *
-       * **Thirty hit points of this are survivable** (`Misc.DeathHP` is −30):
-       * bleeding costs one a tick, `aid <name>` from another player stops it,
-       * and a character no longer bleeding regains one a tick until it is up.
-       * Going quiet is what leaves room for all three.
-       */
-      if (state.mortallyWounded) {
-        this.sayMortallyWounded(state);
-        return;
-      }
-      this.saidMortallyWounded = false;
-      this.unrefuseWhatTheRoomPrints(state);
-      this.noteStatline(state);
-      this.routines.onCharacter(state);
-      this.rules.observe({ hangUpClean: this.hangUp.clean(state, Date.now()) });
-      this.rules.onState(state);
-      this.walker.onCharacter(state);
-      this.loops.onCharacter(state);
-      // A dark arrival, or a lit room to put the torch out in. Told whether
-      // the walker has the character, because a torch is never put out
-      // mid-route: the next step may be dark again.
-      this.light.onCharacter(state, this.walker.walking);
-      // And the key to a way out of this room, off this room's floor.
-      this.keys.onCharacter(state);
-      this.events.onCharacter(state);
-      // Telling a party leader this character has sat down, and that it is up
-      // again. A fact about this character, so it goes out with the others.
-      this.remotes.onCharacter(state);
-      // Running away is tried *first*, because it is the escape that works and
-      // the one that costs nothing: an unclean disconnect is penalised on this
-      // server family and can kill outright.
-      this.considerEscape(state);
-      // And the walk home a `safe-haven` escape armed, once the fight is over.
-      this.walkHomeIfDue(state);
-      // And the `sys goto` a `fleeGoto` armed, the same moment `walkHomeIfDue`
-      // would take up a `safe-haven` walk — the two never arm together.
-      this.sysGotoIfDue(state);
-      // Shopping, which yields to every one of the above: not while running
-      // away, not while walking home, not while anything else has the
-      // character. See `Supplies.consider`.
-      this.supplies.onCharacter(state);
-      // And the kit after a death, on the same terms as the errand.
-      this.recoverGear.onCharacter(state);
-      this.trainLevel.onCharacter(state);
-      /*
-       * And where the character should be at all, which is the last of the
-       * *going somewhere* decisions and rightly so: it only ever acts when
-       * nothing else has the character, so anything above that took it has
-       * already said so.
-       */
-      this.hunt.onCharacter(state);
-      // And whether the thing a door wants is in the pack yet (todo 07).
-      this.itemErrand.onCharacter(state);
-      // And the character points, at a trainer, under the switch.
-      this.statScreen.onCharacter(state);
-      this.considerHangingUp(state);
-      /*
-       * And fighting is considered *last*, after both escapes have had their
-       * say. The order is the whole safety argument: a client that opened a
-       * fight in the same tick it decided to run would have spent the escape
-       * and stayed in the fight. `retreating` holds for the escape's own
-       * cooldown, which is how long the attempt has to work in.
-       */
-      this.combat.noteRetreating(this.isRetreating());
-      // A step still waiting for its room stands auto-combat down: a fight
-      // opened now lands in the room being left. Observed above, off every
-      // line, because it is a fact about the wire rather than about the state.
-      this.combat.onCharacter(state);
-      /*
-       * And sitting down last of all, which is where it belongs rather than
-       * beside the retreat it looks like: it is the thing to do when none of
-       * the above found anything to do. It refuses in combat by itself, so this
-       * needs no guard of its own — but it does need to come after, because a
-       * character that has just been told to run is not one to rest.
-       */
-      // A blessing marked prioritizeOverHeal goes ahead of the heal: the
-      // shield a caster dies without outranks the number that is already bad.
-      if (!this.isRetreating()) this.blessings.urgent(state);
-      // Healing before resting: a number a spell can fix now is not one to sit down over.
-      if (!this.isRetreating()) this.heal.onCharacter(state);
-      // And a potion beside the spell, under the same guard: nothing is drunk
-      // on the way out of a room, because a move in flight is the escape.
-      if (!this.isRetreating()) this.potions.onCharacter(state);
-      // A cure is a heal chosen by a sentence rather than a number; a buff is
-      // the least urgent thing here and refuses combat by itself. Neither on
-      // the way out of a room, for the reason above.
-      if (!this.isRetreating()) {
-        this.cures.onCharacter(state);
-        this.blessings.onCharacter(state);
-        // And the same question asked of the pack rather than the spellbook.
-        // After the casts, because a bless this character can cast is the one
-        // it configured; this is the one the realm happens to be carrying.
-        this.invoke.consider(state);
-        // Shedding named junk reads the same maintained pack listing the loot
-        // fills, and refuses combat and rest for itself.
-        this.drop.onCharacter(state);
-        // And the purse's own half of the same list: the coins the player
-        // asked to be rid of, read off the listing that states how many.
-        this.loot.onCharacter(state);
-        /*
-         * And looking for what the room did not print. After the shedding and
-         * before the banking for no reason but the reading order of the block;
-         * it is `probe` band and refuses combat and rest for itself, so
-         * nothing here depends on where in the list it sits.
-         */
-        this.search.onCharacter(state);
-        // And banking the purse at a counter, which refuses combat and an
-        // unread purse for itself.
-        this.deposit.onCharacter(state);
-      }
-      /*
-       * And not while a route is being walked.
-       *
-       * Nothing told `Recovery` a walk was running, so a character walking at
-       * low health was sat down by it and stood straight back up by the
-       * walker's next step — which is what moving does to a rest — and sat down
-       * again on the tick after: two subsystems spending commands undoing each
-       * other out of the budget the walk itself is spent from. Still true now
-       * that nothing sends a stand-up command, because the *step* is what
-       * breaks the rest and the steps keep coming. A character being walked
-       * somewhere is not one to sit down; when the walk ends, resting is
-       * considered again on the very next tick.
-       */
-      /*
-       * The shadows before the rest: `hide` then `rest` is the order a
-       * backstabber wants, since a class with `ShadowHome` keeps its stealth
-       * through the rest and every other class has it broken by the `rest`
-       * itself. Refuses a fight, a monster, a move in flight and a rest for
-       * itself.
-       */
-      this.stealth.onCharacter(state);
-      /*
-       * And *where* the rest is taken, before whether (todo 08): a room that
-       * makes monsters on a short clock is not a resting place while a
-       * neighbour can be looked into and found empty. `took-over` is the rest
-       * refused here and the step out in flight; `rest-here` is a lair with no
-       * safe neighbour, where the rest goes ahead, said once.
-       */
-      const away = this.restAway.consider(state, this.recovery.wouldRest(state));
-      if (away !== 'took-over' && this.mayRest()) this.restNow(state);
+    if (changed) this.reactToState();
+  }
+
+  /**
+   * Everything that decides on this character's behalf, given what it is now.
+   *
+   * The fan-out a changed line runs, as a method rather than inline in `act`
+   * so a change that is not a line's — the realm's message table saying a
+   * condition started or ended (`MessageTriggers`) — runs the same decisions
+   * in the same order rather than waiting for the next status line.
+   */
+  private reactToState(): void {
+    const state = this.tracker.current;
+    /*
+     * A message's *rest until full* is over once the figure is, and letting
+     * it go publishes the change — which runs this again with it gone. So the
+     * outer call stops here rather than deciding twice off one line.
+     */
+    if (this.releaseRestsIfFull(state)) return;
+    this.publishCharacter();
+    /*
+     * Walking out to the menu is a character *leaving*, and everything
+     * automated is about the one that was here. Before the modules below
+     * read the new state, because half of them would otherwise act once on
+     * a character that has gone.
+     */
+    this.noteRealmPhase(state);
+    /*
+     * Before anything automated reads the new state: a walk or a loop the
+     * player has just steered out from under stands down *now*, so the
+     * walker reports "you moved the character yourself" rather than the
+     * wrong-room stop it would reach a line later, which describes the
+     * symptom instead of what happened.
+     */
+    this.notePlayerSteering(state);
+    /*
+     * And what a lost connection left owed, before anything automated reads
+     * the state: the route is handed back to the walker and the loop's hold
+     * is let go here, so `walker.onCharacter` and `loops.onCharacter` below
+     * decide on the leg from the same line that placed the character.
+     */
+    this.pickUpAfterLoss(state);
+    /*
+     * **And nothing at all while the character is on the ground** (todo 20).
+     *
+     * `You drop to the ground!` is the server saying every command from here
+     * is refused (`Player.MortallyWounded` guards the top of `RestCommand`,
+     * `HideCommand`, `BashCommand`, the cast path and the rest), and the
+     * client went on proposing: *Retreating ne, the way we came: health at
+     * -8%*, sent, refused, twice in one run. Every threshold below is a
+     * share of maximum and they all keep saying *act, urgently* the further
+     * past zero the figure goes.
+     *
+     * An early return rather than a queue hold, because the queue's hold is
+     * one slot and the stat screen owns it — two holds in one slot would
+     * release each other. This is also the smaller claim: the player's own
+     * keystrokes still go out, exactly as they do under the stat screen's
+     * hold, and the only thing standing down is the automation that would
+     * spend the budget on refusals.
+     *
+     * **Thirty hit points of this are survivable** (`Misc.DeathHP` is −30):
+     * bleeding costs one a tick, `aid <name>` from another player stops it,
+     * and a character no longer bleeding regains one a tick until it is up.
+     * Going quiet is what leaves room for all three.
+     */
+    if (state.mortallyWounded) {
+      this.sayMortallyWounded(state);
+      return;
     }
+    this.saidMortallyWounded = false;
+    this.unrefuseWhatTheRoomPrints(state);
+    this.noteStatline(state);
+    this.routines.onCharacter(state);
+    this.rules.observe({ hangUpClean: this.hangUp.clean(state, Date.now()) });
+    this.rules.onState(state);
+    this.walker.onCharacter(state);
+    this.loops.onCharacter(state);
+    // A dark arrival, or a lit room to put the torch out in. Told whether
+    // the walker has the character, because a torch is never put out
+    // mid-route: the next step may be dark again.
+    this.light.onCharacter(state, this.walker.walking);
+    // And the key to a way out of this room, off this room's floor.
+    this.keys.onCharacter(state);
+    this.events.onCharacter(state);
+    // Telling a party leader this character has sat down, and that it is up
+    // again. A fact about this character, so it goes out with the others.
+    this.remotes.onCharacter(state);
+    // Running away is tried *first*, because it is the escape that works and
+    // the one that costs nothing: an unclean disconnect is penalised on this
+    // server family and can kill outright.
+    this.considerEscape(state);
+    // And the walk home a `safe-haven` escape armed, once the fight is over.
+    this.walkHomeIfDue(state);
+    // And the `sys goto` a `fleeGoto` armed, the same moment `walkHomeIfDue`
+    // would take up a `safe-haven` walk — the two never arm together.
+    this.sysGotoIfDue(state);
+    // Shopping, which yields to every one of the above: not while running
+    // away, not while walking home, not while anything else has the
+    // character. See `Supplies.consider`.
+    this.supplies.onCharacter(state);
+    // And the kit after a death, on the same terms as the errand.
+    this.recoverGear.onCharacter(state);
+    this.trainLevel.onCharacter(state);
+    /*
+     * And where the character should be at all, which is the last of the
+     * *going somewhere* decisions and rightly so: it only ever acts when
+     * nothing else has the character, so anything above that took it has
+     * already said so.
+     */
+    this.hunt.onCharacter(state);
+    // And whether the thing a door wants is in the pack yet (todo 07).
+    this.itemErrand.onCharacter(state);
+    // And the character points, at a trainer, under the switch.
+    this.statScreen.onCharacter(state);
+    this.considerHangingUp(state);
+    /*
+     * And fighting is considered *last*, after both escapes have had their
+     * say. The order is the whole safety argument: a client that opened a
+     * fight in the same tick it decided to run would have spent the escape
+     * and stayed in the fight. `retreating` holds for the escape's own
+     * cooldown, which is how long the attempt has to work in.
+     */
+    this.combat.noteRetreating(this.isRetreating());
+    // A step still waiting for its room stands auto-combat down: a fight
+    // opened now lands in the room being left. Observed above, off every
+    // line, because it is a fact about the wire rather than about the state.
+    this.combat.onCharacter(state);
+    /*
+     * And sitting down last of all, which is where it belongs rather than
+     * beside the retreat it looks like: it is the thing to do when none of
+     * the above found anything to do. It refuses in combat by itself, so this
+     * needs no guard of its own — but it does need to come after, because a
+     * character that has just been told to run is not one to rest.
+     */
+    // A blessing marked prioritizeOverHeal goes ahead of the heal: the
+    // shield a caster dies without outranks the number that is already bad.
+    if (!this.isRetreating()) this.blessings.urgent(state);
+    // Healing before resting: a number a spell can fix now is not one to sit down over.
+    if (!this.isRetreating()) this.heal.onCharacter(state);
+    // And a potion beside the spell, under the same guard: nothing is drunk
+    // on the way out of a room, because a move in flight is the escape.
+    if (!this.isRetreating()) this.potions.onCharacter(state);
+    // A cure is a heal chosen by a sentence rather than a number; a buff is
+    // the least urgent thing here and refuses combat by itself. Neither on
+    // the way out of a room, for the reason above.
+    if (!this.isRetreating()) {
+      this.cures.onCharacter(state);
+      this.blessings.onCharacter(state);
+      // And the same question asked of the pack rather than the spellbook.
+      // After the casts, because a bless this character can cast is the one
+      // it configured; this is the one the realm happens to be carrying.
+      this.invoke.consider(state);
+      // Shedding named junk reads the same maintained pack listing the loot
+      // fills, and refuses combat and rest for itself.
+      this.drop.onCharacter(state);
+      // And the purse's own half of the same list: the coins the player
+      // asked to be rid of, read off the listing that states how many.
+      this.loot.onCharacter(state);
+      /*
+       * And looking for what the room did not print. After the shedding and
+       * before the banking for no reason but the reading order of the block;
+       * it is `probe` band and refuses combat and rest for itself, so
+       * nothing here depends on where in the list it sits.
+       */
+      this.search.onCharacter(state);
+      // And banking the purse at a counter, which refuses combat and an
+      // unread purse for itself.
+      this.deposit.onCharacter(state);
+    }
+    /*
+     * And not while a route is being walked.
+     *
+     * Nothing told `Recovery` a walk was running, so a character walking at
+     * low health was sat down by it and stood straight back up by the
+     * walker's next step — which is what moving does to a rest — and sat down
+     * again on the tick after: two subsystems spending commands undoing each
+     * other out of the budget the walk itself is spent from. Still true now
+     * that nothing sends a stand-up command, because the *step* is what
+     * breaks the rest and the steps keep coming. A character being walked
+     * somewhere is not one to sit down; when the walk ends, resting is
+     * considered again on the very next tick.
+     */
+    /*
+     * The shadows before the rest: `hide` then `rest` is the order a
+     * backstabber wants, since a class with `ShadowHome` keeps its stealth
+     * through the rest and every other class has it broken by the `rest`
+     * itself. Refuses a fight, a monster, a move in flight and a rest for
+     * itself.
+     */
+    this.stealth.onCharacter(state);
+    /*
+     * And *where* the rest is taken, before whether (todo 08): a room that
+     * makes monsters on a short clock is not a resting place while a
+     * neighbour can be looked into and found empty. `took-over` is the rest
+     * refused here and the step out in flight; `rest-here` is a lair with no
+     * safe neighbour, where the rest goes ahead, said once.
+     */
+    const away = this.restAway.consider(state, this.recovery.wouldRest(state));
+    if (away !== 'took-over' && this.mayRest()) this.restNow(state);
   }
 
   /**
@@ -4592,6 +4736,8 @@ export class SessionManager {
    */
   private mayRest(): boolean {
     if (this.isRetreating()) return false;
+    // A message said not to rest here (`run`): not in this room, for a while.
+    if (this.restBarredHere()) return false;
     // An escape whose answer has not come is a room the character may still
     // be standing in — the one it just tried to leave (todo 06).
     if (this.escapeAwaiting !== null) return false;
@@ -7372,6 +7518,18 @@ export class SessionManager {
     const why = hurt
       ? t('session.safety.whyHealth', { percent: this.percentText(fraction) })
       : t('session.safety.whyCompany');
+    this.hangUpBecause(state, why);
+  }
+
+  /**
+   * Hangs up, for the reason given — or says why not.
+   *
+   * `onlyWhenClean` is honoured whoever asks: it is the player's word about
+   * the realm's penalty for an unclean disconnect, and a threshold and a row
+   * of the message table are two ways of asking the same question of it.
+   */
+  private hangUpBecause(state: CharacterState, why: string): void {
+    const safety = this.automationConfig.safety.hangUp;
     const assessment = this.hangUp.assess(state, Date.now());
 
     if (safety.onlyWhenClean && !assessment.clean) {

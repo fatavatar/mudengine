@@ -155,6 +155,16 @@ notices:
         {count} file with the paragraph that explains it: {fileList}'
       many: 'Walking on while blind or poisoned is a setting, off by default, and was written into
         {count} files with the paragraph that explains it: {fileList}'
+    confusionWaitStated:
+      one: 'Walking on while confused is a setting, off by default, and was written into {count}
+        file with the paragraph that explains it: {fileList}'
+      many: 'Walking on while confused is a setting, off by default, and was written into {count}
+        files with the paragraph that explains it: {fileList}'
+    freedomCureStated:
+      one: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
+        default, and was written into the cures of {count} file: {fileList}'
+      many: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
+        default, and was written into the cures of {count} files: {fileList}'
     keyPickupStated:
       one:
         'Picking up a key an exit of the room needs, when it is lying on that floor, is a setting --
@@ -914,6 +924,7 @@ tabs:
     markBlind: blind
     markHeld: held
     markPoisoned: poisoned
+    markCondition: waiting it out
     markShopping: shopping
     markResting: resting
     markRestingTo: resting to {percent}%
@@ -1815,6 +1826,7 @@ cards:
       statusBlind: blind
       statusHeld: held
       statusPoisoned: poisoned
+      statusCondition: waiting it out
       statusOffline: offline
       statusResting: resting
       statusRunning: running
@@ -2600,6 +2612,12 @@ cards:
       diseased: diseased
       held: held
       poisoned: poisoned
+    # And the ones only a realm's message table states (`CharacterState.stated`).
+    stated:
+      confused: confused
+      losingHp: losing HP
+      noAttack: can't attack
+      regenerating: regenerating
     level:
       caution: low
       critical: critical
@@ -3242,9 +3260,10 @@ settings:
     noMatch: No message matches that search.
     note:
       What this realm's sentences mean, and what to send back when one arrives — MegaMUD's message
-      table, answered by every character that plays here. Importing replaces the whole table.
-      Replies go out when automation is on; conditions and actions are recorded for now and
-      acted on in a later update.
+      table, answered by every character that plays here. Importing replaces the whole table. With
+      automation on, replies are sent and conditions are acted on — a confused or burning character
+      waits, one that cannot attack holds its fight, a cure or Freedom is cast, and the action is
+      taken. Regenerating is shown but changes nothing yet.
     removedRow: Message removed.
     removeRow: Remove
     replace: Replace
@@ -3277,6 +3296,10 @@ settings:
     walkWhileBlindHint:
       Off, a route or a loop stands still until sight returns — MegaMUD's IgnoreBlind default. A blind
       character cannot read the room it walks into.
+    walkWhileConfused: Walk While Confused
+    walkWhileConfusedHint:
+      Off, a route or a loop stands still while this realm's messages say the character is
+      confused — MegaMUD's Ignore Confusion default. A confused character's commands misfire.
     walkWhilePoisoned: Walk While Poisoned
     walkWhilePoisonedHint:
       Off, a route or a loop stands still until the poison runs its course — MegaMUD's IgnorePoison
@@ -3569,6 +3592,7 @@ settings:
       their client recasts at once instead of on its clock. Both ends must run mudengine.
     cureBlindnessLabel: Cure Blindness Spell
     cureDiseaseLabel: Cure Disease Spell
+    cureFreedomLabel: Freedom Spell
     cureLegend: Cures
     cureNote: Cast the moment the game says you are blinded, poisoned or diseased, and again after
       thirty seconds if it still shows. A blank field does nothing. A field is greyed out when
@@ -3845,6 +3869,12 @@ session:
   memory:
     forgot: 'Forgot: "{command}" from {from}.'
     learned: 'Learned: {discovery}.'
+  # What a row of the realm's message table does in the moment (`onMessageFired`).
+  messages:
+    hangUpWhy: 'the "{name}" message says to'
+    lookReason: 'message: {name} — who is here?'
+    noRest: 'Not resting here for a minute: the "{name}" message says to keep moving.'
+    retrying: 'Sending {command} again: "{name}" says it did not work.'
   parser:
     fault: Something on this line could not be read; the console is unaffected. {message}
   probe:
@@ -4067,6 +4097,7 @@ automation:
       Auto-combat is off, but this route will fight on the way. Stop the route to stop the
       fighting, or switch auto-combat on and off again to decline it for the rest of this journey.
     standDown: Auto-combat is standing down after break; it resumes when you move or attack.
+    cannotAttack: Not attacking — this realm's messages say the character cannot attack right now.
     # An opener the class can never land -- `combat.opener` survives a reroll,
     # and a Mage was being told why its backstab was withheld (todo 28).
     openerWrongClass:
@@ -4450,6 +4481,7 @@ automation:
     restPoisoned: This realm refuses to rest a poisoned character. Set a cure for poison
       under the spells settings, or cure it by hand.
     reasonMana: 'recovery: mana is low'
+    reasonMessage: 'recovery: the "{name}" message says to rest until full'
     verbRefused: The realm answered {verb} with "Your command had no effect."; not proposing it again this session.
   routines:
     enteringRealm: Asking the realm for {commands}.

@@ -4013,7 +4013,7 @@ export class Walker {
      * one, and the two answer the same hold either way.
      */
     const reason =
-      afflictionHolding(state.afflictions, this.config.movement) ??
+      afflictionHolding(state.afflictions, this.config.movement, state.stated) ??
       (this.onsetAnsweredStep !== null ? 'held' : null);
     /*
      * The bound on a hold for a condition — see `heldSince`. It **asks again**

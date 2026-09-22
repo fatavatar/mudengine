@@ -39,9 +39,11 @@ type Cure = keyof SpellsConfig['cures'];
 const FLAG: Record<Cure, keyof Afflictions> = {
   blindness: 'blind',
   poison: 'poisoned',
-  disease: 'diseased'
+  disease: 'diseased',
+  // MegaMUD's Freedom: whatever holds the character where it stands.
+  freedom: 'held'
 };
-const CURES: readonly Cure[] = ['blindness', 'poison', 'disease'];
+const CURES: readonly Cure[] = ['blindness', 'poison', 'disease', 'freedom'];
 
 export class Cures {
   private lastCastAt = new Map<Cure, number>();

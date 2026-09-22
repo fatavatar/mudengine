@@ -629,6 +629,7 @@ interface CharacterForm {
   /** Conditions as waits, inverted: off waits blindness / poison out. */
   walkWhileBlind: boolean;
   walkWhilePoisoned: boolean;
+  walkWhileConfused: boolean;
   /** Bend down for a key an exit of this room needs. */
   collectKeys: boolean;
   /** Going hunting on its own — `automation.hunting`. */
@@ -797,6 +798,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     extinguishInLight: entry.movement.extinguishInLight,
     walkWhileBlind: entry.movement.walkWhileBlind,
     walkWhilePoisoned: entry.movement.walkWhilePoisoned,
+    walkWhileConfused: entry.movement.walkWhileConfused,
     collectKeys: entry.movement.collectKeys,
     huntAuto: entry.hunting.enabled,
     huntRadius: entry.hunting.radius > 0 ? String(entry.hunting.radius) : '',
@@ -974,7 +976,8 @@ function draftOf(form: CharacterForm): ProfileDraft {
       cures: {
         blindness: form.spellCures.blindness.trim(),
         poison: form.spellCures.poison.trim(),
-        disease: form.spellCures.disease.trim()
+        disease: form.spellCures.disease.trim(),
+        freedom: form.spellCures.freedom.trim()
       },
       blessings: form.spellBlessings.map((blessing) => ({
         ...blessing,
@@ -999,6 +1002,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
       extinguishInLight: form.extinguishInLight,
       walkWhileBlind: form.walkWhileBlind,
       walkWhilePoisoned: form.walkWhilePoisoned,
+      walkWhileConfused: form.walkWhileConfused,
       collectKeys: form.collectKeys
     },
     hunting: {
@@ -1286,6 +1290,7 @@ function emptyForm(
     extinguishInLight: movement.extinguishInLight,
     walkWhileBlind: movement.walkWhileBlind,
     walkWhilePoisoned: movement.walkWhilePoisoned,
+    walkWhileConfused: movement.walkWhileConfused,
     collectKeys: movement.collectKeys,
     huntAuto: hunting.enabled,
     huntRadius: hunting.radius > 0 ? String(hunting.radius) : '',
@@ -3790,6 +3795,13 @@ export default function SettingsScreen({
                           label={t('settings.movement.walkWhilePoisoned')}
                           name="walk-while-poisoned"
                           onChange={(value) => patch({ walkWhilePoisoned: value })}
+                        />
+                        <CheckField
+                          checked={form.walkWhileConfused}
+                          hint={t('settings.movement.walkWhileConfusedHint')}
+                          label={t('settings.movement.walkWhileConfused')}
+                          name="walk-while-confused"
+                          onChange={(value) => patch({ walkWhileConfused: value })}
                         />
                       </fieldset>
 

@@ -18,7 +18,12 @@ const automation: AutomationConfig = {
 const spells = (over: Partial<SpellsConfig> = {}): SpellsConfig => ({
   ...DEFAULT_CONFIG.automation.spells,
   minMana: 0,
-  cures: { blindness: 'cure blindness', poison: 'cure poison', disease: 'cure disease' },
+  cures: {
+    blindness: 'cure blindness',
+    poison: 'cure poison',
+    disease: 'cure disease',
+    freedom: ''
+  },
   ...over
 });
 function state(afflictions: Partial<Afflictions>, vitals: Partial<CharacterState['vitals']> = {}) {
@@ -102,7 +107,7 @@ describe('curing by a sentence', () => {
       state({ poisoned: 'yes' }, { mana: 10 })
     );
     new Cures(
-      spells({ cures: { blindness: '', poison: '', disease: '' } }),
+      spells({ cures: { blindness: '', poison: '', disease: '', freedom: '' } }),
       true,
       queue
     ).onCharacter(state({ poisoned: 'yes' }));
@@ -142,7 +147,7 @@ describe('curing by a sentence', () => {
         }) as Record<string, WorldSpell>
       )[name] ?? null;
     const cures = new Cures(
-      spells({ autoChoose: true, cures: { blindness: '', poison: '', disease: '' } }),
+      spells({ autoChoose: true, cures: { blindness: '', poison: '', disease: '', freedom: '' } }),
       true,
       queue,
       undefined,

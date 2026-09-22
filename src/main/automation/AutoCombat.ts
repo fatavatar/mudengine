@@ -72,7 +72,12 @@ import { countMobs, countThreats } from './RuleEngine';
 import { t } from '../app/i18n';
 import type { EngageDecision } from '../../shared/automation';
 import type { Block } from '../../shared/blocks';
-import { ownAlignment, type CharacterState, type RoomOccupant } from '../../shared/character';
+import {
+  isStated,
+  ownAlignment,
+  type CharacterState,
+  type RoomOccupant
+} from '../../shared/character';
 import { ATTACK_COMMANDS, commandOf, REREAD_ROOM } from '../../shared/commands';
 import {
   DEFAULT_MOB_PRIORITY,
@@ -300,6 +305,8 @@ export class AutoCombat {
   private openerSpent = false;
   /** Whether the held-backstab sentence has been said. See `sayOpenerNeedsStealth`. */
   private saidOpenerNeedsStealth = false;
+  /** Said once per stretch of the realm's messages saying no attack is possible. */
+  private saidCannotAttack = false;
   /** Whether the *this class cannot backstab* notice has been said this session. */
   private saidOpenerNeedsClass = false;
   /** The derived round spell last said, so the choice is announced on change only. */
@@ -391,7 +398,7 @@ export class AutoCombat {
       healParty: false,
       invokeItems: false,
       minMana: 0,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false
     },
@@ -878,8 +885,28 @@ export class AutoCombat {
      * swing — the player pressing the toolbar switch, reading the refusal in
      * the trace, and watching the client keep fighting anyway.
      */
+    /*
+     * Nothing at all while the realm's message table says the character
+     * cannot attack — too afraid, stunned, asleep. MegaMUD's *attack
+     * prevented*: every swing and every cast would be a command spent to be
+     * refused. Said once per stretch, and the fight resumes on the line that
+     * ends it (`CharacterState.stated`).
+     */
+    if (this.cannotAttack(state)) return;
     if (this.acting && this.retaliation(state)) return;
     this.engage(state);
+  }
+
+  private cannotAttack(state: CharacterState): boolean {
+    if (!isStated(state, 'no-attack')) {
+      this.saidCannotAttack = false;
+      return false;
+    }
+    if (!this.saidCannotAttack && this.acting) {
+      this.saidCannotAttack = true;
+      this.events.notice?.(t('automation.combat.cannotAttack'));
+    }
+    return true;
   }
 
   /**
@@ -1762,6 +1789,7 @@ export class AutoCombat {
     if (state === null || state.phase !== 'in-game') return;
     if (this.retreating) return;
     if (!state.inCombat) return;
+    if (isStated(state, 'no-attack')) return;
 
     this.rounds += 1;
     this.refresh();

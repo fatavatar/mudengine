@@ -32,12 +32,14 @@ import {
   NO_AFFLICTIONS,
   type Afflictions,
   type Affliction,
+  type StatedEffect,
   type KnownSpell,
   type RealmFamily,
   type ActiveBuff,
   type Stealth,
   ownAlignment
 } from '../../shared/character';
+import type { MessageEffect } from '../../shared/messageTriggers';
 import {
   derivedExperienceTable,
   withDerivedExperience,
@@ -425,6 +427,14 @@ function readAbilityListing(rows: ReadonlyArray<Record<string, string>>): {
  */
 const AFFLICTIONS = Object.keys(NO_AFFLICTIONS) as ReadonlyArray<keyof Afflictions>;
 
+/** The message-table effects that are also afflictions this client reads itself. */
+const STATED_AFFLICTIONS: ReadonlyArray<readonly [MessageEffect, keyof Afflictions]> = [
+  ['blind', 'blind'],
+  ['poisoned', 'poisoned'],
+  ['diseased', 'diseased'],
+  ['held', 'held']
+];
+
 export function looksLikeEffectSentence(text: string): boolean {
   if (!/^[A-Z][^\d"]*[.!]$/.test(text)) return false;
   return wordsOf(text).length <= 14;
@@ -770,6 +780,61 @@ export class CharacterTracker {
    */
   noteFumbled(command: string | null): void {
     if (command !== null) this.expect.refused(command);
+  }
+
+  /**
+   * What the realm's message table says is on the character now, and which
+   * effects a sentence has just started or ended.
+   *
+   * The list is replaced whole: `MessageTriggers` holds it and this only
+   * publishes it. The four effects this client also reads off the wire move
+   * their affliction **on the edge only** — a row starting `blind` sets it,
+   * a row ending `blind` clears it unless another row still holds it — so the
+   * client's own reading of the wire goes on moving the same flag between
+   * those edges, and every reader of the flag (cures, potions, the walk's
+   * hold) answers the player's table without knowing it exists.
+   *
+   * Returns whether anything changed.
+   */
+  noteStated(
+    held: readonly StatedEffect[],
+    started: readonly MessageEffect[],
+    ended: readonly MessageEffect[]
+  ): boolean {
+    const s = this.state;
+    let afflictions = s.afflictions;
+    const still = new Set(held.flatMap((entry) => entry.effects));
+    for (const [effect, condition] of STATED_AFFLICTIONS) {
+      if (started.includes(effect) && afflictions[condition] !== 'yes') {
+        afflictions = { ...afflictions, [condition]: 'yes' };
+      } else if (ended.includes(effect) && !still.has(effect) && afflictions[condition] === 'yes') {
+        afflictions = { ...afflictions, [condition]: 'no' };
+      }
+    }
+    const same =
+      afflictions === s.afflictions &&
+      held.length === s.stated.length &&
+      held.every((entry, at) => entry === s.stated[at]);
+    if (same) return false;
+    this.state = { ...s, afflictions, stated: held };
+    return true;
+  }
+
+  /**
+   * A sentence the realm's message table says ends the fight without a
+   * `*Combat Off*` — a target turned to stone, an illusion vanishing, a
+   * monster that changed into another. Read exactly as `*Combat Off*` is.
+   *
+   * Returns whether anything changed.
+   */
+  endFightStated(at: number): boolean {
+    const s = this.state;
+    if (!s.inCombat) return false;
+    this.expect.clearLooks();
+    const next = this.fight.status(s, false, at);
+    if (next === s) return false;
+    this.state = next;
+    return true;
   }
 
   /**
@@ -1143,6 +1208,8 @@ export class CharacterTracker {
       stealth: 'unknown',
       // And nobody is poisoned in a realm they have left; the next session says.
       afflictions: NO_AFFLICTIONS,
+      // Nor confused: what a message started, a new session has not heard.
+      stated: [],
       // A buff may in fact survive a relog — nothing has measured it — but a
       // list kept across the gap would claim to know. Absence is honest, and
       // the cost of being wrong is one recast per configured blessing.

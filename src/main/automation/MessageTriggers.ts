@@ -2,18 +2,20 @@
  * A realm's message triggers, running: a sentence arrives, and what the realm's
  * table says about it happens.
  *
- * Three things, and only three, in this first cut:
+ * Three things:
  *
  * - **Responses are sent.** `drink water` in the desert, a bare Enter after
  *   an ambient sentence so the room is drawn again, `.LOW ON LIVES!` — each
  *   through `CommandQueue`, like everything automated, at `combat` priority so
  *   an answer to the realm goes ahead of the next step of a walk.
- * - **Effects are held.** A sentence with an `endsWith` starts something that
- *   lasts until that sentence arrives; what is held is readable (`effects`)
- *   for whatever comes to act on it. Nothing here acts on an effect or an
- *   action yet — resting out a confusion, holding an attack — because each of
- *   those belongs to the module that already owns the decision, and wiring
- *   them is its own change.
+ * - **Effects are held and published.** A sentence with an `endsWith` starts
+ *   something that lasts until that sentence arrives, and a row that says to
+ *   rest until full lasts until the session says the figure is full
+ *   (`release`). What is held goes onto the character (`events.stated`,
+ *   `CharacterState.stated`), where the modules that already own each
+ *   decision read it: the walk waits, the fight holds, a cure is cast. What
+ *   is a moment rather than a state — a fight the realm ended, a command it
+ *   refused, a look, a hang-up — is handed to the session (`events.fired`).
  * - **Every firing is traced**, into the same list the Automation card shows
  *   for rules, so *why did it just send that* has an answer on screen.
  *
@@ -33,6 +35,7 @@
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
 import type { RuleFiring } from '../../shared/rules';
+import type { StatedEffect } from '../../shared/character';
 import {
   compileSentence,
   expandResponse,
@@ -71,31 +74,43 @@ interface Compiled {
   trigger: MessageTrigger;
   onset: CompiledSentence;
   end: CompiledSentence | null;
-  /** Whether a match starts something worth holding until `end`. */
+  /** Whether a match starts something worth holding. */
   lasts: boolean;
 }
 
-/** An effect a sentence started and nothing has ended yet. */
-export interface HeldMessageEffect {
-  /** The row's name. */
-  name: string;
-  effects: readonly MessageEffect[];
-  action: MessageAction;
-  since: number;
-  /** The sentence that ends it. */
-  until: string;
+/**
+ * The actions that last until the character is *full* rather than until a
+ * sentence: MegaMUD's *rest until full HP's* and *rest until full mana*. They
+ * are held like an effect so the walk waits and the rest is taken, and let go
+ * by `release` when the figure is reached.
+ */
+const RESTS: readonly MessageAction[] = ['rest-hp', 'rest-mana'];
+
+export interface MessageTriggersEvents {
+  /**
+   * What is held changed: the whole list now, and the effects that have just
+   * started and just ended. The tracker publishes it (`noteStated`).
+   */
+  stated?(held: readonly StatedEffect[], started: MessageEffect[], ended: MessageEffect[]): void;
+  /**
+   * A row matched. For what is not a state but a moment — a fight the realm
+   * ended, a command it refused, a look, a hang-up — which the session acts
+   * on, because each of those belongs to a module this one does not own.
+   */
+  fired?(trigger: MessageTrigger): void;
 }
 
 export class MessageTriggers {
   private compiled: Compiled[] = [];
   /** Held effects, by the row's identity so a reload keeps what is still meant. */
-  private readonly held = new Map<string, { entry: Compiled; since: number }>();
+  private readonly held = new Map<string, { entry: Compiled; stated: StatedEffect }>();
   private readonly lastResponded = new Map<string, number>();
   private readonly trace: RuleFiring[] = [];
 
   constructor(
     private readonly queue: CommandQueue,
-    private readonly random: () => number = Math.random
+    private readonly random: () => number = Math.random,
+    private readonly events: MessageTriggersEvents = {}
   ) {}
 
   /**
@@ -111,12 +126,11 @@ export class MessageTriggers {
         onset: compileSentence(trigger.match),
         end: trigger.endsWith.length > 0 ? compileSentence(trigger.endsWith) : null,
         lasts:
-          trigger.endsWith.length > 0 && (trigger.effects.length > 0 || trigger.action !== 'none')
+          RESTS.includes(trigger.action) ||
+          (trigger.endsWith.length > 0 && (trigger.effects.length > 0 || trigger.action !== 'none'))
       }));
     const keys = new Set(this.compiled.map((entry) => identity(entry.trigger)));
-    for (const key of [...this.held.keys()]) {
-      if (!keys.has(key)) this.held.delete(key);
-    }
+    this.drop((key) => !keys.has(key));
   }
 
   /** How many rows are being listened for. */
@@ -125,17 +139,9 @@ export class MessageTriggers {
   }
 
   /** What is held now, oldest first. */
-  effects(now = Date.now()): HeldMessageEffect[] {
+  effects(now = Date.now()): StatedEffect[] {
     this.expire(now);
-    return [...this.held.values()]
-      .sort((a, b) => a.since - b.since)
-      .map(({ entry, since }) => ({
-        name: entry.trigger.name,
-        effects: entry.trigger.effects,
-        action: entry.trigger.action,
-        since,
-        until: entry.trigger.endsWith
-      }));
+    return this.list();
   }
 
   /** Newest last, like `RuleEngine.firings`. */
@@ -155,45 +161,86 @@ export class MessageTriggers {
     if (text.length === 0) return;
     this.expire(now);
 
+    const ended: MessageEffect[] = [];
     for (const [key, { entry }] of [...this.held]) {
       if (entry.end === null || matchSentence(entry.end, text) === null) continue;
       if (conversation && !entry.trigger.conversations) continue;
       this.held.delete(key);
+      ended.push(...entry.trigger.effects);
       this.record(now, entry.trigger, [
         t('automation.messages.ended', { effects: this.describe(entry.trigger) })
       ]);
     }
 
+    let started: MessageEffect[] = [];
+    let fired: MessageTrigger | null = null;
     for (const entry of this.compiled) {
       if (conversation && !entry.trigger.conversations) continue;
       const captures = matchSentence(entry.onset, text);
       if (captures === null) continue;
-      this.fire(entry, captures, now);
-      return;
+      started = this.fire(entry, captures, now);
+      fired = entry.trigger;
+      break;
     }
+
+    if (started.length > 0 || ended.length > 0 || this.changed) this.announce(started, ended);
+    if (fired !== null) this.events.fired?.(fired);
+  }
+
+  /**
+   * Lets go of every held row this says is over — a rest to full that has
+   * reached full. Returns whether anything was let go.
+   */
+  release(done: (effect: StatedEffect) => boolean, now = Date.now()): boolean {
+    const ended: MessageEffect[] = [];
+    let any = false;
+    for (const [key, { entry, stated }] of [...this.held]) {
+      if (!done(stated)) continue;
+      this.held.delete(key);
+      ended.push(...entry.trigger.effects);
+      any = true;
+      this.record(now, entry.trigger, [
+        t('automation.messages.ended', { effects: this.describe(entry.trigger) })
+      ]);
+    }
+    if (any) this.announce([], ended);
+    return any;
   }
 
   /** Death, or leaving the realm: nothing that was on the character still is. */
   clearEffects(): void {
-    this.held.clear();
+    this.drop(() => true);
   }
 
   reset(): void {
     this.held.clear();
+    this.changed = false;
     this.lastResponded.clear();
     this.trace.length = 0;
   }
 
-  private fire(entry: Compiled, captures: Readonly<Record<string, string>>, now: number): void {
+  /** Whether `held` changed in a way `announce` has not told anybody yet. */
+  private changed = false;
+
+  /** Returns the effects this match started, which are none if it was already held. */
+  private fire(
+    entry: Compiled,
+    captures: Readonly<Record<string, string>>,
+    now: number
+  ): MessageEffect[] {
     const { trigger } = entry;
     const key = identity(trigger);
     const noted: string[] = [];
+    let started: MessageEffect[] = [];
 
-    if (entry.lasts) {
-      const already = this.held.has(key);
-      this.held.set(key, { entry, since: this.held.get(key)?.since ?? now });
-      if (!already)
-        noted.push(t('automation.messages.started', { effects: this.describe(trigger) }));
+    if (entry.lasts && !this.held.has(key)) {
+      this.held.set(key, {
+        entry,
+        stated: { name: trigger.name, effects: trigger.effects, action: trigger.action, since: now }
+      });
+      this.changed = true;
+      started = [...trigger.effects];
+      noted.push(t('automation.messages.started', { effects: this.describe(trigger) }));
     }
 
     if (trigger.response.length > 0) {
@@ -216,6 +263,28 @@ export class MessageTriggers {
     }
 
     if (noted.length > 0) this.record(now, trigger, noted);
+    return started;
+  }
+
+  private list(): StatedEffect[] {
+    return [...this.held.values()].map(({ stated }) => stated).sort((a, b) => a.since - b.since);
+  }
+
+  private announce(started: MessageEffect[], ended: MessageEffect[]): void {
+    this.changed = false;
+    this.events.stated?.(this.list(), started, ended);
+  }
+
+  private drop(which: (key: string) => boolean): void {
+    const ended: MessageEffect[] = [];
+    let any = false;
+    for (const [key, { entry }] of [...this.held]) {
+      if (!which(key)) continue;
+      this.held.delete(key);
+      ended.push(...entry.trigger.effects);
+      any = true;
+    }
+    if (any) this.announce([], ended);
   }
 
   private describe(trigger: MessageTrigger): string {
@@ -236,9 +305,14 @@ export class MessageTriggers {
   }
 
   private expire(now: number): void {
-    for (const [key, { since }] of [...this.held]) {
-      if (now - since > EFFECT_CEILING_MS) this.held.delete(key);
+    const ended: MessageEffect[] = [];
+    for (const [key, { entry, stated }] of [...this.held]) {
+      if (now - stated.since <= EFFECT_CEILING_MS) continue;
+      this.held.delete(key);
+      ended.push(...entry.trigger.effects);
+      this.changed = true;
     }
+    if (ended.length > 0) this.announce([], ended);
   }
 }
 

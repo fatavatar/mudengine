@@ -615,7 +615,7 @@ describe('cures and blessings', () => {
     normalizeConfig({ automation: { spells: raw } }).automation.spells;
 
   it('ships with no cure, no blessing, and the notification off', () => {
-    expect(spells({}).cures).toEqual({ blindness: '', poison: '', disease: '' });
+    expect(spells({}).cures).toEqual({ blindness: '', poison: '', disease: '', freedom: '' });
     expect(spells({}).blessings).toEqual([]);
     expect(spells({}).notifyPartyOnWearOff).toBe(false);
   });
@@ -624,7 +624,8 @@ describe('cures and blessings', () => {
     expect(spells({ cures: { poison: ' cure poison ', paralysis: 'x' } }).cures).toEqual({
       blindness: '',
       poison: 'cure poison',
-      disease: ''
+      disease: '',
+      freedom: ''
     });
   });
 

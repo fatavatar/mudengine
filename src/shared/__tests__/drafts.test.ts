@@ -288,6 +288,7 @@ describe('a character', () => {
         recoverGearFloor: 0,
         walkWhileBlind: false,
         walkWhilePoisoned: false,
+        walkWhileConfused: false,
         // Except the one that is on by default and whose absence would switch
         // it off, which is the health block's rule two assertions down: a
         // payload that failed to send the field must not mean `false`.
@@ -311,7 +312,7 @@ describe('a character', () => {
         healTo: 0,
         healParty: false,
         minMana: 0.2,
-        cures: { blindness: '', poison: '', disease: '' },
+        cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
         invokeItems: false
@@ -355,6 +356,7 @@ describe('a character', () => {
         recoverGearFloor: 0,
         walkWhileBlind: false,
         walkWhilePoisoned: false,
+        walkWhileConfused: false,
         // The shipped default, for the same reason `restBelow` keeps 0.35
         // here: a nonsense block must not silently switch off something that
         // ships on.
@@ -376,7 +378,7 @@ describe('a character', () => {
         autoChoose: false,
         attackCasts: 0,
         areaCasts: 0,
-        cures: { blindness: '', poison: '', disease: '' },
+        cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
         invokeItems: false

@@ -297,15 +297,22 @@ function attention(
    */
   const afflicted =
     (view.walk.status === 'walking' &&
-      (view.walk.hold === 'blind' || view.walk.hold === 'held' || view.walk.hold === 'poisoned') &&
+      (view.walk.hold === 'blind' ||
+        view.walk.hold === 'held' ||
+        view.walk.hold === 'poisoned' ||
+        view.walk.hold === 'condition') &&
       view.walk.hold) ||
     (view.loop.status === 'running' &&
-      (view.loop.hold === 'blind' || view.loop.hold === 'held' || view.loop.hold === 'poisoned') &&
+      (view.loop.hold === 'blind' ||
+        view.loop.hold === 'held' ||
+        view.loop.hold === 'poisoned' ||
+        view.loop.hold === 'condition') &&
       view.loop.hold) ||
     null;
   if (afflicted === 'blind') return { level: 'warn', label: t('tabs.tab.markBlind') };
   if (afflicted === 'held') return { level: 'warn', label: t('tabs.tab.markHeld') };
   if (afflicted === 'poisoned') return { level: 'warn', label: t('tabs.tab.markPoisoned') };
+  if (afflicted === 'condition') return { level: 'warn', label: t('tabs.tab.markCondition') };
   if (view.walk.status === 'walking') return { level: 'info', label: t('tabs.tab.markWalking') };
   if (view.loop.status === 'running') return { level: 'info', label: t('tabs.tab.markLooping') };
 

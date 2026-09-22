@@ -1725,6 +1725,17 @@ export default function GlobalSettings({
                   })
                 }
               />
+              <CheckField
+                checked={draft.automation.movement.walkWhileConfused}
+                hint={t('settings.movement.walkWhileConfusedHint')}
+                label={t('settings.movement.walkWhileConfused')}
+                name="global-walk-while-confused"
+                onChange={(value) =>
+                  automation({
+                    movement: { ...draft.automation.movement, walkWhileConfused: value }
+                  })
+                }
+              />
             </fieldset>
 
             <fieldset className="settings-menus" data-fieldset="movement-carry">
