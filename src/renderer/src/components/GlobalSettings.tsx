@@ -163,6 +163,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'health-recover', label: t('settings.health.recoverLegend') },
     { id: 'health-potions', label: t('settings.health.potionRuleLegend') },
     { id: 'health-retreat', label: t('settings.health.retreatLegend') },
+    { id: 'health-flee', label: t('settings.health.fleeLegend') },
     { id: 'health-hangup', label: t('settings.health.hangUpLegend') },
     { id: 'health-pvp', label: t('settings.health.pvpLegend') }
   ],
@@ -1134,6 +1135,44 @@ export default function GlobalSettings({
                   wide
                 />
               )}
+            </fieldset>
+
+            <fieldset className="settings-menus" data-fieldset="health-flee">
+              <legend>{t('settings.health.fleeLegend')}</legend>
+              <p className="settings-note">{t('settings.health.fleeHint')}</p>
+              <div className="settings-inline">
+                <CheckField
+                  checked={draft.automation.fleeGoto.enabled}
+                  label={t('settings.health.fleeLabel')}
+                  name="global-flee"
+                  onChange={(value) =>
+                    automation({ fleeGoto: { ...draft.automation.fleeGoto, enabled: value } })
+                  }
+                />
+                <NumberField
+                  label={t('settings.health.belowHealthLabel')}
+                  name="global-flee-health"
+                  onChange={(value) =>
+                    automation({
+                      fleeGoto: { ...draft.automation.fleeGoto, belowHealth: fraction(value) }
+                    })
+                  }
+                  bar={barOfHealth(draft.automation.fleeGoto.belowHealth)}
+                  value={percent(draft.automation.fleeGoto.belowHealth)}
+                />
+              </div>
+              <TextField
+                hint={t('settings.health.fleeDestinationHint')}
+                label={t('settings.health.fleeDestinationLabel')}
+                name="global-flee-destination"
+                onChange={(value) =>
+                  automation({ fleeGoto: { ...draft.automation.fleeGoto, destination: value } })
+                }
+                placeholder={t('settings.health.fleeDestinationPlaceholder')}
+                spellCheck={false}
+                value={draft.automation.fleeGoto.destination}
+                wide
+              />
             </fieldset>
 
             <fieldset className="settings-menus" data-fieldset="health-hangup">

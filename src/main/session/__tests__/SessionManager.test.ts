@@ -2692,6 +2692,118 @@ describe('which way out', () => {
 });
 
 /*
+ * `flee`'s own second, more desperate escape — a fixed `sys goto` in place of
+ * `retreat.strategy`'s own afterward, and only where the realm's own `locate`
+ * setting says `sys goto` is a command it actually has.
+ */
+describe('fleeing outright', () => {
+  const fleeing = (
+    over: Partial<(typeof DEFAULT_CONFIG)['automation']['safety']['fleeGoto']> = {}
+  ): AutomationConfig => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+    onEnterRealm: [],
+    rules: [],
+    safety: {
+      ...DEFAULT_CONFIG.automation.safety,
+      fleeGoto: {
+        ...DEFAULT_CONFIG.automation.safety.fleeGoto,
+        enabled: true,
+        belowHealth: 0.2,
+        destination: 'sil',
+        ...over
+      }
+    }
+  });
+  const wire = (socket: net.Socket): (() => string) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1');
+  };
+
+  it("breaks off combat the way retreat does, then sys goto's the destination once the fight is over", async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      fleeing(),
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'sys-status'
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('Rat Cellar\r\nObvious exits: north, south\r\n');
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=15]:\r\n');
+
+    // The break-off move: the same escape ladder `retreat` uses.
+    await until(() => /\bn\r\n/.test(seen()));
+    expect(notices.some((notice) => /Running n:/.test(notice))).toBe(true);
+
+    /*
+     * The fight ends before the new room prints, the order the server has —
+     * `sysGotoIfDue` waits for both, the same way `walkHomeIfDue` does.
+     */
+    socket.write('*Combat Off*\r\n');
+    await until(() => !manager!.character.inCombat);
+    expect(seen()).not.toMatch(/sys goto/);
+    socket.write('Open Field\r\nObvious exits: south\r\n');
+
+    await until(() => /(^|\n)sys goto sil\r\n/.test(seen()));
+    expect(notices.some((notice) => /Fleeing to sil/.test(notice))).toBe(true);
+  });
+
+  it('never sends sys goto on a realm that has not answered sys status', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink);
+    // Locate left at its default, `rm` — the one fact `fleeGoto` checks besides
+    // its own switch and threshold, since `sys goto` is only ever a command on
+    // a `sys-status` realm.
+    manager.configure(fleeing(), DEFAULT_CONFIG.connection.login);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('Rat Cellar\r\nObvious exits: north, south\r\n');
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=15]:\r\n');
+
+    await settled(15);
+    // Neither half fired: no break-off move and certainly no `sys goto`.
+    expect(seen()).not.toMatch(/\b[nsew]\r\n/);
+    expect(notices.some((notice) => /Running \w+:|Fleeing to/.test(notice))).toBe(false);
+  });
+
+  it('never fires with no destination configured', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      fleeing({ destination: '' }),
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'sys-status'
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('Rat Cellar\r\nObvious exits: north, south\r\n');
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=15]:\r\n');
+
+    await settled(15);
+    expect(seen()).not.toMatch(/\b[nsew]\r\n/);
+    expect(notices.some((notice) => /Running \w+:|Fleeing to/.test(notice))).toBe(false);
+  });
+});
+
+/*
  * An escape *holds* the lap, and then the character is finally allowed to sit
  * down.
  *

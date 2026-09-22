@@ -676,6 +676,8 @@ export class SessionManager {
     deadline: number;
     opened: number;
     tried: Set<Direction>;
+    /** Carried across a refused rung's retry, so `settleEscape` still arms `sysGoto` on success. */
+    fleeDestination?: string;
   } | null = null;
   /**
    * Rooms this character has run out of, newest last, while the fight it ran
@@ -723,6 +725,8 @@ export class SessionManager {
   private saidMortallyWounded = false;
   /** A `safe-haven` walk home waiting for the fight to end; see `walkHomeIfDue`. */
   private retreat: { room: string; armedAt: number; from: string | null } | null = null;
+  /** A `fleeGoto`'s `sys goto` waiting for the fight to end; see `sysGotoIfDue`. */
+  private sysGoto: { destination: string; armedAt: number } | null = null;
   /**
    * Where a route the player was walking still owes them, across a lost
    * connection. See `pickUpAfterLoss`.
@@ -1757,7 +1761,7 @@ export class SessionManager {
           }),
         moveInFlight: () => this.tracker.pendingMoves > 0,
         walking: () => this.walker.walking,
-        busy: () => this.isRetreating() || this.retreat !== null,
+        busy: () => this.isRetreating() || this.retreat !== null || this.sysGoto !== null,
         looping: () => this.loops.progress.status === 'running',
         hold: () => this.loops.noteErrand(),
         release: () => {
@@ -1798,7 +1802,11 @@ export class SessionManager {
           }),
         moveInFlight: () => this.tracker.pendingMoves > 0,
         walking: () => this.walker.walking,
-        busy: () => this.isRetreating() || this.retreat !== null || this.escapeAwaiting !== null
+        busy: () =>
+          this.isRetreating() ||
+          this.retreat !== null ||
+          this.sysGoto !== null ||
+          this.escapeAwaiting !== null
       },
       {
         notice: (message) => this.sink.notice(message),
@@ -1833,7 +1841,11 @@ export class SessionManager {
           }),
         moveInFlight: () => this.tracker.pendingMoves > 0,
         walking: () => this.walker.walking,
-        busy: () => this.isRetreating() || this.retreat !== null || this.escapeAwaiting !== null,
+        busy: () =>
+          this.isRetreating() ||
+          this.retreat !== null ||
+          this.sysGoto !== null ||
+          this.escapeAwaiting !== null,
         looping: () => this.loops.progress.status === 'running',
         hold: () => this.loops.noteErrand(),
         release: () => {
@@ -1889,6 +1901,7 @@ export class SessionManager {
         busy: () =>
           this.isRetreating() ||
           this.retreat !== null ||
+          this.sysGoto !== null ||
           this.escapeAwaiting !== null ||
           this.supplies.current !== null ||
           this.trainLevel.busy ||
@@ -2032,7 +2045,11 @@ export class SessionManager {
         moveInFlight: () => this.tracker.pendingMoves > 0,
         walking: () => this.walker.walking && this.walker.holding === null,
         looping: () => this.loops.progress.status === 'running',
-        busy: () => this.isRetreating() || this.retreat !== null || this.escapeAwaiting !== null
+        busy: () =>
+          this.isRetreating() ||
+          this.retreat !== null ||
+          this.sysGoto !== null ||
+          this.escapeAwaiting !== null
       },
       {
         notice: (message) => this.sink.notice(message),
@@ -2980,6 +2997,7 @@ export class SessionManager {
     this.lastEscapeSent = 0;
     this.escapeAwaiting = null;
     this.retreat = null;
+    this.sysGoto = null;
     this.safetyLog.length = 0;
     this.engageLog.length = 0;
     this.login.reset();
@@ -3406,6 +3424,7 @@ export class SessionManager {
     this.lastEscapeSent = 0;
     this.escapeAwaiting = null;
     this.retreat = null;
+    this.sysGoto = null;
     /*
      * The rooms run out of belong to the fight they were run out of, and that
      * fight is over: the character has left the realm. Kept per session now
@@ -4402,6 +4421,9 @@ export class SessionManager {
       this.considerEscape(state);
       // And the walk home a `safe-haven` escape armed, once the fight is over.
       this.walkHomeIfDue(state);
+      // And the `sys goto` a `fleeGoto` armed, the same moment `walkHomeIfDue`
+      // would take up a `safe-haven` walk — the two never arm together.
+      this.sysGotoIfDue(state);
       // Shopping, which yields to every one of the above: not while running
       // away, not while walking home, not while anything else has the
       // character. See `Supplies.consider`.
@@ -6033,7 +6055,9 @@ export class SessionManager {
 
   private considerEscape(state: CharacterState): void {
     const safety = this.automationConfig.safety.retreat;
-    if (!safety.enabled || !this.automationConfig.enabled) return;
+    const fleeGoto = this.automationConfig.safety.fleeGoto;
+    if (!this.automationConfig.enabled) return;
+    if (!safety.enabled && !fleeGoto.enabled) return;
     if (state.phase !== 'in-game') return;
     /*
      * Nothing to run from. An escape out of combat is a wasted move that puts
@@ -6085,9 +6109,26 @@ export class SessionManager {
     if (this.tracker.pendingMoves > 0) return;
 
     const fraction = this.healthFraction(state);
-    const hurt = fraction !== null && fraction <= safety.belowHealth;
+    /*
+     * Checked first and, when it fires, on its own: `fleeGoto` is a second and
+     * more desperate tier than `retreat`, not one more reason for the same
+     * afterward — see `FleeGotoConfig`. Gated on `locateMethod` here as well as
+     * on the settings screen, because a character can change realms without
+     * touching this setting, and `sys goto` on a realm that has never
+     * answered `sys status` is a command the server will not recognise.
+     */
+    const fleeing =
+      fleeGoto.enabled &&
+      this.locateMethod === 'sys-status' &&
+      fleeGoto.destination.length > 0 &&
+      fraction !== null &&
+      fraction <= fleeGoto.belowHealth;
+
+    const hurt = safety.enabled && fraction !== null && fraction <= safety.belowHealth;
     const outnumbered =
-      safety.whenOutnumbered > 0 && state.combat.attackers.length >= safety.whenOutnumbered;
+      safety.enabled &&
+      safety.whenOutnumbered > 0 &&
+      state.combat.attackers.length >= safety.whenOutnumbered;
     /*
      * MegaMUD's `ManaRun%`: a caster with an empty pool is losing whatever the
      * health bar says. A null maximum — a class with no pool, or a sheet not
@@ -6096,16 +6137,20 @@ export class SessionManager {
     const { mana, manaMax } = state.vitals;
     const manaFraction = mana !== null && manaMax !== null && manaMax > 0 ? mana / manaMax : null;
     const drained =
-      safety.belowMana > 0 && manaFraction !== null && manaFraction <= safety.belowMana;
-    if (!hurt && !outnumbered && !drained) return;
+      safety.enabled &&
+      safety.belowMana > 0 &&
+      manaFraction !== null &&
+      manaFraction <= safety.belowMana;
+    if (!fleeing && !hurt && !outnumbered && !drained) return;
 
     this.lastAskedToEscape = now;
-    const why = hurt
-      ? t('session.safety.whyHealth', { percent: this.percentText(fraction) })
-      : drained
-        ? t('session.safety.whyMana', { percent: this.percentText(manaFraction) })
-        : t('session.safety.whyAttackers', { count: state.combat.attackers.length });
-    this.escape(state, why, now);
+    const why =
+      fleeing || hurt
+        ? t('session.safety.whyHealth', { percent: this.percentText(fraction) })
+        : drained
+          ? t('session.safety.whyMana', { percent: this.percentText(manaFraction) })
+          : t('session.safety.whyAttackers', { count: state.combat.attackers.length });
+    this.escape(state, why, now, undefined, fleeing ? fleeGoto.destination : undefined);
   }
 
   /**
@@ -6264,12 +6309,17 @@ export class SessionManager {
    * `walkHomeIfDue` takes up once the fight is over and the character is
    * placed — the walker refuses to walk into a fight, so a route can never be
    * the escape itself.
+   *
+   * `fleeDestination`, set only by `considerEscape`'s `fleeGoto` tier, arms
+   * `sysGotoIfDue` instead of `retreat.strategy`'s own afterward — a fixed
+   * `sys goto` rather than a walked route, and never both for one escape.
    */
   private escape(
     state: CharacterState,
     why: string,
     now: number,
-    tried: ReadonlySet<Direction> = new Set()
+    tried: ReadonlySet<Direction> = new Set(),
+    fleeDestination?: string
   ): void {
     const safety = this.automationConfig.safety.retreat;
     const here =
@@ -6319,7 +6369,9 @@ export class SessionManager {
      */
     this.lastEscapeSent = now;
 
-    if (safety.strategy === 'safe-haven' && safety.safeHavenRoom.length > 0) {
+    if (fleeDestination !== undefined) {
+      this.sysGoto = { destination: fleeDestination, armedAt: now };
+    } else if (safety.strategy === 'safe-haven' && safety.safeHavenRoom.length > 0) {
       this.retreat = { room: safety.safeHavenRoom, armedAt: now, from: here };
     }
     /*
@@ -6375,7 +6427,8 @@ export class SessionManager {
       why,
       deadline: now + tuning().session.retreatPatienceMs,
       opened: 0,
-      tried: new Set([...tried, out.direction])
+      tried: new Set([...tried, out.direction]),
+      ...(fleeDestination === undefined ? {} : { fleeDestination })
     };
     this.queue.enqueue({
       command: out.direction,
@@ -6455,10 +6508,11 @@ export class SessionManager {
         return;
       }
       const tried = waiting.tried;
+      const fleeDestination = waiting.fleeDestination;
       settle(false, block.text);
       // The next rung, now: the refusal is the new information the ladder was
       // waiting for, and `cooldownMs` exists to stop a spam of moves, not this.
-      this.escape(state, waiting.why, now, tried);
+      this.escape(state, waiting.why, now, tried, fleeDestination);
       return;
     }
     if (block.type === 'command-refused') {
@@ -6596,6 +6650,55 @@ export class SessionManager {
       action: 'retreat',
       because: t('session.safety.retreatBecause', { room: retreat.room }),
       acted: true
+    });
+  }
+
+  /**
+   * The second half of `fleeGoto`: once out of combat, `sys goto` the destination.
+   *
+   * Armed by `escape` and spent once, the same as `walkHomeIfDue`'s `retreat`
+   * — but simpler, because `sys goto` names a keyword rather than a room, and
+   * has no route to plan: there is no `findStop`, no world graph, and no wait
+   * for the room on record to catch up with where the escape actually landed.
+   * All that is waited on is the fight actually being over and the escape's
+   * own move having actually landed, so the command sent afterward is not
+   * read as one more command mid-round and refused with it.
+   */
+  private sysGotoIfDue(state: CharacterState): void {
+    const goto = this.sysGoto;
+    if (goto === null) return;
+    if (state.phase !== 'in-game') {
+      this.sysGoto = null;
+      return;
+    }
+    const now = Date.now();
+    if (state.inCombat) {
+      if (now - goto.armedAt > tuning().session.retreatPatienceMs) {
+        this.sysGoto = null;
+        this.sink.notice(t('session.safety.fleeGaveUp', { destination: goto.destination }));
+      }
+      return;
+    }
+    if (this.tracker.pendingMoves > 0) {
+      if (now - goto.armedAt > tuning().session.retreatPatienceMs) {
+        this.sysGoto = null;
+        this.sink.notice(t('session.safety.fleeGaveUp', { destination: goto.destination }));
+      }
+      return;
+    }
+    this.sysGoto = null;
+    this.sink.notice(t('session.safety.fleeGoto', { destination: goto.destination }));
+    this.noteSafety({
+      at: now,
+      action: 'flee-goto',
+      because: t('session.safety.fleeGoto', { destination: goto.destination }),
+      acted: true
+    });
+    this.queue.enqueue({
+      command: `sys goto ${goto.destination}`,
+      priority: 'emergency',
+      coalesceKey: 'flee-goto',
+      reason: t('session.safety.fleeGotoReason', { destination: goto.destination })
     });
   }
 
@@ -7084,6 +7187,11 @@ export class SessionManager {
     if (retreat !== null) {
       this.retreat = null;
       this.sink.notice(t('session.safety.retreatDropped', { room: retreat.room }));
+    }
+    const goto = this.sysGoto;
+    if (goto !== null) {
+      this.sysGoto = null;
+      this.sink.notice(t('session.safety.fleeDropped', { destination: goto.destination }));
     }
     /*
      * A running lap is stopped; one already stopped **restates** why.

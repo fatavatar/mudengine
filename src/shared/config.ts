@@ -702,6 +702,36 @@ export const RETREAT_STRATEGIES = ['step-back', 'safe-haven'] as const;
 export type RetreatStrategy = (typeof RETREAT_STRATEGIES)[number];
 
 /**
+ * A second way out, for the realms where one actually exists.
+ *
+ * `RetreatConfig` above is deliberately down to one axis — a direction, sent
+ * because there is no working command for running away (see the note above
+ * `RETREAT_STRATEGIES`). `sys goto` breaks that rule for exactly the realms
+ * `SessionManager.locateWord` already knows answer to `sys status`: there, it
+ * is a real command that relocates the character in one round, not a word the
+ * parser drops. That makes it a *different* tool rather than a third rung on
+ * the same ladder, and it belongs at its own, more desperate fraction of
+ * health — the same relationship `HangUpConfig` has to `RetreatConfig`, an
+ * independent and harsher fallback, not a setting on the first one.
+ *
+ * The break-off move is still `RetreatConfig`'s own — `wayOut` and `escape`
+ * are shared by every trigger, flee included, because choosing an exit does
+ * not change with the reason — and `sys goto` is refused mid-round the same
+ * as any other command would be. This is only what runs once `*Combat Off*`
+ * lands: a fixed destination instead of `retreat.strategy`'s own afterward.
+ */
+export interface FleeGotoConfig {
+  enabled: boolean;
+  /** Fraction of maximum health below which the character flees outright. */
+  belowHealth: number;
+  /**
+   * The keyword `sys goto` is sent with, e.g. `sil`. Empty is none — refused,
+   * not guessed, the same as an empty `safeHavenRoom`.
+   */
+  destination: string;
+}
+
+/**
  * Which monsters auto-combat will open a fight with.
  *
  * `hostile` is the one this exists for, and it means what the realm data says
@@ -2082,6 +2112,7 @@ export interface BlessingConfig {
 export interface SafetyConfig {
   hangUp: HangUpConfig;
   retreat: RetreatConfig;
+  fleeGoto: FleeGotoConfig;
   pvp: PvpConfig;
 }
 
@@ -2495,6 +2526,14 @@ export const DEFAULT_CONFIG: AppConfig = {
         strategy: 'step-back',
         safeHavenRoom: ''
       },
+      // Off, and more desperate than `retreat` when it is on — see
+      // `FleeGotoConfig`. Between `retreat`'s 0.3 and `hangUp`'s 0.15: a fallback
+      // that only matters once the first one has already failed to save it.
+      fleeGoto: {
+        enabled: false,
+        belowHealth: 0.2,
+        destination: ''
+      },
       pvp: { notifyGang: false, action: 'none' }
     },
     // Off, like every other thing the client would do without being asked. The
@@ -2664,6 +2703,7 @@ export const AUTOMATION_SWITCHES = {
   combat: ['combat', 'enabled'],
   retaliate: ['combat', 'retaliate'],
   retreat: ['safety', 'retreat', 'enabled'],
+  fleeGoto: ['safety', 'fleeGoto', 'enabled'],
   hangUp: ['safety', 'hangUp', 'enabled'],
   loot: ['loot', 'coins'],
   drop: ['drop', 'enabled'],
@@ -4096,9 +4136,11 @@ function normalizeSafety(value: unknown): SafetyConfig {
   const raw = isRecord(value) ? value : {};
   const hangUp = isRecord(raw['hangUp']) ? raw['hangUp'] : {};
   const retreat = isRecord(raw['retreat']) ? raw['retreat'] : {};
+  const fleeGoto = isRecord(raw['fleeGoto']) ? raw['fleeGoto'] : {};
   const pvp = isRecord(raw['pvp']) ? raw['pvp'] : {};
   const f = DEFAULT_CONFIG.automation.safety.retreat;
   const d = DEFAULT_CONFIG.automation.safety.hangUp;
+  const fg = DEFAULT_CONFIG.automation.safety.fleeGoto;
   const p = DEFAULT_CONFIG.automation.safety.pvp;
   return {
     retreat: {
@@ -4112,6 +4154,11 @@ function normalizeSafety(value: unknown): SafetyConfig {
       cooldownMs: int(retreat['cooldownMs'], f.cooldownMs, 1000, 60_000),
       strategy: oneOf<RetreatStrategy>(retreat['strategy'], RETREAT_STRATEGIES, f.strategy),
       safeHavenRoom: str(retreat['safeHavenRoom'], f.safeHavenRoom).trim()
+    },
+    fleeGoto: {
+      enabled: bool(fleeGoto['enabled'], fg.enabled),
+      belowHealth: fraction(fleeGoto['belowHealth'], fg.belowHealth),
+      destination: str(fleeGoto['destination'], fg.destination).trim()
     },
     hangUp: {
       enabled: bool(hangUp['enabled'], d.enabled),
