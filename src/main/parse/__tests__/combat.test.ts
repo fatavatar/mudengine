@@ -120,20 +120,38 @@ describe("this character's own swings", () => {
 describe('an engagement', () => {
   it('binds the attack command to the occupant the server would resolve it to', () => {
     const { tracker, s } = fight([mob('small giant rat')]);
-    tracker.noteCommand('giant rat');
+    tracker.noteAttack('giant rat', 'Attack', 900);
     const engaged = tracker.status(s, true, 1_000);
     expect(engaged.inCombat).toBe(true);
     // The base name binds, as the server's name-modifier system does.
     expect(engaged.combat.target).toBe('small giant rat');
   });
 
-  it('does not bind a command that named nothing, and keeps a target it already has', () => {
+  it('binds nothing with no attack owed, and keeps a target it already has', () => {
     const { tracker, s } = fight([mob('giant rat')]);
-    tracker.noteCommand(null);
     expect(tracker.status(s, true, 1_000).combat.target).toBeNull();
     const fighting = tracker.missed(s, 1_000, 'giant rat')!;
-    tracker.noteCommand('kobold');
+    tracker.noteAttack('kobold', 'Attack', 1_900);
     expect(tracker.status(fighting, true, 2_000).combat.target).toBe('giant rat');
+  });
+
+  it('answers attacks in the order they went out, one per engagement', () => {
+    const { tracker, s } = fight([mob('giant rat'), mob('kobold thief')]);
+    tracker.noteAttack('giant rat', 'Attack', 900);
+    tracker.noteAttack('kobold thief', 'Attack', 910);
+    const first = tracker.status(s, true, 1_000);
+    expect(first.combat.target).toBe('giant rat');
+    const off = tracker.status(first, false, 1_010);
+    expect(tracker.status(off, true, 1_020).combat.target).toBe('kobold thief');
+  });
+
+  it('drops an attack nothing answered, and one the server found nothing for', () => {
+    const { tracker, s } = fight([mob('giant rat'), mob('kobold thief')]);
+    tracker.noteAttack('giant rat', 'Attack', 0);
+    tracker.noteAttack('kobold thief', 'Attack', 9_000);
+    tracker.unanswered('kobold thief');
+    expect(tracker.status(s, true, 10_000).combat.target).toBeNull();
+    expect(tracker.hasEngagedWith('Attack')).toBe(false);
   });
 });
 
@@ -218,7 +236,7 @@ describe('a monster heals while you fight it', () => {
    * measuring the wrong thing.
    */
   const opening = (tracker: FightTracker, s: CharacterState): CharacterState => {
-    tracker.noteCommand('cave bear');
+    tracker.noteAttack('cave bear', 'Attack', 0);
     return tracker.status(s, true, 0);
   };
   const strike = (

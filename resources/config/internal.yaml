@@ -286,6 +286,13 @@ tuning:
     # 41ms.
     procWindowMs: 1000
 
+    # How long an attack stays owed a *Combat Engaged*. The server answers in
+    # tens of milliseconds even behind a burst (2026-09-22: four commands and
+    # a heal, all answered inside 90ms), so this only bounds an attack nothing
+    # ever answered -- which must not bind the engagement some later attack
+    # causes.
+    engageBindMs: 3000
+
     # Remembered attackers in one fight. The names matter, not the count.
     maxAttackers: 12
 

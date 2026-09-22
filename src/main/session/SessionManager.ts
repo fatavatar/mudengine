@@ -144,6 +144,7 @@ import {
 } from '../../shared/realm';
 import { SHIPPED_WORLD_LABEL, worldOfRealm } from '../../shared/worlds';
 import {
+  ATTACK_COMMANDS,
   commandOf,
   GREATERMUD_ONLY,
   opensStatScreen,
@@ -3611,6 +3612,15 @@ export class SessionManager {
   private noteWordMissing(spoken: string | undefined): void {
     const name = commandOf(spoken ?? '');
     if (name === null || this.unavailable.has(name)) return;
+    /*
+     * **Nor an attack verb the realm has already answered.** This family
+     * speaks an attack on a monster that is not there exactly as it speaks a
+     * word it lacks, and one such line — an attack that reached the server a
+     * moment after its goblin died — retired `a` for the connection and ended
+     * combat for good (healbot, 2026-09-22). A verb `*Combat Engaged*` has
+     * answered exists; the tracker reads the sentence as the name being gone.
+     */
+    if (ATTACK_COMMANDS.has(name) && this.tracker.hasEngagedWith(name)) return;
     this.unavailable.add(name);
     this.sayUnavailable(name, spoken ?? name);
   }

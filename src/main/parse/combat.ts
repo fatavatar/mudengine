@@ -29,6 +29,7 @@ import {
   type Room,
   type TargetHealth
 } from '../../shared/character';
+import type { CommandName } from '../../shared/commands';
 import type { FightRecord, FightSink } from '../../shared/fights';
 import type { MobLore } from '../../shared/lore';
 import { mobKey, nameAnswersTo, roomAddress, roomId, type RoomId } from '../../shared/world';
@@ -197,17 +198,39 @@ export class FightTracker {
   private ledgers = new Map<string, Ledger>();
 
   /**
-   * What the last command would attack, exactly as typed after the verb.
+   * The attacks sent and not yet answered, oldest first, each exactly as
+   * typed after the verb.
    *
-   * One slot, consumed by `*Combat Engaged*`, which is the server confirming
-   * the attack found its mark and is the earliest the client can know what it
-   * is fighting — the damage line the target used to wait for arrives a swing
+   * Consumed one per `*Combat Engaged*`, which is the server confirming an
+   * attack found its mark and is the earliest the client can know what it is
+   * fighting — the damage line the target used to wait for arrives a swing
    * later, and a round-verb or a rule reading `{target}` in between was
-   * handed nothing. Any other command overwrites the slot, because an
-   * engagement two commands after the attack is an attribution nobody can
-   * make — the same one-slot rule `unmodelled` follows.
+   * handed nothing.
+   *
+   * **A queue, not a slot.** It was one slot that any other command
+   * overwrote, and on 2026-09-22 (`healbot`, three dark goblins) that lost
+   * the target twice a round: auto-heal's `c gdhe` went out behind an
+   * attack, or several attacks went out before the first was answered, and
+   * the engagements that came back bound nothing. The character then stood in
+   * a running fight with no target and hit back at every goblin that swung.
+   * An engagement is only ever the answer to an attack, so a command between
+   * the two cannot have caused it — and the server answers its commands in
+   * order, so the oldest attack outstanding is the one each engagement
+   * answers.
+   *
+   * What stops a stale entry binding somebody else's engagement is that
+   * nothing stays: an entry older than `tuning.parse.engageBindMs` is
+   * dropped, and a refusal that names the attack takes its entry
+   * (`unanswered`).
    */
-  private attacking: string | null = null;
+  private attacking: Array<{ aimed: string; verb: CommandName; at: number }> = [];
+  /**
+   * The attack verbs this realm has answered with `*Combat Engaged*` on this
+   * connection. A verb in here exists, so `You say "<verb> <name>"` is the
+   * server finding no `<name>`, not the realm lacking `<verb>`. See
+   * `CharacterTracker`'s `command-not-understood`.
+   */
+  private readonly engagedWith = new Set<CommandName>();
 
   /**
    * The last blow this character landed that the *sentence* attributed, and
@@ -272,12 +295,32 @@ export class FightTracker {
   }
 
   /**
-   * A command went out. An attack with a named target arms the engagement
-   * binding; anything else clears it — an engagement two commands after the
-   * attack is an attribution nobody can make.
+   * An attack with a named target went out, and joins the engagements owed.
+   * Anything else leaves them alone: see `attacking`.
    */
-  noteCommand(attacking: string | null): void {
-    this.attacking = attacking;
+  noteAttack(aimed: string, verb: CommandName, at: number): void {
+    this.attacking.push({ aimed, verb, at });
+    // Bounded like the attacker list: a room of things cannot grow it.
+    if (this.attacking.length > tuning().parse.maxAttackers) this.attacking.shift();
+  }
+
+  /**
+   * The server said it found nothing to attack — `You say "a <name>"` — so
+   * the engagement that attack was owed is not coming. The newest entry for
+   * that text goes, since the refusal answers the one just sent.
+   */
+  unanswered(aimed: string): void {
+    const key = mobKey(aimed);
+    for (let i = this.attacking.length - 1; i >= 0; i -= 1) {
+      if (mobKey(this.attacking[i]!.aimed) !== key) continue;
+      this.attacking.splice(i, 1);
+      return;
+    }
+  }
+
+  /** Whether `*Combat Engaged*` has answered this verb on this connection. */
+  hasEngagedWith(verb: CommandName): boolean {
+    return this.engagedWith.has(verb);
   }
 
   /**
@@ -287,7 +330,8 @@ export class FightTracker {
    */
   forget(): void {
     this.ledgers.clear();
-    this.attacking = null;
+    this.attacking = [];
+    this.engagedWith.clear();
     this.landed = null;
   }
 
@@ -311,12 +355,12 @@ export class FightTracker {
        * `attacking` deliberately survives this. Re-attacking — or
        * switching targets — makes the server print `*Combat Off*` and
        * `*Combat Engaged*` as one answer to one command, and consuming
-       * the slot on the Off half left the Engaged half nothing to bind.
+       * an entry on the Off half left the Engaged half nothing to bind.
        * The client then believed it had no target, proposed the same
        * attack again on the very next state change, and the server
        * answered with another pair: a self-sustaining loop at round-trip
        * speed, captured live 2026-08-26. An Engaged is only ever the
-       * answer to an attack command, so a slot armed across an unrelated
+       * answer to an attack command, so an entry kept across an unrelated
        * Off can never bind to an engagement that command did not cause.
        */
       return { ...s, inCombat: false, combat: NO_COMBAT };
@@ -331,10 +375,14 @@ export class FightTracker {
      * listing has placed is kept as typed: the server just confirmed the
      * thing exists, and the damage lines that follow correct any
      * spelling. An existing target is never overwritten — the engagement
-     * of a fight already in progress says nothing new.
+     * of a fight already in progress says nothing new — but it still
+     * answers its attack, and the entry goes.
      */
-    const aimed = this.attacking;
-    this.attacking = null;
+    const stale = at - tuning().parse.engageBindMs;
+    while (this.attacking.length > 0 && this.attacking[0]!.at < stale) this.attacking.shift();
+    const owed = this.attacking.shift();
+    if (owed !== undefined) this.engagedWith.add(owed.verb);
+    const aimed = owed?.aimed ?? null;
     if (s.combat.target !== null || aimed === null) {
       return { ...s, inCombat: true, combat: { ...s.combat, engaged: true } };
     }

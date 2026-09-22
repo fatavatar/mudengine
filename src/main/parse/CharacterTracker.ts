@@ -93,7 +93,7 @@ import { isWoundBand } from '../../shared/wounds';
 import { FightTracker, playerDies } from './combat';
 import { Expectations, MOVE_COMMANDS, type LapsedClaim } from './expectations';
 import { RoomDraft } from './draft';
-import { ATTACK_COMMANDS, breaksStealth, commandOf } from '../../shared/commands';
+import { ATTACK_COMMANDS, breaksStealth, commandOf, type CommandName } from '../../shared/commands';
 import { wireExit, wireItem } from '../../shared/entities';
 import type { CurrencyEntity, ExitEntity, ItemEntity } from '../../shared/entities';
 import { addCoins } from '../../shared/coins';
@@ -780,8 +780,11 @@ export class CharacterTracker {
    *
    * Returns whether the command was queued as a **move**, so a caller can tell
    * a step from everything else without a second copy of the command table.
+   *
+   * `at` is when it went out, on the clock the lines are stamped with — what
+   * ages an attack nothing answered (`FightTracker.attacking`).
    */
-  observeCommand(command: string): boolean {
+  observeCommand(command: string, at: number = Date.now()): boolean {
     const trimmed = command.trim();
     const space = trimmed.indexOf(' ');
     const named = commandOf(trimmed);
@@ -827,11 +830,9 @@ export class CharacterTracker {
     if (this.state.phase === 'in-game' && (named === 'Hide' || named === 'Sneak')) {
       this.attemptStealth();
     }
-    this.fight.noteCommand(
-      named !== null && ATTACK_COMMANDS.has(named) && argument.length > 0 && !atBarrier
-        ? argument
-        : null
-    );
+    if (named !== null && ATTACK_COMMANDS.has(named) && argument.length > 0 && !atBarrier) {
+      this.fight.noteAttack(argument, named, at);
+    }
     return this.expect.observeCommand(command, {
       inGame: this.state.phase === 'in-game',
       atMenu: this.state.phase === 'authenticating',
@@ -1327,6 +1328,107 @@ export class CharacterTracker {
     if (!named) return 'experience';
     this.lore.observeDeath?.(target, last.text, at);
     return 'sentence';
+  }
+
+  /**
+   * The server says nothing here answers to `aimed` (a `mobKey`): the
+   * occupants it reaches leave the room, and the fight's own target and
+   * attackers let go of it.
+   */
+  private nothingThere(s: CharacterState, aimed: string): CharacterState | null {
+    // The server's own matching rule, not a leading prefix: `du` reaches
+    // `practice dummy`. See `nameAnswersTo`.
+    const answers = (name: string): boolean => nameAnswersTo(mobKey(name), aimed);
+    const gone = s.room.occupants.filter((who) => answers(who.name));
+    const names = new Set(gone.map((who) => mobKey(who.name)));
+    /*
+     * **The room listing is not the gate.** It used to be — `gone.length
+     * === 0` returned early — so a monster the room had *already* dropped
+     * kept its place in `attackers` for ever, and that is the state a
+     * client cannot get out of on its own: `fightIsRunning` (`Walker.ts`)
+     * reads `attackers`, so the walk stops and books a failed leg, three
+     * of which end the lap; `retaliation` re-proposes the attack on every
+     * state change; and every one of them comes back here to be refused by
+     * the same sentence that should have ended it. Measured 2026-09-02
+     * (`2026-09-02_18-07-07_festus.mudcap.jsonl`, t=4865201): the room
+     * block arrived with no `Also here:` at all, the rat that had lunged a
+     * second earlier stayed on the books, and `pu angry giant rat` went out
+     * three more times over the following forty seconds — into a room the
+     * client had itself just listed as empty — with the lap stopped for the
+     * whole of it.
+     *
+     * So the fight's own two fields are matched against the name directly.
+     * Nothing is invented by that: a command that named an item, a
+     * direction, or nothing at all answers to no monster this client is
+     * fighting, exactly as it answers to no occupant.
+     *
+     * **And the trade, stated in both directions.** This sentence is the
+     * generic *the command did nothing*, not a refusal that names a
+     * target, so `aimed` is whatever the last command's argument was —
+     * `rem cloak` while a `cloaked figure` swings would clear it, since
+     * `nameAnswersTo` is prefix-or-word-start. The window is narrow: the
+     * monster must be genuinely attacking, absent from `room.occupants`,
+     * and share a name with an unrelated argument. And what it costs when
+     * it happens is that `fightIsRunning` and `Recovery.fightIsHere` both
+     * go quiet on a fight still running — one spent command, since being
+     * attacked breaks a rest and the next blow re-files the attacker.
+     * Against a deadlock nothing but a person can end, that is the cheaper
+     * error, and it is the same *correction that corrects itself* argument
+     * the experience line above makes.
+     */
+    const target = s.combat.target !== null && answers(s.combat.target) ? null : s.combat.target;
+    // Something the server says is not there cannot be attacking this
+    // character either — the same cleanup a death does, for the same
+    // reason: a stale attacker is a corpse retaliation would swing at.
+    const attackers = s.combat.attackers.filter((name) => !answers(name));
+    if (
+      gone.length === 0 &&
+      target === s.combat.target &&
+      attackers.length === s.combat.attackers.length
+    ) {
+      return null;
+    }
+    return {
+      ...s,
+      room: {
+        ...s.room,
+        occupants: s.room.occupants.filter((who) => !names.has(mobKey(who.name)))
+      },
+      combat:
+        target === s.combat.target && attackers.length === s.combat.attackers.length
+          ? s.combat
+          : { ...s.combat, target, attackers, health: target === null ? null : s.combat.health }
+    };
+  }
+
+  /**
+   * `You say "a short dark goblin"`: an attack the server found nothing for.
+   *
+   * This server family answers a word it has no command for by saying it
+   * aloud — and, measured 2026-09-22 (`healbot`, three dark goblins), an
+   * attack on a monster that is not there the same way. The attack had gone
+   * out a moment before its goblin died, and the server spoke it. Read as
+   * the realm lacking `a`, it retired the attack verb for the connection and
+   * combat stopped for good (`SessionManager.noteWordMissing`).
+   *
+   * So once this verb has been answered with `*Combat Engaged*` on this
+   * connection it plainly exists, and the sentence is about the name: the
+   * same finding as `Your command had no effect.`, and the same cleanup. A
+   * verb that has never engaged anything is left to be read as missing,
+   * which on this family it may be. Either way the engagement it was owed is
+   * not coming.
+   */
+  private attackFoundNothing(s: CharacterState, said: string): CharacterState | null {
+    const attack = attackIn(said);
+    if (attack === null) return null;
+    this.fight.unanswered(attack.aimed);
+    if (!this.fight.hasEngagedWith(attack.verb)) return null;
+    return this.nothingThere(s, mobKey(attack.aimed));
+  }
+
+  /** Whether `*Combat Engaged*` has answered this attack verb on this connection. */
+  hasEngagedWith(verb: CommandName): boolean {
+    return this.fight.hasEngagedWith(verb);
   }
 
   /**
@@ -3885,9 +3987,11 @@ export class CharacterTracker {
        * shifting the queue for one of those would take a move that is still
        * being answered.
        */
-      case 'command-not-understood':
-        this.expect.refused(g['message'] ?? '');
-        return null;
+      case 'command-not-understood': {
+        const said = g['message'] ?? '';
+        this.expect.refused(said);
+        return this.attackFoundNothing(s, said);
+      }
 
       case 'room-name':
         this.room.begin(g['name'] ?? null);
@@ -5801,70 +5905,8 @@ export class CharacterTracker {
         const aimed =
           block.type === 'target-missing' ? mobKey(g['target'] ?? '') : this.expect.aimed;
         if (aimed === null || aimed.length === 0) return null;
-        // The server's own matching rule, not a leading prefix: `du` reaches
-        // `practice dummy`. See `nameAnswersTo`.
-        const answers = (name: string): boolean => nameAnswersTo(mobKey(name), aimed);
-        const gone = s.room.occupants.filter((who) => answers(who.name));
-        const names = new Set(gone.map((who) => mobKey(who.name)));
-        /*
-         * **The room listing is not the gate.** It used to be — `gone.length
-         * === 0` returned early — so a monster the room had *already* dropped
-         * kept its place in `attackers` for ever, and that is the state a
-         * client cannot get out of on its own: `fightIsRunning` (`Walker.ts`)
-         * reads `attackers`, so the walk stops and books a failed leg, three
-         * of which end the lap; `retaliation` re-proposes the attack on every
-         * state change; and every one of them comes back here to be refused by
-         * the same sentence that should have ended it. Measured 2026-09-02
-         * (`2026-09-02_18-07-07_festus.mudcap.jsonl`, t=4865201): the room
-         * block arrived with no `Also here:` at all, the rat that had lunged a
-         * second earlier stayed on the books, and `pu angry giant rat` went out
-         * three more times over the following forty seconds — into a room the
-         * client had itself just listed as empty — with the lap stopped for the
-         * whole of it.
-         *
-         * So the fight's own two fields are matched against the name directly.
-         * Nothing is invented by that: a command that named an item, a
-         * direction, or nothing at all answers to no monster this client is
-         * fighting, exactly as it answers to no occupant.
-         *
-         * **And the trade, stated in both directions.** This sentence is the
-         * generic *the command did nothing*, not a refusal that names a
-         * target, so `aimed` is whatever the last command's argument was —
-         * `rem cloak` while a `cloaked figure` swings would clear it, since
-         * `nameAnswersTo` is prefix-or-word-start. The window is narrow: the
-         * monster must be genuinely attacking, absent from `room.occupants`,
-         * and share a name with an unrelated argument. And what it costs when
-         * it happens is that `fightIsRunning` and `Recovery.fightIsHere` both
-         * go quiet on a fight still running — one spent command, since being
-         * attacked breaks a rest and the next blow re-files the attacker.
-         * Against a deadlock nothing but a person can end, that is the cheaper
-         * error, and it is the same *correction that corrects itself* argument
-         * the experience line above makes.
-         */
-        const target =
-          s.combat.target !== null && answers(s.combat.target) ? null : s.combat.target;
-        // Something the server says is not there cannot be attacking this
-        // character either — the same cleanup a death does, for the same
-        // reason: a stale attacker is a corpse retaliation would swing at.
-        const attackers = s.combat.attackers.filter((name) => !answers(name));
-        if (
-          gone.length === 0 &&
-          target === s.combat.target &&
-          attackers.length === s.combat.attackers.length
-        ) {
-          return null;
-        }
-        return {
-          ...s,
-          room: {
-            ...s.room,
-            occupants: s.room.occupants.filter((who) => !names.has(mobKey(who.name)))
-          },
-          combat:
-            target === s.combat.target && attackers.length === s.combat.attackers.length
-              ? s.combat
-              : { ...s.combat, target, attackers, health: target === null ? null : s.combat.health }
-        };
+        this.fight.unanswered(aimed);
+        return this.nothingThere(s, aimed);
       }
 
       /* -------------------------------------------------------- combat */
@@ -6211,6 +6253,23 @@ export class CharacterTracker {
  * Only `held`: a blind character walks, a poisoned one walks, and arriving
  * somewhere says nothing about either.
  */
+/**
+ * The attack a command makes and the name it aims at, or null for anything
+ * else — a bare verb, and `bas <direction>`, which is a door and not a
+ * monster (see `observeCommand`).
+ */
+function attackIn(command: string): { verb: CommandName; aimed: string } | null {
+  const trimmed = command.trim();
+  const space = trimmed.indexOf(' ');
+  if (space < 0) return null;
+  const verb = commandOf(trimmed);
+  if (verb === null || !ATTACK_COMMANDS.has(verb)) return null;
+  const aimed = trimmed.slice(space + 1).trim();
+  if (aimed.length === 0) return null;
+  if (verb === 'Bash' && Object.hasOwn(MOVE_COMMANDS, aimed.toLowerCase())) return null;
+  return { verb, aimed };
+}
+
 function stoodUp(s: CharacterState): Afflictions {
   return s.afflictions.held === 'yes' ? { ...s.afflictions, held: 'no' } : s.afflictions;
 }

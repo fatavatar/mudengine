@@ -5593,3 +5593,110 @@ describe('stepping back the way the character came', () => {
     expect(manager!.stepBack(null)).toEqual({ refused: t('session.back.nothingBehind') });
   });
 });
+
+/*
+ * Healbot against three dark goblins, 2026-09-22
+ * (`2026-09-22_22-34-44_healbot.mudcap.jsonl`), played back a round at a time.
+ *
+ * Three things went wrong together. Attacks went out in bursts — one per
+ * goblin as each swung — because a heal ended the fight and nothing held
+ * hitting back to one attack at a time. The engagements that answered them
+ * bound nothing, so the character stood in a running fight with no target and
+ * did it again the next round. And when one of those attacks reached the
+ * server after its goblin had died, `You say "a short dark goblin"` retired
+ * the attack verb for the rest of the connection, and combat stopped.
+ */
+describe('the fight of 2026-09-22', () => {
+  const ROOM =
+    'Darkwood Forest\r\nAlso here: nasty dark goblin, dark goblin, short dark goblin.\r\n' +
+    'Obvious exits: north, west, southeast\r\n';
+  const ROUND =
+    'The nasty dark goblin smashes you for 11 damage!\r\n[HP=229/MA=214]:\r\n' +
+    'The dark goblin smashes you for 8 damage!\r\n[HP=221/MA=214]:\r\n' +
+    'The short dark goblin smashes you for 6 damage!\r\n[HP=215/MA=214]:\r\n';
+  const fighting = (): AutomationConfig => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+    onEnterRealm: [],
+    rules: [],
+    combat: { ...DEFAULT_CONFIG.automation.combat, enabled: true }
+  });
+  const wire = (socket: net.Socket): (() => string) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1');
+  };
+  const attacks = (seen: string): string[] => seen.match(/(^|\n)a [^\r]+/g) ?? [];
+
+  beforeEach(() => {
+    // A cooldown shorter than the gap between rounds, as the real one (4s)
+    // is shorter than the realm's (5s), so a round is always past it.
+    setTuning({
+      ...DEFAULT_INTERNAL.tuning,
+      combat: { ...DEFAULT_INTERNAL.tuning.combat, engageCooldownMs: 150 }
+    });
+  });
+
+  async function inTheForest(): Promise<{
+    socket: net.Socket;
+    seen: () => string;
+    notices: string[];
+  }> {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink, undefined, fighting());
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write(`[HP=240/MA=214]:\r\n${ROOM}[HP=240/MA=214]:\r\n`);
+    await until(() => manager!.character.room.occupants.length === 3);
+    return { socket, seen, notices };
+  }
+
+  it('hits back at one goblin, not at each as it swings', async () => {
+    const { socket, seen } = await inTheForest();
+    socket.write(ROUND);
+    await settled(215);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(attacks(seen())).toHaveLength(1);
+  });
+
+  it('keeps the target the engagement answered, and does not re-attack next round', async () => {
+    const { socket, seen } = await inTheForest();
+    socket.write(ROUND);
+    await until(() => attacks(seen()).length === 1);
+    socket.write('*Combat Engaged*\r\n[HP=215/MA=214]:\r\n');
+    await until(() => manager!.character.combat.target !== null);
+    // Past the cooldown, as the next round always is.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    socket.write(ROUND.replace(/HP=2(\d\d)/g, 'HP=1$1'));
+    await settled(115);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(attacks(seen())).toHaveLength(1);
+  });
+
+  it('goes on fighting after an attack on a goblin that has already died is said out loud', async () => {
+    const { socket, seen, notices } = await inTheForest();
+    socket.write(ROUND);
+    await until(() => attacks(seen()).length === 1);
+    socket.write('*Combat Engaged*\r\n[HP=215/MA=214]:\r\n');
+    await until(() => manager!.character.combat.target !== null);
+
+    // The short one dies; an attack on it was already on its way.
+    manager!.send('a short dark goblin\r');
+    socket.write(
+      'You critically whap short dark goblin for 23 damage!\r\n[HP=215/MA=214]:\r\n' +
+        'The dark goblin spits up blood and dies!\r\n[HP=215/MA=214]:\r\n' +
+        'You gain 735 experience.\r\n[HP=215/MA=214]:\r\n*Combat Off*\r\n[HP=215/MA=214]:\r\n' +
+        'You say "a short dark goblin"\r\n[HP=215/MA=214]:\r\n'
+    );
+    await until(() => !manager!.character.inCombat);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(notices.some((notice) => /has no .*command/.test(notice))).toBe(false);
+
+    // And the next goblin to swing is hit back.
+    const before = attacks(seen()).length;
+    socket.write('The nasty dark goblin smashes you for 7 damage!\r\n[HP=208/MA=214]:\r\n');
+    await until(() => attacks(seen()).length > before);
+  });
+});
