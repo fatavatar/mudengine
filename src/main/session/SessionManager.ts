@@ -147,6 +147,7 @@ import {
   commandOf,
   GREATERMUD_ONLY,
   opensStatScreen,
+  REREAD_ROOM,
   type CommandName
 } from '../../shared/commands';
 import { STATUS_LINE } from '../parse/patterns';
@@ -6722,6 +6723,19 @@ export class SessionManager {
       priority: 'emergency',
       coalesceKey: 'flee-goto',
       reason: t('session.safety.fleeGotoReason', { destination: goto.destination })
+    });
+    /*
+     * **And a bare Enter behind it.** `sys goto` moves the character without
+     * printing where it landed, so the room on screen — and on record — is
+     * still the one it fled from. One `REREAD_ROOM` in the same band, queued
+     * after, is answered once the server has run the goto: the room it
+     * reprints is the destination.
+     */
+    this.queue.enqueue({
+      command: REREAD_ROOM,
+      priority: 'emergency',
+      coalesceKey: 'flee-goto:look',
+      reason: t('session.safety.fleeGotoLookReason', { destination: goto.destination })
     });
   }
 

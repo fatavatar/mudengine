@@ -2756,6 +2756,11 @@ describe('fleeing outright', () => {
 
     await until(() => /(^|\n)sys goto sil\r\n/.test(seen()));
     expect(notices.some((notice) => /Fleeing to sil/.test(notice))).toBe(true);
+
+    // And a bare Enter once the goto is answered: `sys goto` prints no room of
+    // its own, only its prompt.
+    socket.write('[HP=15]:\r\n');
+    await until(() => /(^|\n)sys goto sil\r\n\r\n/.test(seen()));
   });
 
   it('never sends sys goto on a realm that has not answered sys status', async () => {

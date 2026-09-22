@@ -3892,6 +3892,7 @@ session:
     retreatUnplaced: 'Not retreating to {room}: the room never resolved after the move.'
     fleeGoto: 'Fleeing to {destination}.'
     fleeGotoReason: 'flee: sys goto {destination}'
+    fleeGotoLookReason: 'flee: showing the room at {destination}'
     fleeGaveUp: 'Not fleeing to {destination}: the fight never ended.'
     fleeDropped: 'Not fleeing to {destination}: you were killed, and the realm has moved you.'
     hangingUp: 'Hanging up: {why}. Penalty likely — {reasons}.'
