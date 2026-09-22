@@ -2886,6 +2886,96 @@ describe("answering the realm's messages", () => {
   });
 });
 
+describe("acting on the realm's messages", () => {
+  const acting: AutomationConfig = {
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+    onEnterRealm: [],
+    rules: []
+  };
+  const wire = (socket: net.Socket): (() => string) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1');
+  };
+
+  it('puts what a row starts onto the character, and takes it off at its ending', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(acting, DEFAULT_CONFIG.connection.login);
+    manager.configureMessages([
+      {
+        ...blankTrigger(),
+        name: 'net',
+        match: 'You are entangled in a net!',
+        endsWith: 'You work yourself free.',
+        effects: ['held'],
+        action: 'wait'
+      }
+    ]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('You are entangled in a net!\r\n');
+    await until(() => manager!.character.stated.length === 1);
+    expect(manager.character.afflictions.held).toBe('yes');
+    expect(manager.character.stated[0]).toMatchObject({ name: 'net', action: 'wait' });
+
+    socket.write('You work yourself free.\r\n');
+    await until(() => manager!.character.stated.length === 0);
+    expect(manager.character.afflictions.held).toBe('no');
+  });
+
+  it('ends the fight when a row says the realm has', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(acting, DEFAULT_CONFIG.connection.login);
+    manager.configureMessages([
+      {
+        ...blankTrigger(),
+        name: 'Rakshasha',
+        match: 'The illusion vanishes in a flash!',
+        effects: ['ends-combat']
+      }
+    ]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('Health: 100/100 [100%]\r\n');
+    // In the realm first: a message acts only on a character standing in it.
+    socket.write('[HP=100]:\r\n');
+    await settled(100);
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('The illusion vanishes in a flash!\r\n');
+    await until(() => !manager!.character.inCombat);
+  });
+
+  it('looks again, silently, when a row says to check who is here', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(acting, DEFAULT_CONFIG.connection.login);
+    manager.configureMessages([
+      {
+        ...blankTrigger(),
+        name: 'monster entry',
+        match: 'A skeleton arises from its place of rest',
+        action: 'look'
+      }
+    ]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('[HP=100]:\r\n');
+    await settled(100);
+    const before = seen().length;
+    socket.write('A skeleton arises from its place of rest.\r\n');
+    // A bare Enter: MajorMUD prints the room again, and says nothing to the room.
+    await until(() => /(^|\n)\r\n/.test(seen().slice(before)));
+  });
+});
+
 describe('the lap after an escape', () => {
   const escaping = (): AutomationConfig => ({
     ...DEFAULT_CONFIG.automation,

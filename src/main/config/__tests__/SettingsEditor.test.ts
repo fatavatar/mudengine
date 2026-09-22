@@ -1415,7 +1415,7 @@ describe('what the spell pickers are offered', () => {
           asked.push({ id, host: target.host, port: target.port });
           return {
             spellbook: [{ name: 'way of the swan', short: 'swan', targeting: 'self' as const }],
-            cureGates: { poison: true, blindness: false, disease: false }
+            cureGates: { poison: true, blindness: false, disease: false, freedom: false }
           };
         },
         realm: () => [{ name: 'minor healing', short: 'mihe', targeting: 'friendly' as const }]
@@ -1426,7 +1426,12 @@ describe('what the spell pickers are offered', () => {
     expect(found?.spellbook).toEqual([
       { name: 'way of the swan', short: 'swan', targeting: 'self' }
     ]);
-    expect(found?.cureGates).toEqual({ poison: true, blindness: false, disease: false });
+    expect(found?.cureGates).toEqual({
+      poison: true,
+      blindness: false,
+      disease: false,
+      freedom: false
+    });
     expect(snapshot.realmSpells).toEqual([
       { name: 'minor healing', short: 'mihe', targeting: 'friendly' }
     ]);

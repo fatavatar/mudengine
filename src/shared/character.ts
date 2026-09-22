@@ -26,6 +26,7 @@ import type { Direction, RoomCommand, WorldLair, WorldShop, WorldSpell } from '.
 import type { WoundBand } from './wounds';
 import { NO_PLAYERS, type PlayerRegistry } from './players';
 import { NO_TALLY, type CombatTally } from './tally';
+import type { MessageAction, MessageEffect } from './messageTriggers';
 
 /**
  * Where the session is in the login sequence.
@@ -86,6 +87,32 @@ export interface Afflictions {
    * a step that lands — see `stoodUp`.
    */
   held: Affliction;
+}
+
+/**
+ * Something a row of the realm's message table started and nothing has ended.
+ *
+ * **Beside the afflictions, not among them.** An affliction is what this
+ * client reads off the wire itself, three-state because nobody may have said;
+ * this is what the *player's* table says a sentence means (`MessageTriggers`,
+ * imported from MegaMUD's `Messages.md`), held until the row's own ending
+ * arrives. Where the two overlap — blind, poisoned, diseased, held — a row
+ * also sets the affliction, so every reader of those flags already answers
+ * it; the conditions the client had no word for (confused, losing hit points,
+ * unable to attack) live only here.
+ */
+export interface StatedEffect {
+  /** The row's name, for the player to recognise: `confusion`, `net`. */
+  name: string;
+  effects: readonly MessageEffect[];
+  /** What the row says to do about it while it lasts. */
+  action: MessageAction;
+  since: number;
+}
+
+/** Whether the realm's messages say this is on the character now. */
+export function isStated(state: Pick<CharacterState, 'stated'>, effect: MessageEffect): boolean {
+  return state.stated.some((entry) => entry.effects.includes(effect));
 }
 
 export const NO_AFFLICTIONS: Afflictions = {
@@ -1458,6 +1485,8 @@ export interface CharacterState {
   mortallyWounded: boolean;
   /** What the server has said is wrong with this character. See `Affliction`. */
   afflictions: Afflictions;
+  /** What the realm's message table says is on this character. See `StatedEffect`. */
+  stated: readonly StatedEffect[];
   /**
    * The duration spells the wire has confirmed on this character, newest last.
    *
@@ -1564,6 +1593,7 @@ export const EMPTY_CHARACTER: CharacterState = {
   party: NO_PARTY,
   stealth: 'unknown',
   afflictions: NO_AFFLICTIONS,
+  stated: [],
   buffs: [],
   spellbook: null,
   abilities: null,

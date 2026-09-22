@@ -205,7 +205,7 @@ export class LoopRunner {
    * see `afflictionHolding`. The walker holds the step *within* a leg on the
    * same predicate, so the two cannot disagree about whether to move.
    */
-  private afflicted: 'blind' | 'held' | 'poisoned' | null = null;
+  private afflicted: 'blind' | 'held' | 'poisoned' | 'condition' | null = null;
   /**
    * When the hold above began, whichever affliction it is for. Null otherwise.
    *
@@ -955,7 +955,7 @@ export class LoopRunner {
      * chip should say the thing that will still be true when the health is
      * back. The edge is published and said once each way.
      */
-    const affliction = afflictionHolding(state.afflictions, this.movement);
+    const affliction = afflictionHolding(state.afflictions, this.movement, state.stated);
     /* The bound, and why the lap takes one of its own — see `heldSince`. */
     const spent =
       this.heldSince !== null && this.now() - this.heldSince >= tuning().walk.heldFallbackMs;

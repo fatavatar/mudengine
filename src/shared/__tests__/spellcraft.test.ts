@@ -73,11 +73,22 @@ describe('cureGates', () => {
     expect(cureGates([curePoison, magicMissile])).toEqual({
       poison: true,
       blindness: false,
-      disease: true
+      disease: true,
+      freedom: false
     });
-    expect(cureGates([cureBlindness])).toEqual({ poison: false, blindness: true, disease: false });
+    expect(cureGates([cureBlindness])).toEqual({
+      poison: false,
+      blindness: true,
+      disease: false,
+      freedom: false
+    });
     // antidote's marks without the direct CurePoison row still say poison.
-    expect(cureGates([[[73, 19]]])).toEqual({ poison: true, blindness: false, disease: false });
+    expect(cureGates([[[73, 19]]])).toEqual({
+      poison: true,
+      blindness: false,
+      disease: false,
+      freedom: false
+    });
   });
 
   it('opens disease only through the negative gate — any RemovesSpell carrier', () => {
@@ -86,13 +97,24 @@ describe('cureGates', () => {
   });
 
   it('closes every gate on an empty book and opens them all for a spell the realm cannot name', () => {
-    expect(cureGates([])).toEqual({ poison: false, blindness: false, disease: false });
+    expect(cureGates([])).toEqual({
+      poison: false,
+      blindness: false,
+      disease: false,
+      freedom: false
+    });
     // One unnameable spell means the realm cannot say, and unknown never disables.
     expect(cureGates([magicMissile, undefined])).toEqual({
       poison: true,
       blindness: true,
-      disease: true
+      disease: true,
+      freedom: true
     });
+  });
+
+  it("opens freedom only on the realm's own Freedom mark (81)", () => {
+    expect(cureGates([[[81, 0]]]).freedom).toBe(true);
+    expect(cureGates([curePoison]).freedom).toBe(false);
   });
 });
 

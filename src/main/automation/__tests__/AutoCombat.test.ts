@@ -1649,7 +1649,7 @@ describe('casting in a fight', () => {
       healParty: false,
       invokeItems: false,
       minMana: 0.15,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoChoose: false
@@ -1678,7 +1678,7 @@ describe('casting in a fight', () => {
       healParty: false,
       invokeItems: false,
       minMana: 0,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoChoose: false
@@ -1709,7 +1709,7 @@ describe('casting in a fight', () => {
       healParty: false,
       invokeItems: false,
       minMana: 0.9,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoChoose: false
@@ -1739,7 +1739,7 @@ describe('casting in a fight', () => {
       healParty: false,
       invokeItems: false,
       minMana: 0.9,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoChoose: false
@@ -1777,7 +1777,7 @@ describe('casting in a fight', () => {
       healParty: false,
       invokeItems: false,
       minMana: 0,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoChoose: false
@@ -1821,7 +1821,7 @@ describe('casting in a fight', () => {
       healParty: false,
       invokeItems: false,
       minMana: 0.15,
-      cures: { blindness: '', poison: '', disease: '' },
+      cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoChoose: false,
@@ -2179,6 +2179,35 @@ describe('a typed break', () => {
     );
     drain();
     expect(sent).toEqual([]);
+  });
+
+  /*
+   * MegaMUD's *attack prevented*: a row of the realm's message table says the
+   * character cannot attack (too afraid, stunned), so every swing would be
+   * refused. Nothing is sent while it holds, and the fight resumes after.
+   */
+  it('attacks nothing while the realm says the character cannot', () => {
+    const auto = make(combat());
+    const slime = mob('large acid slime', 'hostile');
+    const here = { ...EMPTY_CHARACTER.room, occupants: [slime] };
+    const afraid = [
+      { name: 'terror', effects: ['no-attack' as const], action: 'none' as const, since: 0 }
+    ];
+
+    auto.onCharacter(
+      state({
+        room: here,
+        stated: afraid,
+        combat: { ...EMPTY_CHARACTER.combat, attackers: ['large acid slime'] }
+      })
+    );
+    drain();
+    expect(sent).toEqual([]);
+    expect(notices.some((m) => m.includes('cannot attack'))).toBe(true);
+
+    auto.onCharacter(state({ room: here, stated: [] }));
+    drain();
+    expect(sent).toEqual(['a large acid slime']);
   });
 
   it('ends the stand-down when the player attacks', () => {

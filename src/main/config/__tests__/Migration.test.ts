@@ -4205,6 +4205,56 @@ describe('waiting a condition out', () => {
 });
 
 /*
+ * The third condition wait (2026-09-22): confusion, which a realm's message
+ * table states. Ships off, so it is written in with its paragraph, beside the
+ * other two where they are stated.
+ */
+describe('waiting a confusion out', () => {
+  const profile = (): string => home.profile('vaelor').file;
+
+  beforeEach(() => {
+    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
+    migrate();
+    fs.mkdirSync(path.dirname(profile()), { recursive: true });
+  });
+
+  it('writes the key after walkWhilePoisoned, with the paragraph', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhilePoisoned: true\n    openDoors: true\n',
+      'utf8'
+    );
+    migrate();
+    const text = fs.readFileSync(profile(), 'utf8');
+    const movement = (parse(text)['automation'] as Record<string, unknown>)['movement'] as Record<
+      string,
+      unknown
+    >;
+    expect(movement['walkWhileConfused']).toBe(false);
+    expect(Object.keys(movement).indexOf('walkWhileConfused')).toBe(
+      Object.keys(movement).indexOf('walkWhilePoisoned') + 1
+    );
+    expect(text).toContain("MegaMUD's Ignore Confusion");
+    expect(said.some((m) => m.includes('Walking on while confused'))).toBe(true);
+  });
+
+  it('leaves a stated key alone and does not run twice', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileConfused: true\n',
+      'utf8'
+    );
+    migrate();
+    migrate();
+    const movement = (
+      parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>
+    )['movement'] as Record<string, unknown>;
+    expect(movement['walkWhileConfused']).toBe(true);
+    expect(said.filter((m) => m.includes('Walking on while confused'))).toHaveLength(0);
+  });
+});
+
+/*
  * The switch added on 2026-09-06 for the reported wall: a character standing on
  * sixty-six bone keys, told the door beside it needed a bone key. It ships on,
  * so a file that predates it behaves correctly and says nothing about it —

@@ -147,8 +147,7 @@ describe('effects', () => {
         name: 'confusion',
         effects: ['confused'],
         action: 'wait',
-        since: 5_000,
-        until: 'The effects of confusion wear off'
+        since: 5_000
       }
     ]);
     messages.onLine('The effects of confusion wear off!', false, false, 9_000);
@@ -202,5 +201,72 @@ describe('effects', () => {
       { at: 1_000, rule: 'Message: confusion', commands: ['Confused begins', 'rest'] },
       { at: 2_000, rule: 'Message: confusion', commands: ['Confused over'] }
     ]);
+  });
+});
+
+describe('what the session is told', () => {
+  let told: Array<{ held: string[]; started: string[]; ended: string[] }>;
+  let fired: string[];
+
+  beforeEach(() => {
+    told = [];
+    fired = [];
+    messages = new MessageTriggers(queue, () => 0, {
+      stated: (held, started, ended) =>
+        told.push({ held: held.map((entry) => entry.name), started, ended }),
+      fired: (trigger) => fired.push(trigger.name)
+    });
+  });
+
+  it('says when an effect starts and when it ends', () => {
+    messages.load([
+      row({
+        name: 'net',
+        match: 'You are entangled in a net!',
+        endsWith: 'You work yourself free.',
+        effects: ['held'],
+        action: 'wait'
+      })
+    ]);
+    messages.onLine('You are entangled in a net!', false, false);
+    messages.onLine('You are entangled in a net!', false, false);
+    messages.onLine('You work yourself free.', false, false);
+    expect(told).toEqual([
+      { held: ['net'], started: ['held'], ended: [] },
+      { held: [], started: [], ended: ['held'] }
+    ]);
+  });
+
+  it('hands every matched row over, a moment or not', () => {
+    messages.load([
+      row({ name: 'Afraid', match: 'You are too afraid to do that!', effects: ['action-failed'] }),
+      row({ name: 'monster entry', match: 'A skeleton arises', action: 'look' })
+    ]);
+    messages.onLine('You are too afraid to do that!', false, false);
+    messages.onLine('A skeleton arises from its place of rest', false, false);
+    expect(fired).toEqual(['Afraid', 'monster entry']);
+    // Neither lasts: a moment is not a state.
+    expect(told).toEqual([]);
+  });
+
+  it('holds a rest to full with no ending sentence, until it is released', () => {
+    messages.load([
+      row({ name: 'poison pool', match: 'You drink the foul water', action: 'rest-hp' })
+    ]);
+    messages.onLine('You drink the foul water.', false, false);
+    expect(messages.effects().map((entry) => entry.action)).toEqual(['rest-hp']);
+    expect(messages.release((entry) => entry.action === 'rest-mana')).toBe(false);
+    expect(messages.release((entry) => entry.action === 'rest-hp')).toBe(true);
+    expect(messages.effects()).toEqual([]);
+    expect(told.at(-1)).toEqual({ held: [], started: [], ended: [] });
+  });
+
+  it('says so when a death clears what was held', () => {
+    messages.load([
+      row({ match: 'You are confused', endsWith: 'wear off', effects: ['confused'], name: 'c' })
+    ]);
+    messages.onLine('You are confused', false, false);
+    messages.clearEffects();
+    expect(told.at(-1)).toEqual({ held: [], started: [], ended: ['confused'] });
   });
 });
