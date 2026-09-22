@@ -570,13 +570,16 @@ export class Expectations {
    * and routing the nudge through `observeCommand` would have fixed it by
    * breaking two other things.
    *
-   * They are one class **here** and not everywhere: the block answering a
-   * re-read still spends an armed teleport promise (`takeTeleport`, which any
-   * named room block takes before anything decides whose it is), and only
-   * `Walker.nudge` refuses to send behind a portal for that reason. Unchanged
-   * by this — an unattributed reprint spent it before too — and narrow, since
-   * the other three senders need a fight, an unplaceable arrival or 45s of
-   * silence to fire at all.
+   * A named room block used to spend an armed teleport promise (`takeTeleport`)
+   * before anything decided whose it was, and a re-read's own answer was no
+   * exception — so `Walker.nudge` refused to send behind a portal at all,
+   * rather than risk a premature reprint spending the promise before the real
+   * arrival could claim it. The `wasReread` guard beside `takeTeleport` in
+   * `CharacterTracker` closes that for every sender of a `reread`, not the
+   * nudge alone: auto-combat's refresh, its unplaceable-arrival read and the
+   * idle keep-alive were the same hazard and are the same fix, and the nudge
+   * can now send behind a portal because none of the four can answer for it
+   * any more.
    *
    * Not queued outside the realm: a menu answers an Enter with a menu.
    */

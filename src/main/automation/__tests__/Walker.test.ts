@@ -872,13 +872,15 @@ describe('stopping', () => {
     });
   });
 
-  it('never nudges behind a portal, which has no reprint discriminator', () => {
+  it('nudges behind a portal too, now that the reprint cannot spend the teleport promise', () => {
     /*
-     * `takeTeleport()` spends the promise unconditionally and only then
-     * decides whether to apply it, so a reprint of the room being left would
-     * throw away the coordinates the script stated — and the real arrival
-     * would then resolve by name alone, which across 293 rooms called Sewer
-     * Tunnel is the ambiguity this client refuses to guess at.
+     * `takeTeleport()` used to be spent by any room block carrying a name,
+     * before anything decided whose it was — so a reprint of the room being
+     * left would throw away the coordinates the script stated, and the real
+     * arrival would resolve by name alone, which across 293 rooms called
+     * Sewer Tunnel is the ambiguity this client refuses to guess at.
+     * `CharacterTracker`'s `wasReread` guard closes that (see its own tests),
+     * so a stalled portal step is forced exactly like every other step is.
      */
     const PORTAL: Route = {
       ...ROUTE,
@@ -887,9 +889,8 @@ describe('stopping', () => {
     walker.start(PORTAL, at(1, 1));
     expect(sent).toEqual(['go crimson portal']);
 
-    vi.advanceTimersByTime(3000);
-    // No Enter behind it; the step waits out its own deadline instead.
-    expect(sent).toEqual(['go crimson portal']);
+    vi.advanceTimersByTime(TUNING.walk.nudgeAfterMs + 1);
+    expect(sent).toEqual(['go crimson portal', NUDGE]);
     expect(walker.progress.status).toBe('walking');
   });
 

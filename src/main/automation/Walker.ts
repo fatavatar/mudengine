@@ -4423,23 +4423,17 @@ export class Walker {
    * moment the step confirms: a command not sent is cheaper than one correctly
    * accounted for.
    *
-   * What it still takes is the **teleport promise** — `takeTeleport()` is spent
-   * by any room block carrying a name, before anything decides whose it is —
-   * which is why the portal refusal below has not moved and must not.
+   * **Behind a portal too, now.** `takeTeleport()` used to be spent by any
+   * room block carrying a name, before anything decided whose it was — so a
+   * premature reprint of the room being left would throw away the coordinates
+   * a portal script stated, and the real arrival would resolve by name alone,
+   * which across 293 rooms called Sewer Tunnel is the ambiguity this client
+   * refuses to guess at. `CharacterTracker`'s `wasReread` guard beside
+   * `takeTeleport` closes that: a `reread`'s own answer — this nudge among
+   * four senders — can no longer be read as a teleport's landing, so nothing
+   * a stalled portal step forces out of the server costs it its coordinates.
    */
   private nudge(step: RouteStep, command: string): void {
-    /*
-     * **Never behind a portal.** A move's reprint is bounded on the other side
-     * too — `CharacterTracker` leaves a pending move alone when the block
-     * names the room already resolved and the move predicts a different one —
-     * and a *teleport* has no such discriminator: `takeTeleport()` spends the
-     * promise unconditionally and only then decides whether to apply it. So a
-     * reprint of the room being left would throw away the coordinates the
-     * script stated, and the real arrival would resolve by name alone — which
-     * across 293 rooms called Sewer Tunnel is the ambiguity this client
-     * refuses to guess at. One step waits out its full deadline instead.
-     */
-    if (step.direction === 'portal') return;
     this.queue.enqueue({
       command: REREAD_ROOM,
       priority: 'probe',

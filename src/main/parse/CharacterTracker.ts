@@ -3973,7 +3973,10 @@ export class CharacterTracker {
          * character from then on. Consumed here and then treated exactly as an
          * unattributed reprint, which is what it is.
          */
-        if (expectation?.kind === 'reread') {
+        // Kept past the shift below, for `takeTeleport`'s own guard further
+        // down — the one case `noteReread`'s own doc names as still open.
+        const wasReread = expectation?.kind === 'reread';
+        if (wasReread) {
           this.expect.shift();
           expectation = null;
         }
@@ -4044,6 +4047,43 @@ export class CharacterTracker {
              */
           }
         }
+        /*
+         * The guard above's own answer for a teleport, simpler because a
+         * portal's landing has no direction to look an exit up by — the realm
+         * data cannot say what room `dive pool` reaches, only the script that
+         * queued the promise can, so there is nothing here to ask the way the
+         * move guard asks its destination. The only fact available is the
+         * room's own name, and it is enough: a block naming the room already
+         * standing in — the character has not left yet — is not proof of
+         * arrival, however it was produced. `Walker.nudge` now sends behind a
+         * portal, exactly this reason, and a premature reprint of the room
+         * being left is the one shape that reason describes: named, and named
+         * *the same* as before the command went out.
+         *
+         * Left pending rather than consumed: the promise (`takeTeleport`,
+         * below) must not be spent on this block either, or the real arrival
+         * — whenever it comes — resolves by name alone, which is the
+         * "known location died of a courtesy" failure the move guard above
+         * already exists to prevent, for the one move that has no exit-based
+         * fallback to fall back on.
+         *
+         * **Never a cast exit's own landing claim.** `hintCast` pushes the
+         * identical shape — `{ kind: 'move', direction: null }` — for its
+         * *second* block, the one the draw resolves inside, and `landing` is
+         * the one field that tells the two apart. That claim is asked to be
+         * the room already standing in on purpose: the asylum's cells share
+         * names by design, and reading a same-name landing as "hasn't
+         * happened yet" would leave the character permanently one step behind
+         * where the spell actually put them.
+         */
+        const stillWaitingForPortal =
+          expectation?.kind === 'move' &&
+          expectation.direction === null &&
+          expectation.landing === undefined &&
+          room.name !== null &&
+          s.room.name !== null &&
+          room.name.trim().toLowerCase() === s.room.name.trim().toLowerCase();
+        if (stillWaitingForPortal) expectation = null;
         // The claim this block answers, kept: a cast exit's second block
         // carries the landing it has to be resolved inside (`hintCast`).
         const answered = expectation !== null ? this.expect.shift() : null;
@@ -4194,7 +4234,33 @@ export class CharacterTracker {
           return { ...s, room, stealth };
         }
 
-        const teleported = this.world && room.name ? this.expect.takeTeleport() : null;
+        /*
+         * **Never spent by a block already read as "nothing has happened
+         * yet."** `takeTeleport` takes the promise before anything else
+         * decides whose block this is, so both of the ways this block can
+         * already be known not to be the landing have to gate it too, or the
+         * real arrival — whenever it comes — falls back to name matching with
+         * nothing armed: the same "known location died of a courtesy" this
+         * file already tells once above for an ordinary move.
+         *
+         * - `stillWaitingForPortal`: a premature reprint of the room being
+         *   left, caught above by name alone because a portal's landing has
+         *   no exit to check it against.
+         * - `wasReread`: belt and suspenders for the one shape the name check
+         *   cannot cover — a `reread`'s own answer arriving once the move it
+         *   was queued behind has *already* been shifted some other way, with
+         *   nothing left here to compare its name to.
+         *
+         * Both trades are the one the `move` guard above already makes: a
+         * `reread` that turns out to be the genuine arrival loses the
+         * confident coordinate resolution and is read by name and exits
+         * instead, which is the reason `Walker.nudge` can send behind a
+         * portal at all now.
+         */
+        const teleported =
+          !wasReread && !stillWaitingForPortal && this.world && room.name
+            ? this.expect.takeTeleport()
+            : null;
         if (this.world && room.name && teleported !== null) {
           const there = this.world.byId(roomId(teleported.map, teleported.number));
           const said = teleported;
