@@ -2040,6 +2040,57 @@ export class WorldGraph {
    * placed nowhere, the rooms of whatever summons it are where to find it.
    */
   /**
+   * Where to hunt for an item: every room the realm spawns a monster that
+   * drops it in — or, for a dropper placed nowhere, whatever summons it
+   * (`summonersOf`) — nearest first, with the moves to each. Rooms the
+   * character cannot reach are left out.
+   *
+   * **The errand's list and the router's are this one list** (2026-09-23).
+   * The item errand swept outward to a radius and kept rooms whose occupants'
+   * names matched, while the router priced the fetch off the realm's own
+   * placements; from the Temple the orc warleader — an NPC in a bedroom, 53
+   * steps off — was a source to one and nowhere to the other, and the
+   * errand refused a way the panel had just offered.
+   */
+  dropperRooms(
+    item: number,
+    from: RoomId,
+    traveller: Traveller
+  ): Array<{ id: RoomId; name: string; mob: string; steps: number }> {
+    const places = this.dropperPlaces(item);
+    if (places.length === 0) return [];
+    const reach = this.sweepTo(from, new Set(places.map((place) => place.id)), traveller);
+    const found: Array<{ id: RoomId; name: string; mob: string; steps: number }> = [];
+    for (const place of places) {
+      const got = reach.get(place.id);
+      if (got === undefined) continue;
+      found.push({ ...place, steps: got.moves });
+    }
+    return found.sort((a, b) => a.steps - b.steps || a.id.localeCompare(b.id));
+  }
+
+  /** Every room a dropper of this item spawns in, summoners' included — `dropperRooms`. */
+  private dropperPlaces(item: number): Array<{ id: RoomId; name: string; mob: string }> {
+    const found = new Map<RoomId, { id: RoomId; name: string; mob: string }>();
+    const placeOf = (mob: WorldMob): void => {
+      for (const spawn of this.mobPlaces(mob, 64, 64)?.spawns ?? []) {
+        for (const room of spawn.rooms) {
+          const id = roomId(room.map, room.room);
+          if (!found.has(id)) found.set(id, { id, name: spawn.roomName, mob: mob.name });
+        }
+      }
+    };
+    for (const name of this.sourcesOf({ id: item }).mobs) {
+      const mob = this.mob(name);
+      if (mob === undefined) continue;
+      placeOf(mob);
+      // A dropper placed nowhere is found where whatever summons it lives.
+      for (const summoner of this.summonersOf(mob)) placeOf(summoner);
+    }
+    return [...found.values()];
+  }
+
+  /**
    * Where saying something gets this item — the half of *where does it come
    * from* that is neither a counter nor a lair.
    *
@@ -5615,18 +5666,7 @@ export class WorldGraph {
    */
   private nearestSource(item: number, from: RoomId, traveller: Traveller): number | null {
     const rooms = new Set<RoomId>(this.stockRooms(item).map((room) => roomId(room.map, room.room)));
-    const placeOf = (mob: WorldMob): void => {
-      for (const spawn of this.mobPlaces(mob, 64, 64)?.spawns ?? []) {
-        for (const room of spawn.rooms) rooms.add(roomId(room.map, room.room));
-      }
-    };
-    for (const name of this.sourcesOf({ id: item }).mobs) {
-      const mob = this.mob(name);
-      if (mob === undefined) continue;
-      placeOf(mob);
-      // A dropper placed nowhere is found where whatever summons it lives.
-      for (const summoner of this.summonersOf(mob)) placeOf(summoner);
-    }
+    for (const place of this.dropperPlaces(item)) rooms.add(place.id);
     // And where saying something gets it: a handover, or a summoning script.
     for (const ask of this.itemAsks(item)) rooms.add(ask.room);
     if (rooms.size === 0) return null;

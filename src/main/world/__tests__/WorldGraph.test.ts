@@ -3531,6 +3531,19 @@ describe('a way only a key opens', () => {
       expect(graph.summonersOf(graph.mob('slaver leader')!)).toEqual([]);
     });
 
+    /*
+     * The errand's own list, and the router's: the same rooms. The errand used
+     * to sweep outward to a radius for a lair whose name matched, and from
+     * the Temple the orc warleader's bedroom — an NPC, 53 steps off — never
+     * turned up: *the realm names nowhere this comes from* (2026-09-23).
+     */
+    it('lists where to hunt it, the summoner included, nearest first', () => {
+      const graph = castle();
+      expect(graph.dropperRooms(815, '1/1', lacking)).toEqual([
+        { id: '1/5', name: 'Slaver Camp', mob: 'slaver leader', steps: 1 }
+      ]);
+    });
+
     it('offers the key, fetched from where the summoner lives', () => {
       const route = castle().route('1/1', '1/2', lacking, { alternatives: true });
       expect(route.steps).toHaveLength(41);

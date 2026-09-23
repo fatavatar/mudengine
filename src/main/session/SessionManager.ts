@@ -70,7 +70,6 @@ import {
   OPPOSITE,
   asDirection,
   hazardAvoided,
-  mobKey,
   nameAnswersTo,
   newDemands,
   parseLair,
@@ -5428,34 +5427,17 @@ export class SessionManager {
       .filter(({ plan }) => !plan.blocked)
       .sort((a, b) => a.plan.steps.length - b.plan.steps.length)
       .map(({ ask }) => ({ room: ask.room, roomName: ask.roomName, say: ask.say }));
-    const { mobs } = world.sourcesOf(item);
-    if (mobs.length === 0) return { shops: ordered, lairs: [], asks };
-    const reach = world.withinSteps(here, tuning().hunting.betterSpotRadius, traveller);
     /*
-     * And whatever summons a dropper when it dies: the dying slaver leader
-     * lives in no room, and hunting the slaver leader is how it is found
-     * (`WorldGraph.summonersOf`, 2026-09-23).
+     * Where to hunt for it: the realm's own placements of every monster that
+     * drops it, and of whatever summons one placed nowhere — the same list the
+     * router priced the fetch by, so the errand cannot refuse a way the panel
+     * has just offered (`WorldGraph.dropperRooms`, 2026-09-23). A loop, not a
+     * march: the nearest few, as the Hunting card's ring is.
      */
-    const hunted = [...mobs];
-    for (const name of mobs) {
-      const mob = world.mob(name);
-      if (mob === undefined) continue;
-      for (const summoner of world.summonersOf(mob)) hunted.push(summoner.name);
-    }
-    const wanted = new Set(hunted.map((name) => mobKey(name)));
-    const lairs: Array<{ id: RoomId; name: string; mob: string; steps: number }> = [];
-    for (const [id, steps] of reach) {
-      const room = world.byId(id);
-      if (!room) continue;
-      const entities = room.lair ? world.lairEntities(room) : world.residentEntities(room);
-      const found = entities.find((entity) => wanted.has(mobKey(entity.name)));
-      if (found === undefined) continue;
-      lairs.push({ id, name: room.name, mob: found.name, steps });
-    }
-    lairs.sort((a, b) => a.steps - b.steps);
-    // A loop, not a march: the nearest few rooms that hold it, as the Hunting
-    // card's own ring is the nearest few rooms of one lair.
-    return { shops: ordered, lairs: lairs.slice(0, tuning().hunting.maxLoopRooms), asks };
+    const lairs = world
+      .dropperRooms(item.id, here, traveller)
+      .slice(0, tuning().hunting.maxLoopRooms);
+    return { shops: ordered, lairs, asks };
   }
 
   /**
