@@ -35,6 +35,21 @@ function carrying(...names: string[]): CharacterState {
   };
 }
 
+/** As a pack listing restates it — after any check the errand asked for. */
+function listed(state: CharacterState): CharacterState {
+  return { ...state, inventory: { ...state.inventory, listedAt: Number.MAX_SAFE_INTEGER } };
+}
+
+/**
+ * The counter is done with: the errand asks for the pack, and the listing
+ * answers holding `state`'s items. The purchase line alone moves nothing on.
+ */
+function counterDone(auto: ItemErrand, state: CharacterState): void {
+  buying = false;
+  auto.onCharacter(ready());
+  auto.onCharacter(listed(state));
+}
+
 const ROPE = { id: 191, name: 'rope and grapple' };
 const TALISMAN = { id: 570, name: 'amber talisman' };
 
@@ -169,7 +184,8 @@ describe('collecting what a route needs', () => {
     expect(walked).toHaveLength(0);
 
     // The pack holds it: the route the player asked for is walked.
-    auto.onCharacter(carrying());
+    counterDone(auto, carrying());
+    expect(packChecks).toBe(1);
     expect(walked).toEqual([OWED]);
     expect(decisions.at(-1)).toMatchObject({ action: 'collect', acted: true });
   });
@@ -209,7 +225,7 @@ describe('collecting what a route needs', () => {
     keptNames = ['black star key'];
     const auto = errand();
     auto.collect([KEY], OWED, ready());
-    auto.onCharacter(carrying());
+    counterDone(auto, carrying());
     expect(notices.some((line) => line.includes('stays'))).toBe(true);
   });
 
@@ -226,10 +242,62 @@ describe('collecting what a route needs', () => {
     sources = { shops: [counter()], lairs: [], asks: [] };
     const auto = errand();
     auto.collect([KEY], OWED, ready());
-    buying = false;
-    auto.onCharacter(ready());
+    counterDone(auto, ready());
     expect(walked).toHaveLength(0);
     expect(decisions.at(-1)).toMatchObject({ acted: false });
+  });
+
+  /*
+   * The reported failure (2026-09-23): `You just bought amber talisman for 6
+   * Krabby Patties, 44 platinum pieces, 80 gold crowns.` read as nothing, so
+   * the pack never held it and the way was never walked. The listing the
+   * errand asks for is what decides.
+   */
+  it('asks for the pack once the counter is done, and goes on what it lists', () => {
+    sources = { shops: [counter()], lairs: [], asks: [] };
+    const auto = errand();
+    auto.collect([TALISMAN], OWED, ready());
+    // Still at the counter: nothing asked yet.
+    auto.onCharacter(ready());
+    expect(packChecks).toBe(0);
+    // Done, and the pack as believed does not hold it: asked, not refused.
+    buying = false;
+    auto.onCharacter(ready());
+    expect(packChecks).toBe(1);
+    expect(auto.running).toBe(true);
+    auto.onCharacter(ready());
+    expect(auto.running).toBe(true);
+    // The listing holds it.
+    auto.onCharacter(listed(carrying('amber talisman')));
+    expect(walked).toEqual([OWED]);
+  });
+
+  /* Believed carried is not enough: the purchase line is checked by a listing. */
+  it('does not go on the purchase line alone', () => {
+    sources = { shops: [counter()], lairs: [], asks: [] };
+    const auto = errand();
+    auto.collect([TALISMAN], OWED, ready());
+    buying = false;
+    auto.onCharacter(carrying('amber talisman'));
+    expect(packChecks).toBe(1);
+    expect(walked).toHaveLength(0);
+    auto.onCharacter(listed(carrying('amber talisman')));
+    expect(walked).toEqual([OWED]);
+  });
+
+  /* A listing that never comes: after a check's spacing, the pack as believed. */
+  it('goes on the pack as believed when no listing answers', () => {
+    sources = { shops: [counter()], lairs: [], asks: [] };
+    let clock = 0;
+    const auto = errand({}, () => clock);
+    auto.collect([TALISMAN], OWED, ready());
+    buying = false;
+    auto.tick(ready());
+    auto.onCharacter(ready());
+    expect(packChecks).toBe(1);
+    clock += tuning().walk.errandPackCheckMs;
+    auto.tick(carrying('amber talisman'));
+    expect(walked).toEqual([OWED]);
   });
 
   /*
@@ -320,13 +388,11 @@ describe('collecting everything a route needs', () => {
     expect(auto.collect([KEY, ROPE, TALISMAN], OWED, ready())).toBeNull();
     expect(bought.map((row) => row.name)).toEqual(['black star key']);
 
-    buying = false;
-    auto.onCharacter(carrying('black star key'));
+    counterDone(auto, carrying('black star key'));
     expect(bought.map((row) => row.name)).toEqual(['black star key', 'rope and grapple']);
     expect(walked).toHaveLength(0);
 
-    buying = false;
-    auto.onCharacter(carrying('black star key', 'rope and grapple'));
+    counterDone(auto, carrying('black star key', 'rope and grapple'));
     expect(bought.map((row) => row.name)).toEqual([
       'black star key',
       'rope and grapple',
@@ -334,7 +400,7 @@ describe('collecting everything a route needs', () => {
     ]);
     expect(walked).toHaveLength(0);
 
-    auto.onCharacter(carrying('black star key', 'rope and grapple', 'amber talisman'));
+    counterDone(auto, carrying('black star key', 'rope and grapple', 'amber talisman'));
     expect(walked).toEqual([OWED]);
   });
 
@@ -343,7 +409,7 @@ describe('collecting everything a route needs', () => {
     const auto = errand();
     auto.collect([KEY, ROPE], OWED, carrying('black star key'));
     expect(bought.map((row) => row.name)).toEqual(['rope and grapple']);
-    auto.onCharacter(carrying('black star key', 'rope and grapple'));
+    counterDone(auto, carrying('black star key', 'rope and grapple'));
     expect(walked).toEqual([OWED]);
   });
 
@@ -364,8 +430,7 @@ describe('collecting everything a route needs', () => {
           : { shops: [], lairs: [], asks: [] }
     });
     auto.collect([KEY, ROPE], OWED, ready());
-    buying = false;
-    auto.onCharacter(carrying('black star key'));
+    counterDone(auto, carrying('black star key'));
     expect(walked).toHaveLength(0);
     expect(auto.running).toBe(false);
     expect(decisions.at(-1)).toMatchObject({ action: 'collect', acted: false });

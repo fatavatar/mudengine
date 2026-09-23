@@ -109,7 +109,11 @@ interface Wanted {
  */
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'buying'; item: Wanted; rest: Wanted[]; owes: Route }
+  /**
+   * At the counter, then — `checkedAt` set — waiting on the pack listing that
+   * says whether the purchase is really carried.
+   */
+  | { kind: 'buying'; item: Wanted; rest: Wanted[]; owes: Route; checkedAt: number | null }
   | { kind: 'hunting'; item: Wanted; rest: Wanted[]; owes: Route; mob: string }
   /**
    * Going to say something for it: walking to `place`, then — `saidAt` set —
@@ -217,7 +221,7 @@ export class ItemErrand {
       };
       const refused = this.planner.buy(row);
       if (refused !== null) return this.refuse(item, refused);
-      this.phase = { kind: 'buying', item, rest, owes };
+      this.phase = { kind: 'buying', item, rest, owes, checkedAt: null };
       /*
        * Two literal calls rather than one sentence with a figure that is
        * sometimes zero: *0 steps off the way* is a number where the reader
@@ -308,7 +312,10 @@ export class ItemErrand {
    * up, by time.
    */
   tick(state: CharacterState): void {
-    if (this.phase.kind === 'asking' && this.phase.saidAt !== null) this.onCharacter(state);
+    const waiting =
+      (this.phase.kind === 'asking' && this.phase.saidAt !== null) ||
+      (this.phase.kind === 'buying' && this.phase.checkedAt !== null);
+    if (waiting) this.onCharacter(state);
   }
 
   /** Every state change: has the pack got it yet? */
@@ -339,22 +346,16 @@ export class ItemErrand {
       this.phase = { ...this.phase, why: refused };
       return;
     }
+    if (this.phase.kind === 'buying') {
+      this.onBuying(this.phase, state);
+      return;
+    }
     if (carriedCount(state, item.name) > 0) {
       this.deliver(item, owes, state);
       return;
     }
     if (this.phase.kind === 'asking') {
       this.onAsking(this.phase);
-      return;
-    }
-    /*
-     * The shopping errand gave up — unsold, too dear, no route. It has already
-     * said why in its own words, so this says only that the route is not being
-     * walked, which is the fact the player is waiting on.
-     */
-    if (this.phase.kind === 'buying' && !this.planner.buying()) {
-      this.phase = { kind: 'idle' };
-      this.refuse(item, t('automation.collect.refusalNotBought', { item: item.name }));
       return;
     }
     // And the lap stopping means the fights are over one way or another.
@@ -419,6 +420,37 @@ export class ItemErrand {
       until: this.now() + tuning().walk.errandHandoverMs,
       why: refused
     };
+  }
+
+  /**
+   * The counter is done with: ask the pack, and go on by what it lists.
+   *
+   * **The listing decides, not the purchase line.** The line is read where it
+   * can be, but a realm words it as it likes — `for 6 Krabby Patties, 44
+   * platinum pieces, 80 gold crowns.` matched nothing, so the amber talisman
+   * bought for the way to the Dark-Elf Castle never read as carried and the
+   * way was never walked (reported 2026-09-23). A shopping errand that gave
+   * up — unsold, too dear, no route — is asked about the same way: it has
+   * said why in its own words, and the pack is what says whether it matters.
+   */
+  private onBuying(phase: Extract<Phase, { kind: 'buying' }>, state: CharacterState): void {
+    const { item, owes } = phase;
+    if (this.planner.buying()) return;
+    if (phase.checkedAt === null) {
+      this.planner.checkPack();
+      this.phase = { ...phase, checkedAt: this.now() };
+      return;
+    }
+    const listed = state.inventory.listedAt !== null && state.inventory.listedAt > phase.checkedAt;
+    // No listing yet: wait for one, up to a check's spacing, then go on what
+    // the pack is believed to hold.
+    if (!listed && this.now() - phase.checkedAt < tuning().walk.errandPackCheckMs) return;
+    if (carriedCount(state, item.name) > 0) {
+      this.deliver(item, owes, state);
+      return;
+    }
+    this.phase = { kind: 'idle' };
+    this.refuse(item, t('automation.collect.refusalNotBought', { item: item.name }));
   }
 
   /**
