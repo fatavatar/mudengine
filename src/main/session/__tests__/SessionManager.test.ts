@@ -4829,12 +4829,19 @@ describe('a corridor the server refused', () => {
     socket.write('Health: 100/100 [100%]\r\n');
     socket.write('Location:            1,1\r\nStone Hallway\r\nObvious exits: south\r\n');
     await until(() => manager!.character.room.number === 1);
+    let wire = '';
+    socket.on('data', (chunk) => (wire += chunk.toString('latin1')));
 
     const route = world.route('1/1', '1/2');
     expect(route.steps).toHaveLength(1);
     expect(manager!.walker.start(route, manager!.character)).toBeNull();
+    await until(() => wire.includes('n\r\n'));
 
-    socket.write('There is no exit in that direction!\r\n');
+    socket.write('There is no exit in that direction!\r\n[HP=100]:');
+    // The walker looks at the room before blaming anything — one bare Enter —
+    // and the reprint places the character where the step began.
+    await until(() => wire.endsWith('n\r\n\r\n'));
+    socket.write('Stone Hallway\r\nObvious exits: south\r\n');
     /*
      * **Shut, not invented.** The realm data records this exit as hidden, so
      * the refusal is the data being right; the other sentence would accuse it

@@ -486,6 +486,20 @@ export class Walker {
    */
   private askedWhereAt: number | null = null;
   /**
+   * A `There is no exit in that direction!` being checked against the room
+   * before anything is blamed for it — see `checkWhereFirst`.
+   *
+   * `stage` is what has been asked: the bare Enter first, then the realm's
+   * locate word where the reprint could not place the character. `answered`
+   * is whether a room has printed since the Enter, which is the only thing
+   * that makes the room on screen evidence rather than the belief the step
+   * was refused from. `checked` is that this step has already been checked
+   * once, so a second refusal from a room just confirmed is believed.
+   */
+  private checking: { step: RouteStep; stage: 'reread' | 'locate'; answered: boolean } | null =
+    null;
+  private checked = false;
+  /**
    * When the step now outstanding reached the wire, or null.
    *
    * One end of the only measurement this walker takes — see `noteAnswered`.
@@ -1168,6 +1182,7 @@ export class Walker {
   stop(reason: string, quiet = false): void {
     if (this.status !== 'walking') return;
     this.clearTimer();
+    this.checking = null;
     // The outstanding step is not going to be answered as this step any more,
     // so the clock it was being timed against goes with it. See `answers`.
     this.stepSentAt = null;
@@ -1325,6 +1340,10 @@ export class Walker {
       this.stop(t('automation.walk.reasonDied'));
       return;
     }
+
+    // A room printed after the check's Enter: what is on screen is now the
+    // server's word rather than the client's belief. See `checkWhereFirst`.
+    if (this.checking !== null && block.type === 'room-exits') this.checking.answered = true;
 
     /*
      * Every rung below answers the step in flight by **sending another
@@ -1513,6 +1532,12 @@ export class Walker {
        */
       if (this.fetchLever(step)) return;
       /*
+       * And before anything is blamed, the room is looked at: the refusal is
+       * as often the client standing somewhere other than it thinks. See
+       * `checkWhereFirst`.
+       */
+      if (this.checkWhereFirst(step)) return;
+      /*
        * **What is written down is which of the two the refusal was**, because
        * the sentences are not interchangeable and the wrong one was being
        * said. `The realm data promised an exit n that the realm refuses` is
@@ -1527,6 +1552,122 @@ export class Walker {
       }
     }
     this.stopRefused(step, barrier);
+  }
+
+  /**
+   * Looks at the room before believing `There is no exit in that direction!`.
+   * Returns whether it asked, so the refusal waits for the answer.
+   *
+   * Reported 2026-09-23 with the whole lap in it: a move whose answer went
+   * unread left the client a room behind the character, and from then on
+   * every step went out from the room it had left. Each was refused, each
+   * refusal wrote a real corridor off for the session (*the realm data
+   * promised an exit se that the realm refuses*), and the loop, then the goto
+   * planned from the same wrong room, walked into the same wall. The sentence
+   * cannot tell *the map is wrong* from *you are not where you think*, and
+   * only the second is fixed by looking.
+   *
+   * So: one bare Enter, which reprints the room (`REREAD_ROOM`, the nudge's
+   * key — both ask the server to say where this is). If the reprint places
+   * the character where the step began, the wall is real and is blamed as it
+   * always was; if somewhere else, the journey is planned again from there;
+   * and if it cannot place it at all, the realm's locate word is asked
+   * (`WalkerEvents.locate` — `sys status` or `rm`). Nothing is blamed on
+   * anything short of the room confirmed. Once per step: a second refusal
+   * from a room just confirmed is believed.
+   */
+  private checkWhereFirst(step: RouteStep): boolean {
+    if (this.checked) return false;
+    this.checked = true;
+    this.checking = { step, stage: 'reread', answered: false };
+    this.queue.enqueue({
+      command: REREAD_ROOM,
+      priority: 'probe',
+      coalesceKey: NUDGE_KEY,
+      reason: t('automation.walk.reasonCheckingRoom', { command: step.command })
+    });
+    this.armCheckDeadline();
+    return true;
+  }
+
+  /**
+   * The check's answer: the room the character is actually in, or an ask for
+   * one. Called on every state change while a check is out.
+   */
+  private settleCheck(state: CharacterState): void {
+    const check = this.checking;
+    if (check === null) return;
+    const here = locate(state);
+    if (check.stage === 'reread') {
+      // Nothing has printed since the Enter: the room on screen is still the
+      // belief the step was refused from, which is the thing being checked.
+      if (!check.answered) return;
+      if (here === null) {
+        this.askWhereForCheck(check);
+        return;
+      }
+    } else if (here === null) {
+      // The locate word answers with coordinates rather than a room block,
+      // so it is waited for here; the deadline bounds the wait.
+      return;
+    }
+    this.checking = null;
+    this.clearTimer();
+    if (here === check.step.from) {
+      this.blameAndStop(check.step);
+      return;
+    }
+    if (!this.quiet) {
+      this.events.notice?.(
+        t('automation.walk.checkedElsewhere', {
+          command: check.step.command,
+          roomName: state.room.name ?? here
+        })
+      );
+    }
+    this.replanFrom(state, here!);
+  }
+
+  /** The reprint could not place the character: ask the realm, or stop lost. */
+  private askWhereForCheck(check: NonNullable<Walker['checking']>): void {
+    if (this.events.locate === undefined) {
+      this.checking = null;
+      this.stop(t('automation.walk.reasonAmbiguous'));
+      return;
+    }
+    check.stage = 'locate';
+    this.events.locate();
+    this.armCheckDeadline();
+  }
+
+  /**
+   * A bound under the check, because nothing here can make the server
+   * answer. A reprint that never comes goes on to the locate word; a locate
+   * that never places the character stops the walk as lost — never blaming
+   * the map for a room nobody could confirm.
+   */
+  private armCheckDeadline(): void {
+    this.clearTimer();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const check = this.checking;
+      if (check === null || this.status !== 'walking') return;
+      if (check.stage === 'reread') {
+        this.askWhereForCheck(check);
+        return;
+      }
+      this.checking = null;
+      this.stop(t('automation.walk.reasonAmbiguous'));
+    }, this.config.walk.stepTimeoutMs);
+    this.timer.unref?.();
+  }
+
+  /** The wall is real: written down as the kind of refusal it was, and the walk ends. */
+  private blameAndStop(step: RouteStep): void {
+    if (this.blameable(step)) {
+      this.events.refused?.(step.from, step.direction, this.shutRatherThanMissing(step));
+    }
+    this.stopRefused(step, undefined);
   }
 
   /**
@@ -2815,6 +2956,8 @@ export class Walker {
     this.found = false;
     this.levered = 0;
     this.forcing = null;
+    this.checking = null;
+    this.checked = false;
   }
 
   /**
@@ -2918,6 +3061,13 @@ export class Walker {
       return;
     }
 
+    // A refusal being checked against the room waits for its answer before
+    // anything reads the room as the step landing or not.
+    if (this.checking !== null) {
+      this.settleCheck(state);
+      return;
+    }
+
     const step = this.route.steps[this.index];
     if (!step) return;
 
@@ -2948,6 +3098,9 @@ export class Walker {
        */
       if (this.askWhereAfterDraw(state)) return;
       if (state.room.ambiguous > 1) {
+        // One `sys status` / `rm` settles what the name and exits cannot —
+        // see `askWhereLanded`. Stopped only where there is nothing to ask.
+        if (this.askWhereLanded(state)) return;
         this.stop(t('automation.walk.reasonAmbiguous'));
         return;
       }
@@ -3022,7 +3175,32 @@ export class Walker {
     }
 
     if (here !== step.to) {
-      this.stop(t('automation.walk.reasonWrongRoom', { roomName: state.room.name ?? here }));
+      /*
+       * Somewhere the step does not lead. Believed only once the realm has
+       * stated it — a failed `jump north` drops the character on the street
+       * below, and a name-and-exits guess among namesakes is not a room to
+       * plan from — and then the journey goes on from there, as it does after
+       * a fight moved the character. See `askWhereLanded`.
+       */
+      if (state.room.resolvedBy !== 'coordinates') {
+        if (this.askWhereLanded(state)) return;
+        this.stop(t('automation.walk.reasonWrongRoom', { roomName: state.room.name ?? here }));
+        return;
+      }
+      this.clearTimer();
+      this.noteAnswered();
+      this.forgetNudge();
+      this.stepSent = false;
+      this.onsetAnsweredStep = null;
+      if (!this.quiet) {
+        this.events.notice?.(
+          t('automation.walk.landedElsewhere', {
+            command: step.command,
+            roomName: state.room.name ?? here
+          })
+        );
+      }
+      this.replanFrom(state, here);
       return;
     }
 
@@ -3505,12 +3683,22 @@ export class Walker {
       this.carryOn(state);
       return;
     }
+    this.replanFrom(state, here);
+  }
 
+  /**
+   * The journey planned again from where the character actually is — after a
+   * fight moved it, or a refusal turned out to be the client standing
+   * somewhere other than it believed (`settleCheck`).
+   */
+  private replanFrom(state: CharacterState, here: RoomId): void {
+    const route = this.route;
+    if (route === null) return;
     const destination = route.steps.at(-1)!;
     const replanned = this.events.replan?.(destination.to);
     if (replanned === undefined) {
-      // Nobody can plan for this walker, so a character that moved during the
-      // fight is exactly the off-path case it has always stopped for.
+      // Nobody can plan for this walker, so a character somewhere off the
+      // plan is exactly the off-path case it has always stopped for.
       this.stop(t('automation.walk.reasonWrongRoom', { roomName: state.room.name ?? here }));
       return;
     }
@@ -3524,9 +3712,9 @@ export class Walker {
     }
     if (replanned.steps.length === 0) {
       /*
-       * The fight ended in the room the route was heading for — chased into
-       * it, or the last step landed and its answer arrived among the combat
-       * lines. The journey is over, and it is over the way it was asked for.
+       * Already in the room the route was heading for — chased into it by a
+       * fight, or the last step landed and its answer went unread. The
+       * journey is over, and it is over the way it was asked for.
        */
       this.clearTimer();
       this.hold = null;
@@ -3576,6 +3764,50 @@ export class Walker {
         t('automation.walk.scatteredUnplaced', { spellName: step.scatter.landing.name })
       );
     }
+    return true;
+  }
+
+  /**
+   * One ask of the realm for where a step put the character, when the room it
+   * printed cannot say — once per step, and waited for.
+   *
+   * Reported 2026-09-23: `jump north` off a Building Rooftop failed, dropped
+   * the character on the street below, and the reprint read `Slum Street`,
+   * exits east and west — thirty-eight rooms. The walk stopped as lost when
+   * one `sys status` would have placed it. `askWhereAfterDraw` already asked
+   * this for a spell's draw; a step that lands somewhere the plan did not say
+   * is the same question for any other reason, so it gets the same command.
+   *
+   * Bounded by its own deadline rather than the step's, which timed a move
+   * that has been answered: an answer that never places the character stops
+   * the walk as lost, which is what it said before, one command later.
+   */
+  private askWhereLanded(state: CharacterState): boolean {
+    if (this.route === null || this.events.locate === undefined) return false;
+    if (this.askedWhereAt !== null) return true;
+    this.askedWhereAt = Date.now();
+    this.events.locate();
+    if (!this.quiet) {
+      this.events.notice?.(t('automation.walk.askingWhere', { roomName: state.room.name ?? '?' }));
+    }
+    this.clearTimer();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.status !== 'walking') return;
+      const now = this.events.stateNow?.();
+      const here = now === undefined ? null : locate(now);
+      if (here === null) {
+        this.stop(t('automation.walk.reasonAmbiguous'));
+        return;
+      }
+      // Placed, and still where the step began: the step went nowhere, and
+      // nothing else is timing it any more.
+      const step = this.route?.steps[this.index];
+      if (step !== undefined && here === step.from) {
+        this.stop(t('automation.walk.reasonRefused', { command: step.command }));
+      }
+    }, this.config.walk.stepTimeoutMs);
+    this.timer.unref?.();
     return true;
   }
 

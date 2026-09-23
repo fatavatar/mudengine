@@ -138,9 +138,31 @@ const ANSI = /\x1B\[[0-9;?]*[\x40-\x7E]|\x1B[\x30-\x7E]/g;
 // Compiled once, like `ANSI`: `plainText` runs on every line the server prints.
 const LINE_END = /\r?\n$/;
 const TRAILING_CR = /\r$/;
+/** A character and the backspace that takes it back, never across a line. */
+const OVERSTRUCK = /[^\x08\r\n]\x08/g;
+const BACKSPACE = /\x08/g;
 
+/**
+ * Strips ANSI escape sequences (`ANSI`, above) and applies backspaces as the
+ * terminal does, so the parser reads what the player sees.
+ *
+ * Some servers scramble their text with a junk letter and a backspace inside a
+ * word — bbs.thelucks.org sends `Obvious exits: nE\borthwest, sT\bouthwest`
+ * on every room (2026-09-21 onwards). The terminal overstrikes the letter and
+ * shows `northwest`; read byte for byte it was `nE`, and every room's exits
+ * were one junk word, so no arrival could be checked against the room the
+ * move was meant to reach. Repeated because a run of backspaces takes back a
+ * run of characters, one per pass; a backspace with nothing before it on the
+ * line has nothing to erase and is dropped.
+ */
 export function stripAnsi(text: string): string {
-  return text.replace(ANSI, '');
+  let plain = text.replace(ANSI, '');
+  if (!plain.includes('\x08')) return plain;
+  for (let was = ''; was !== plain;) {
+    was = plain;
+    plain = plain.replace(OVERSTRUCK, '');
+  }
+  return plain.replace(BACKSPACE, '');
 }
 
 /**

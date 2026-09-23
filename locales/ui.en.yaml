@@ -4517,6 +4517,8 @@ automation:
       '{spellName} dropped you somewhere the room name and its exits cannot tell apart; asking the
       realm where that is.'
     healthResumed: Health is back; walking on.
+    askingWhere: '{roomName} could be one of several rooms; asking the realm where this is.'
+    landedElsewhere: '{command} put you in {roomName}, not where the route said; planning again from here.'
     trapHolding:
       'The way into {stepName} is a trap of up to {damage} damage; resting here to {needed} HP
       (now {hp}) before taking it.'
@@ -4546,6 +4548,7 @@ automation:
       The way to {stepName} needs levers in {roomCount} different rooms and the realm does not say
       in which order. Pull them by hand and the way opens.
     reasonAmbiguous: I can no longer tell which room you are in
+    checkedElsewhere: "The game refused {command} because you are in {roomName}, not where the route thought — planning again from here."
     reasonBarrier: '{barrier} blocked {command}. {detail}'
     reasonBashing: bashing the {barrier} to {stepName}
     reasonCombat: a fight started
@@ -4557,6 +4560,7 @@ automation:
     reasonNotQueued: the client refused to send {command}
     reasonNotSent: '{command} never left the client'
     reasonNudge: forcing an answer after {command}
+    reasonCheckingRoom: "reading the room again: the game refused {command}, and that may mean you are not where the route thinks"
     reasonOpening: opening the {barrier} to {stepName}
     reasonPicking: picking the {barrier} to {stepName}
     reasonPlayerTookOver: you moved the character yourself

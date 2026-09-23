@@ -107,6 +107,16 @@ const block = (type: string, groups: Record<string, string> = {}): Block =>
     at: 0
   }) as unknown as Block;
 
+/**
+ * The reprint that answers the walker's own look at the room after `There is
+ * no exit in that direction!` — placing the character where the step began,
+ * so the wall is believed. See `Walker.checkWhereFirst`.
+ */
+function confirmRoom(walk: Walker, state: CharacterState): void {
+  walk.onBlock(block('room-exits'));
+  walk.onCharacter(state);
+}
+
 let sent: string[];
 let notices: string[];
 let queue: CommandQueue;
@@ -588,6 +598,7 @@ describe('stopping', () => {
     // a shut door is shut until something opens it.
     walker.start(ROUTE, at(1, 1));
     walker.onBlock(block('direction-failed'));
+    confirmRoom(walker, at(1, 1));
 
     expect(walker.progress.status).toBe('stopped');
     expect(walker.progress.reason).toMatch(/refused/i);
@@ -1141,9 +1152,10 @@ describe('a door in the way', () => {
     const open = withMovement({ openDoors: true, openTries: 1 });
     open.start(ROUTE, at(1, 1));
     open.onBlock(block('direction-failed'));
+    confirmRoom(open, at(1, 1));
 
     expect(open.progress.status).toBe('stopped');
-    expect(sent).toEqual(['e']);
+    expect(moves(sent)).toEqual(['e']);
     open.dispose();
   });
 
@@ -1657,8 +1669,13 @@ describe('a locked barrier in the way', () => {
     walk.start(gated(door({ pickDifficulty: 0, bashDifficulty: 0 })), skilled(200, 200));
     // `There is no exit in that direction!` — no barrier captured.
     walk.onBlock(block('direction-failed'));
+    vi.advanceTimersByTime(200);
+    // It looks at the room before believing the wall, and nothing else.
+    expect(sent).toEqual(['e', NUDGE]);
+    walk.onBlock(block('room-exits'));
+    walk.onCharacter(skilled(200, 200));
 
-    expect(sent).toEqual(['e']);
+    expect(moves(sent)).toEqual(['e']);
     expect(walk.progress.status).toBe('stopped');
     walk.dispose();
   });
@@ -1677,6 +1694,198 @@ describe('a locked barrier in the way', () => {
 
     expect(sent).toEqual(['e']);
     expect(walk.progress.status).toBe('walking');
+    walk.dispose();
+  });
+});
+
+/*
+ * `There is no exit in that direction!` is as often the client being lost as
+ * the map being wrong (2026-09-23): a move whose answer went unread left the
+ * client a room behind, and every step after it was refused from the wrong
+ * room — each refusal writing a real corridor off for the session. So the room
+ * is looked at before anything is blamed: one bare Enter, and where that still
+ * cannot place the character, the realm's locate word.
+ */
+describe('checking where it is before blaming the map', () => {
+  const REPLANNED: Route = {
+    cost: 1,
+    blocked: false,
+    steps: [
+      {
+        from: '1/5',
+        to: '1/3',
+        direction: 'n',
+        command: 'n',
+        name: 'Third Room',
+        requirement: null,
+        dark: false
+      }
+    ]
+  };
+
+  const checking = (over: Partial<WalkerEvents> = {}) => {
+    const refused: string[] = [];
+    const located: number[] = [];
+    const walk = new Walker(config, queue, {
+      notice: (m) => notices.push(m),
+      refused: (from, direction) => refused.push(`${from}|${direction}`),
+      replan: () => REPLANNED,
+      locate: () => located.push(1),
+      ...over
+    });
+    walk.start(ROUTE, at(1, 1));
+    vi.advanceTimersByTime(200);
+    walk.onBlock(block('direction-failed'));
+    vi.advanceTimersByTime(200);
+    return { walk, refused, located };
+  };
+
+  it('re-reads the room before writing the exit off', () => {
+    const { walk, refused } = checking();
+    expect(sent).toEqual(['e', NUDGE]);
+    expect(walk.progress.status).toBe('walking');
+    expect(refused).toEqual([]);
+
+    // The reprint puts the character where the plan said: the wall is real.
+    walk.onBlock(block('room-exits'));
+    walk.onCharacter(at(1, 1));
+    expect(refused).toEqual(['1/1|e']);
+    expect(walk.progress.status).toBe('stopped');
+    walk.dispose();
+  });
+
+  it('plans again from the room it turns out to be in, blaming nothing', () => {
+    const { walk, refused } = checking();
+    walk.onBlock(block('room-exits'));
+    walk.onCharacter(at(1, 5));
+    vi.advanceTimersByTime(200);
+
+    expect(refused).toEqual([]);
+    expect(moves(sent)).toEqual(['e', 'n']);
+    expect(walk.progress.status).toBe('walking');
+    walk.dispose();
+  });
+
+  it('asks where it is when the reprint cannot place it', () => {
+    const { walk, refused, located } = checking();
+    walk.onBlock(block('room-exits'));
+    walk.onCharacter(at(null, null, { room: { ambiguous: 4 } as CharacterState['room'] }));
+    expect(located).toEqual([1]);
+    expect(walk.progress.status).toBe('walking');
+
+    // `sys status` answers with coordinates, not a room block.
+    walk.onCharacter(at(1, 5));
+    vi.advanceTimersByTime(200);
+    expect(refused).toEqual([]);
+    expect(moves(sent)).toEqual(['e', 'n']);
+    walk.dispose();
+  });
+
+  it('stops without blaming anything when nothing can say where it is', () => {
+    const { walk, refused } = checking({ locate: undefined });
+    walk.onBlock(block('room-exits'));
+    walk.onCharacter(at(null, null));
+    expect(refused).toEqual([]);
+    expect(walk.progress.status).toBe('stopped');
+    walk.dispose();
+  });
+
+  it('does not wait for ever on a reprint that never comes', () => {
+    const { walk, refused, located } = checking({ locate: undefined });
+    vi.advanceTimersByTime(config.walk.stepTimeoutMs + 100);
+    expect(located).toEqual([]);
+    expect(refused).toEqual([]);
+    expect(walk.progress.status).toBe('stopped');
+    walk.dispose();
+  });
+});
+
+/*
+ * A step that lands somewhere the plan did not say (2026-09-23): `jump north`
+ * off a Building Rooftop answered `Unfortunately, you do not make it, and
+ * plummet to the street below!`, and the reprint read `Slum Street`, exits
+ * east and west — thirty-eight rooms in the realm. The walk stopped saying it
+ * could no longer tell where the character was, when one `sys status` would
+ * have told it, and the way on could have been planned from there.
+ */
+describe('a step that lands somewhere else', () => {
+  const REPLANNED: Route = {
+    cost: 1,
+    blocked: false,
+    steps: [
+      {
+        from: '1/1107',
+        to: '1/3',
+        direction: 'e',
+        command: 'e',
+        name: 'Third Room',
+        requirement: null,
+        dark: false
+      }
+    ]
+  };
+  const street = (resolvedBy: CharacterState['room']['resolvedBy']): CharacterState =>
+    at(1, 1107, { room: { name: 'Slum Street', resolvedBy } as CharacterState['room'] });
+  const unplaced = (): CharacterState =>
+    at(null, null, { room: { name: 'Slum Street', ambiguous: 38 } as CharacterState['room'] });
+
+  const walking = (over: Partial<WalkerEvents> = {}) => {
+    const located: number[] = [];
+    const walk = new Walker(config, queue, {
+      notice: (m) => notices.push(m),
+      replan: () => REPLANNED,
+      locate: () => located.push(1),
+      ...over
+    });
+    walk.start(ROUTE, at(1, 1));
+    vi.advanceTimersByTime(200);
+    return { walk, located };
+  };
+
+  it('asks where it is rather than stopping when the room cannot be placed', () => {
+    const { walk, located } = walking();
+    walk.onCharacter(unplaced());
+    expect(located).toEqual([1]);
+    expect(walk.progress.status).toBe('walking');
+
+    // `sys status` states the coordinates, and the way on is planned from them.
+    walk.onCharacter(street('coordinates'));
+    vi.advanceTimersByTime(200);
+    expect(moves(sent)).toEqual(['e', 'e']);
+    expect(walk.progress.status).toBe('walking');
+    expect(notices.join(' ')).toContain('Slum Street');
+    walk.dispose();
+  });
+
+  it('asks once, and stops lost when the answer never places it', () => {
+    const { walk, located } = walking();
+    walk.onCharacter(unplaced());
+    walk.onCharacter(unplaced());
+    expect(located).toEqual([1]);
+    vi.advanceTimersByTime(config.walk.stepTimeoutMs + 100);
+    expect(walk.progress.status).toBe('stopped');
+    expect(walk.progress.reason).toBe(t('automation.walk.reasonAmbiguous'));
+    walk.dispose();
+  });
+
+  it('confirms an off-route room before planning from it', () => {
+    const { walk, located } = walking();
+    // Placed by name and exits alone: a guess, and the step says otherwise.
+    walk.onCharacter(street('unique-name'));
+    expect(located).toEqual([1]);
+    expect(moves(sent)).toEqual(['e']);
+
+    walk.onCharacter(street('coordinates'));
+    vi.advanceTimersByTime(200);
+    expect(moves(sent)).toEqual(['e', 'e']);
+    walk.dispose();
+  });
+
+  it('still stops where there is nothing to ask', () => {
+    const { walk } = walking({ locate: undefined });
+    walk.onCharacter(unplaced());
+    expect(walk.progress.status).toBe('stopped');
+    expect(walk.progress.reason).toBe(t('automation.walk.reasonAmbiguous'));
     walk.dispose();
   });
 });
@@ -2032,6 +2241,7 @@ describe('an exit the realm data promised and the server refused', () => {
     walker.start(ROUTE, at(1, 1));
     vi.advanceTimersByTime(50);
     walker.onBlock(block('direction-failed'));
+    confirmRoom(walker, at(1, 1));
     expect(refused).toEqual(['1/1|e']);
     expect(walker.progress.status).toBe('stopped');
   });
@@ -2086,6 +2296,7 @@ describe('an exit the realm data promised and the server refused', () => {
     vi.advanceTimersByTime(50);
     pending = 1;
     walker.onBlock(block('direction-failed'));
+    confirmRoom(walker, at(1, 1));
 
     expect(refused).toEqual(['1/1|e']);
   });
@@ -2420,8 +2631,9 @@ describe('a hidden exit in the way', () => {
     walker.start(sealed, at(1, 1));
     vi.advanceTimersByTime(50);
     walker.onBlock(block('direction-failed'));
+    confirmRoom(walker, at(1, 1));
 
-    expect(sent).toEqual(['e']);
+    expect(moves(sent)).toEqual(['e']);
     expect(walker.progress.status).toBe('stopped');
   });
 });
@@ -2513,8 +2725,9 @@ describe('a hidden exit a lever opens', () => {
       pending = 1;
       walker.onBlock(block('direction-failed'));
     }
+    confirmRoom(walker, at(1, 1));
 
-    expect(sent).toEqual(['e']);
+    expect(moves(sent)).toEqual(['e']);
     // Blamed: the levers are two rooms away and this planner does not detour,
     // so the leg would be replanned into the same refusal for ever.
     expect(refused).toEqual(['1/1|e']);
@@ -2549,8 +2762,9 @@ describe('a hidden exit a lever opens', () => {
     vi.advanceTimersByTime(50);
     pending = 1;
     walker.onBlock(block('direction-failed'));
+    confirmRoom(walker, at(1, 1));
 
-    expect(sent).toEqual(['e']);
+    expect(moves(sent)).toEqual(['e']);
     expect(refused).toEqual(['1/1|e']);
   });
 
@@ -2580,6 +2794,7 @@ describe('a hidden exit a lever opens', () => {
     vi.advanceTimersByTime(50);
     pending = 1;
     walker.onBlock(block('direction-failed'));
+    confirmRoom(walker, at(1, 1));
 
     expect(refused).toEqual(['1/1|e']);
   });
@@ -2594,6 +2809,7 @@ describe('a hidden exit a lever opens', () => {
       pending = 1;
       walker.onBlock(block('direction-failed'));
     }
+    confirmRoom(walker, at(1, 1));
 
     expect(sent.filter((command) => command === 'pull lever')).toHaveLength(2);
     expect(walker.progress.status).toBe('stopped');
@@ -4451,6 +4667,7 @@ describe('a way something else opens', () => {
       });
       walk.start(SET, at(1, 1));
       walk.onBlock(block('direction-failed'));
+      confirmRoom(walk, at(1, 1));
       vi.advanceTimersByTime(200);
 
       expect(moves(sent)).toEqual(['e']);
