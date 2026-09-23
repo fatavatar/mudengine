@@ -461,6 +461,9 @@ export interface ProfileDraft {
     walkWhileBlind: boolean;
     walkWhilePoisoned: boolean;
     walkWhileConfused: boolean;
+    /** The dangerous regions, off unless said. See `MovementConfig`. */
+    useVortexes: boolean;
+    enterNegativePlane: boolean;
     /** Bend down for a key an exit here needs. See `MovementConfig`. */
     collectKeys: boolean;
   };
@@ -923,6 +926,9 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       walkWhileBlind: movement['walkWhileBlind'] === true,
       walkWhilePoisoned: movement['walkWhilePoisoned'] === true,
       walkWhileConfused: movement['walkWhileConfused'] === true,
+      // Off unless said, as MegaMUD's paths keep out of them.
+      useVortexes: movement['useVortexes'] === true,
+      enterNegativePlane: movement['enterNegativePlane'] === true,
       lightDimRooms: movement['lightDimRooms'] === true,
       extinguishInLight: movement['extinguishInLight'] === true,
       // Off unless said: it walks the character back to where it died.

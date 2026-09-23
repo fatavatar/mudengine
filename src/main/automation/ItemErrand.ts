@@ -44,10 +44,22 @@ export interface ItemSources {
   shops: readonly BuyingPlace[];
   /** Rooms the monsters that drop it live in, nearest first. */
   lairs: ReadonlyArray<{ id: RoomId; name: string; mob: string; steps: number }>;
+  /**
+   * Rooms where saying something gets it, nearest first — a handover (`ask
+   * sleazy shopkeeper orb`) or a script that summons a dropper (`touch
+   * statue`). See `WorldGraph.itemAsks`.
+   */
+  asks: ReadonlyArray<{ room: RoomId; roomName: string; say: string }>;
 }
 
 export interface ItemPlanner {
   here(): RoomId | null;
+  /** Walk to one room. Null once walking — or already standing there. */
+  walkTo(room: RoomId): string | null;
+  /** Whether a walk is under way. */
+  walking(): boolean;
+  /** Send what is said to get the item, in the room it is said in. */
+  say(command: string): void;
   /**
    * Where the realm says this item comes from, from where the character stands
    * on the way to `to` — the counters by what stopping at each would add to
@@ -93,6 +105,18 @@ type Phase =
   | { kind: 'idle' }
   | { kind: 'buying'; item: Wanted; rest: Wanted[]; owes: Route }
   | { kind: 'hunting'; item: Wanted; rest: Wanted[]; owes: Route; mob: string }
+  /**
+   * Going to say something for it: walking to `place`, then — `saidAt` set —
+   * waiting for the pack to hold it.
+   */
+  | {
+      kind: 'asking';
+      item: Wanted;
+      rest: Wanted[];
+      owes: Route;
+      place: { room: RoomId; roomName: string; say: string };
+      saidAt: number | null;
+    }
   /**
    * The pack holds it and the way is still being offered to the walker.
    *
@@ -209,6 +233,23 @@ export class ItemErrand {
       );
       return null;
     }
+    /*
+     * **Asked before hunted**: a handover or a summoning script is a fixed
+     * place and one phrase, and a lair is a lap of fights on a chance. A
+     * summons is still a fight — the statue has to die for the gate key — but
+     * one fight in one known room.
+     */
+    const ask = sources.asks[0];
+    if (ask !== undefined) {
+      const refused = this.planner.walkTo(ask.room);
+      if (refused !== null) return this.refuse(item, refused);
+      this.planner.alsoTake(item.name);
+      this.phase = { kind: 'asking', item, rest, owes, place: ask, saidAt: null };
+      this.events.notice?.(
+        t('automation.collect.asking', { item: item.name, say: ask.say, room: ask.roomName })
+      );
+      return null;
+    }
     const lair = sources.lairs[0];
     if (lair === undefined) return this.refuse(item, t('automation.collect.refusalNoSource'));
     /*
@@ -276,6 +317,10 @@ export class ItemErrand {
     }
     if (carriedCount(state, item.name) > 0) {
       this.deliver(item, owes, state);
+      return;
+    }
+    if (this.phase.kind === 'asking') {
+      this.onAsking(this.phase);
       return;
     }
     /*
@@ -350,6 +395,34 @@ export class ItemErrand {
       until: this.now() + tuning().walk.errandHandoverMs,
       why: refused
     };
+  }
+
+  /**
+   * Saying it once the character stands where it is said, and giving up when
+   * it cannot be said or nothing comes of it. The pack holding the item is
+   * read before this, by `onCharacter`, as for every other errand.
+   */
+  private onAsking(phase: Extract<Phase, { kind: 'asking' }>): void {
+    const { item, place } = phase;
+    if (phase.saidAt === null) {
+      if (this.planner.walking()) return;
+      if (this.planner.here() !== place.room) {
+        this.give();
+        this.phase = { kind: 'idle' };
+        this.refuse(item, t('automation.collect.refusalNotReached', { room: place.roomName }));
+        return;
+      }
+      this.planner.say(place.say);
+      this.phase = { ...phase, saidAt: this.now() };
+      return;
+    }
+    if (this.now() - phase.saidAt < tuning().walk.errandAskMs) return;
+    this.give();
+    this.phase = { kind: 'idle' };
+    this.refuse(
+      item,
+      t('automation.collect.refusalAskedNothing', { item: item.name, say: place.say })
+    );
   }
 
   /** Stop taking what was only ever wanted for this errand. */

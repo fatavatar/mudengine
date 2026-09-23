@@ -160,6 +160,12 @@ notices:
         file with the paragraph that explains it: {fileList}'
       many: 'Walking on while confused is a setting, off by default, and was written into {count}
         files with the paragraph that explains it: {fileList}'
+    regionsStated:
+      one: 'Using the vortexes and entering the Negative Power Plane are settings, both off by
+        default, and were written into {count} file with the paragraph that explains them: {fileList}'
+      many: 'Using the vortexes and entering the Negative Power Plane are settings, both off by
+        default, and were written into {count} files with the paragraph that explains them:
+        {fileList}'
     freedomCureStated:
       one: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
         default, and was written into the cures of {count} file: {fileList}'
@@ -3299,6 +3305,14 @@ settings:
     walkWhileBlindHint:
       Off, a route or a loop stands still until sight returns — MegaMUD's IgnoreBlind default. A blind
       character cannot read the room it walks into.
+    regionsLegend: Route Planning
+    useVortexes: Use Vortexes
+    useVortexesHint:
+      Off, routes never take a swirling vortex (go vortex). They lead into the Black Wasteland and on
+      to the Negative Power Plane — far more dangerous than the ordinary ways round.
+    enterNegativePlane: Enter the Negative Power Plane
+    enterNegativePlaneHint:
+      Off, routes never cross the Negative Power Plane. A route that starts or ends there still may.
     walkWhileConfused: Walk While Confused
     walkWhileConfusedHint:
       Off, a route or a loop stands still while this realm's messages say the character is
@@ -4022,6 +4036,10 @@ automation:
     gotAndKept: '{item} is in the pack, and it is on the keep list, so it stays.'
     gotForTheDoor: '{item} is in the pack — collected for this door, not kept.'
     several: 'This way needs {items}; collecting each in turn before walking it.'
+    asking: 'Going to {room} to say "{say}" for {item}.'
+    sayReason: 'collecting: {command}'
+    refusalNotReached: 'Not collecting: the walk to {room} ended somewhere else.'
+    refusalAskedNothing: 'Said "{say}", and no {item} came of it; not walking the way that needed it.'
     hunting: 'Looking for {item}: {mob} drops it, starting at {room}.'
     loopName: 'Collect: {item}'
     refusalBusy: Something is already being collected.

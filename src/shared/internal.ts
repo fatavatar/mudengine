@@ -983,6 +983,14 @@ const TUNING_DEFAULTS = {
      */
     errandHandoverMs: 15_000,
     /**
+     * How long the item errand waits for a thing it asked for by saying
+     * something (2026-09-23) — `ask sleazy shopkeeper orb`, or `touch statue`,
+     * which summons the obsidian statue that drops the gate key. A summons is a
+     * fight before it is an item, so minutes rather than seconds; past this the
+     * errand says it asked and nothing came, and walks nowhere.
+     */
+    errandAskMs: 180_000,
+    /**
      * How long a walk stands still for a condition before spending one step
      * to find out whether it is over.
      *

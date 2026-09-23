@@ -808,6 +808,14 @@ automation:
     # or a loop stands still. A confused character's commands misfire.
     walkWhileConfused: false
 
+    # The dangerous regions, kept out of route planning unless you say so --
+    # as MegaMUD's own paths keep out of them. The swirling vortexes (`go
+    # vortex`) lead into the Black Wasteland and on to the Negative Power
+    # Plane, far more dangerous than the ordinary ways between the places
+    # they join. A route that starts or ends on the Plane may still cross it.
+    useVortexes: false
+    enterNegativePlane: false
+
     # The key to the door in front of you.
     #
     # A keyed exit with no key and nothing a picklock can do about it is a wall

@@ -1770,6 +1770,20 @@ export interface MovementConfig {
    */
   walkWhileConfused: boolean;
   /**
+   * Plan routes through the swirling vortexes (`go vortex`). **Off by
+   * default**: the vortexes lead into the Black Wasteland and on to the
+   * Negative Power Plane, far more dangerous than the ordinary ways between
+   * the places they join, and MegaMUD's own paths stay out of them. A route
+   * that starts or ends past one still needs this on.
+   */
+  useVortexes: boolean;
+  /**
+   * Plan routes across the Negative Power Plane. **Off by default**, for the
+   * reason `useVortexes` is. A route starting or ending on the Plane may
+   * cross it whatever this says — the character is there, or asked to go.
+   */
+  enterNegativePlane: boolean;
+  /**
    * Pick up a key an exit of this room needs, when it is lying on the floor of
    * it — and only then.
    *
@@ -2646,6 +2660,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       walkWhileBlind: false,
       walkWhilePoisoned: false,
       walkWhileConfused: false,
+      useVortexes: false,
+      enterNegativePlane: false,
       collectKeys: true
     },
     hunting: {
@@ -3812,6 +3828,8 @@ function normalizeMovement(value: unknown): MovementConfig {
     walkWhileBlind: bool(raw['walkWhileBlind'], d.walkWhileBlind),
     walkWhilePoisoned: bool(raw['walkWhilePoisoned'], d.walkWhilePoisoned),
     walkWhileConfused: bool(raw['walkWhileConfused'], d.walkWhileConfused),
+    useVortexes: bool(raw['useVortexes'], d.useVortexes),
+    enterNegativePlane: bool(raw['enterNegativePlane'], d.enterNegativePlane),
     collectKeys: bool(raw['collectKeys'], d.collectKeys)
   };
 }

@@ -225,6 +225,20 @@ export interface Traveller {
    */
   forcing?: { pick: boolean; bash: boolean };
   /**
+   * Whether a route may use the swirling vortexes (`go vortex`), and whether it
+   * may pass through the Negative Power Plane — *Use Vortexes* and *Enter the
+   * Negative Power Plane* in the movement settings, both off by default.
+   *
+   * Reported 2026-09-23: the way to the Dark-Elf Castle gatehouse was planned
+   * through two vortexes and a portal room of the Plane, far more dangerous
+   * than the four-key way players take — and one MegaMUD would never have
+   * walked, because it plans over recorded paths that stay out of both.
+   * Absent is allowed, which is every caller that is not a session. See
+   * `WorldGraph.shunned`.
+   */
+  vortexes?: boolean;
+  negativePlane?: boolean;
+  /**
    * This character's `Classes` row id, for a class-gated exit.
    *
    * The stat sheet prints the realm's own word (`Class: Paladin`) and the
@@ -373,6 +387,19 @@ export interface RouteOptions {
  */
 function leverKey(room: RoomId, direction: string): string {
   return `${room}|${direction}`;
+}
+
+/** A swirling vortex: a room script the realm has said as `go vortex`. */
+function isVortex(exit: WorldExit | PortalExit): boolean {
+  return (
+    exit.direction === 'portal' &&
+    (exit.requirement.commands ?? []).some((command) => /\bvortex\b/i.test(command))
+  );
+}
+
+/** A room of the Negative Power Plane, by the realm's own name for it. */
+function inNegativePlane(room: WorldRoom | undefined): boolean {
+  return room !== undefined && /^negative power plane\b/i.test(room.name.trim());
 }
 
 /** Handed back for an exit nothing opens, so no caller allocates to say "none". */
@@ -1500,6 +1527,10 @@ export class WorldGraph {
   private stocking: Map<number, WorldRoom[]> | null = null;
   /** Item ids the realm demands on some exit and names — `namedExitItems`. */
   private exitItems: number[] | null = null;
+  /** Monster row id -> the monsters whose death spell summons it — `summonersOf`. */
+  private summoners: Map<number, WorldMob[]> | null = null;
+  /** Monster row id -> the room scripts that summon it, and what to say — `itemAsks`. */
+  private summonRooms: Map<number, Array<{ room: RoomId; say: string }>> | null = null;
   /**
    * Every way *into* each room, with the item it demands — `approachItems`.
    *
@@ -1994,6 +2025,114 @@ export class WorldGraph {
   /** One row, answering for itself. Undefined for a name the realm places once. */
   mobRow(id: number): WorldMobRow | undefined {
     return this.rowsById.get(id);
+  }
+
+  /**
+   * The monsters whose death brings this one into the world — a death spell
+   * (`Mobs.DeathSpell`) with a summon ability naming one of its rows.
+   *
+   * Reported 2026-09-23: the amber talisman drops from the *dying* slaver
+   * leader, which no room spawns; the slaver leader's death spell 444
+   * (`summon slaver leader`, ability 12 → row 365) is how it appears. Read as
+   * a monster that lives nowhere, the talisman had no source and every way
+   * that needed it was dropped. 90 of the stock realm's monsters have a death
+   * spell, so this is a shape rather than a special case: where a monster is
+   * placed nowhere, the rooms of whatever summons it are where to find it.
+   */
+  /**
+   * Where saying something gets this item — the half of *where does it come
+   * from* that is neither a counter nor a lair.
+   *
+   * Two shapes, both on the four-key way into the Dark-Elf Castle
+   * (2026-09-23):
+   *
+   * - **A handover** (`WorldItem.from`, kind `asked`): the sleazy shopkeeper
+   *   hands the moldy key over for `ask sleazy shopkeeper orb` — the
+   *   `ask <who> <word>` shape `roomScript` sends for a monster's greeting.
+   *   A `said` handover is the word alone. One the realm places nowhere has
+   *   no room to walk to and is left out.
+   * - **A room script that summons a dropper**: the gate key drops from an
+   *   obsidian statue no room spawns, and `touch statue` at the Black Steel
+   *   Gate (`summon 347`) is what brings it. Its summoners' scripts count
+   *   too, by `summonersOf`'s reasoning.
+   */
+  itemAsks(item: number): Array<{ room: RoomId; roomName: string; say: string; who?: string }> {
+    const found: Array<{ room: RoomId; roomName: string; say: string; who?: string }> = [];
+    const add = (room: RoomId, say: string, who?: string): void => {
+      const known = this.rooms.get(room);
+      if (known === undefined || found.some((entry) => entry.room === room && entry.say === say)) {
+        return;
+      }
+      found.push({ room, roomName: known.name, say, ...(who === undefined ? {} : { who }) });
+    };
+    for (const handover of this.items.get(item)?.from ?? []) {
+      const word = handover.say?.[0];
+      if (handover.room === undefined || word === undefined) continue;
+      if (handover.kind === 'asked' && handover.who !== undefined) {
+        add(handover.room as RoomId, `ask ${handover.who} ${word}`, handover.who);
+      } else if (handover.kind === 'said') {
+        add(handover.room as RoomId, word);
+      }
+    }
+    const index = this.summonScripts();
+    for (const name of this.sourcesOf({ id: item }).mobs) {
+      const mob = this.mob(name);
+      if (mob === undefined) continue;
+      for (const who of [mob, ...this.summonersOf(mob)]) {
+        for (const id of who.ids ?? []) {
+          for (const script of index.get(id) ?? []) add(script.room, script.say, who.name);
+        }
+      }
+    }
+    return found;
+  }
+
+  /** Every room script that summons a monster, by the monster's row — built once. */
+  private summonScripts(): Map<number, Array<{ room: RoomId; say: string }>> {
+    if (this.summonRooms !== null) return this.summonRooms;
+    const index = new Map<number, Array<{ room: RoomId; say: string }>>();
+    for (const [room, known] of this.rooms) {
+      for (const command of known.commands ?? []) {
+        const say = command.say[0];
+        if (say === undefined) continue;
+        for (const need of command.need ?? []) {
+          const summoned = /^summon\s+(\d+)$/i.exec(need.trim());
+          if (summoned === null) continue;
+          const id = Number(summoned[1]);
+          const held = index.get(id);
+          if (held === undefined) index.set(id, [{ room, say }]);
+          else held.push({ room, say });
+        }
+      }
+    }
+    this.summonRooms = index;
+    return index;
+  }
+
+  summonersOf(mob: WorldMob): WorldMob[] {
+    if (this.summoners === null) {
+      const index = new Map<number, WorldMob[]>();
+      for (const candidate of new Set(this.mobs.values())) {
+        const spell =
+          candidate.deathSpell === undefined
+            ? undefined
+            : this.spellsById.get(candidate.deathSpell);
+        for (const [ability, value] of spell?.abilities ?? []) {
+          if (ability !== HAZARD_ABILITY.summon || value <= 0) continue;
+          const held = index.get(value);
+          if (held === undefined) index.set(value, [candidate]);
+          else if (!held.includes(candidate)) held.push(candidate);
+        }
+      }
+      this.summoners = index;
+    }
+    const found: WorldMob[] = [];
+    for (const id of mob.ids ?? []) {
+      for (const summoner of this.summoners.get(id) ?? []) {
+        if (summoner !== mob && !found.includes(summoner)) found.push(summoner);
+      }
+    }
+    return found;
   }
 
   /**
@@ -5340,7 +5479,17 @@ export class WorldGraph {
     const ignoring = this.search(from, to, goal, traveller, true, walkable.drawsAhead, true).found;
     const blocks = ignoring ? this.blocksAlong(ignoring.cameFrom, to, traveller) : [];
     const reasons = blocks.length > 0 ? blocks : ([{ kind: 'unreachable' }] as RouteBlock[]);
-    const unlocks = this.unlocked(from, to, goal, traveller, blocks, walkable.drawsAhead);
+    /*
+     * What fetching would open. The path that explains the refusal is the
+     * cheapest with every gate held open, and it can end at a door no key
+     * opens — the Dark-Elf Castle's own gatehouse, rated 1000 — while a way
+     * four keys long goes round by the moat. So where the explanation's own
+     * items are not enough, the realm is asked as though every key it names
+     * were carried (`keyedWay`), which is the question a player asks.
+     */
+    const unlocks =
+      this.unlocked(from, to, goal, traveller, blocks, walkable.drawsAhead) ??
+      this.keyedWay(from, to, goal, Infinity, traveller, walkable.drawsAhead);
     return {
       steps: [],
       cost: 0,
@@ -5466,13 +5615,20 @@ export class WorldGraph {
    */
   private nearestSource(item: number, from: RoomId, traveller: Traveller): number | null {
     const rooms = new Set<RoomId>(this.stockRooms(item).map((room) => roomId(room.map, room.room)));
-    for (const name of this.sourcesOf({ id: item }).mobs) {
-      const mob = this.mob(name);
-      const places = mob === undefined ? undefined : this.mobPlaces(mob, 64, 64);
-      for (const spawn of places?.spawns ?? []) {
+    const placeOf = (mob: WorldMob): void => {
+      for (const spawn of this.mobPlaces(mob, 64, 64)?.spawns ?? []) {
         for (const room of spawn.rooms) rooms.add(roomId(room.map, room.room));
       }
+    };
+    for (const name of this.sourcesOf({ id: item }).mobs) {
+      const mob = this.mob(name);
+      if (mob === undefined) continue;
+      placeOf(mob);
+      // A dropper placed nowhere is found where whatever summons it lives.
+      for (const summoner of this.summonersOf(mob)) placeOf(summoner);
     }
+    // And where saying something gets it: a handover, or a summoning script.
+    for (const ask of this.itemAsks(item)) rooms.add(ask.room);
     if (rooms.size === 0) return null;
     let best: number | null = null;
     for (const { cost } of this.sweepTo(from, rooms, traveller).values()) {
@@ -6299,6 +6455,7 @@ export class WorldGraph {
      */
     const discount = this.discountFor(traveller);
     const heuristic = (room: WorldRoom): number => (room.map === goal.map ? 0 : discount);
+    const shunned = this.shunned(traveller, from, goal);
     /*
      * What a draw is worth from here, where there is one to take. Solved once
      * per search rather than per expansion: it is a property of the goal and
@@ -6408,6 +6565,8 @@ export class WorldGraph {
         // only while it is answering *is there another way*. See `avoid`.
         if (traveller.avoid?.has(nextId) === true) continue;
         if (traveller.avoidEdges?.has(`${currentId}|${exit.direction}`) === true) continue;
+        // The regions this character's settings keep out of planning.
+        if (shunned(exit, next)) continue;
 
         const price = this.stepCost(currentId, exit, next, traveller, openGates, discount);
         if (price === null) continue;
@@ -6424,6 +6583,37 @@ export class WorldGraph {
       drawsAhead,
       landingsAhead: this.itemLandings().some((exit) => !best.has(roomId(exit.map, exit.room)))
     };
+  }
+
+  /**
+   * The moves this character's settings keep out of planning — a vortex, and
+   * a step into the Negative Power Plane (`Traveller.vortexes`,
+   * `Traveller.negativePlane`).
+   *
+   * Pruned rather than priced, which is what *off* means: a price is still
+   * walked when nothing else leads there, and the Plane is exactly where a
+   * character should not end up because the rest of the map was awkward. **A
+   * journey that starts or ends in the Plane may cross it**, though — the
+   * character is already there, or asked to go — so there the switch is not
+   * read at all.
+   *
+   * Matched on the realm's own words: the vortexes are the room scripts said
+   * as `go vortex` (twelve in the stock realm, every one into or round the
+   * Black Wasteland), and the Plane is the rooms the realm names *Negative
+   * Power Plane* (450 of them). A realm without either has nothing to match.
+   */
+  private shunned(
+    traveller: Traveller,
+    from: RoomId,
+    goal: WorldRoom
+  ): (exit: WorldExit | PortalExit, next: WorldRoom) => boolean {
+    const vortexes = traveller.vortexes !== false;
+    const plane =
+      traveller.negativePlane !== false ||
+      inNegativePlane(goal) ||
+      inNegativePlane(this.rooms.get(from));
+    if (vortexes && plane) return () => false;
+    return (exit, next) => (!vortexes && isVortex(exit)) || (!plane && inNegativePlane(next));
   }
 
   /** Every gate on a found path this traveller cannot pass, in walking order. */

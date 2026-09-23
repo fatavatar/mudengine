@@ -259,6 +259,8 @@ function fingerprint(traveller: Traveller): string {
     traveller.forcing === undefined
       ? ''
       : `${traveller.forcing.pick ? 'p' : ''}${traveller.forcing.bash ? 'b' : ''}`,
+    // And the regions the settings keep a draft out of.
+    `${traveller.vortexes === false ? '' : 'v'}${traveller.negativePlane === false ? '' : 'n'}`,
     traveller.classId ?? '',
     traveller.raceId ?? '',
     traveller.alignment ?? ''

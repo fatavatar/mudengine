@@ -3487,6 +3487,131 @@ describe('a way only a key opens', () => {
     });
   });
 
+  /*
+   * A dropper placed in no room (2026-09-23): the amber talisman drops from
+   * the *dying* slaver leader, which no room spawns — the slaver leader's
+   * death spell (444, `summon slaver leader`) summons it. Read as "no source",
+   * every way needing the talisman was dropped, the Dark-Elf Castle's among
+   * them.
+   */
+  describe('a key whose dropper is summoned on another monster’s death', () => {
+    // The door east, or forty rooms round by the moat; the camp is next door.
+    const castle = (): WorldGraph =>
+      makeWorld(
+        [
+          {
+            m: 1,
+            r: 1,
+            n: 'Start',
+            x: { e: { m: 1, r: 2, i: 'Key: 815' }, w: { m: 1, r: 5 }, s: { m: 1, r: 100 } }
+          },
+          { m: 1, r: 2, n: 'Gatehouse', x: { w: { m: 1, r: 1 } } },
+          { m: 1, r: 5, n: 'Slaver Camp', x: { e: { m: 1, r: 1 } }, lair: '(Max 1): 353,' },
+          ...Array.from({ length: 40 }, (_, i) => ({
+            m: 1,
+            r: 100 + i,
+            n: 'Moat Road',
+            x: i === 39 ? { n: { m: 1, r: 2 } } : { s: { m: 1, r: 101 + i } }
+          }))
+        ],
+        {
+          mobs: [
+            { n: 'slaver leader', hp: 250, i: [353], d: 'h', ds: 444 },
+            { n: 'dying slaver leader', hp: 50, i: [365], d: 'h', drops: ['amber talisman'] }
+          ],
+          spells: [{ id: 444, n: 'summon slaver leader', ab: [[12, 365]] }],
+          items: [{ id: 815, n: 'amber talisman' }]
+        }
+      );
+
+    it('knows who summons it', () => {
+      const graph = castle();
+      const dying = graph.mob('dying slaver leader')!;
+      expect(graph.summonersOf(dying).map((mob) => mob.name)).toEqual(['slaver leader']);
+      expect(graph.summonersOf(graph.mob('slaver leader')!)).toEqual([]);
+    });
+
+    it('offers the key, fetched from where the summoner lives', () => {
+      const route = castle().route('1/1', '1/2', lacking, { alternatives: true });
+      expect(route.steps).toHaveLength(41);
+      expect(route.unlocks?.needs).toEqual([{ id: 815, name: 'amber talisman' }]);
+    });
+  });
+
+  /*
+   * The other two ways the realm hands an item over (2026-09-23), both on the
+   * four-key way into the Dark-Elf Castle: the gate key drops from an
+   * obsidian statue no room spawns — saying `touch statue` at the Black Steel
+   * Gate summons it — and the moldy key is handed over by the sleazy
+   * shopkeeper when asked for it. Neither is a shop or a lair, and both read
+   * as *no source*.
+   */
+  describe('an item had by saying something', () => {
+    const gate = (): WorldGraph =>
+      makeWorld(
+        [
+          {
+            m: 1,
+            r: 1,
+            n: 'Start',
+            x: {
+              e: { m: 1, r: 2, i: 'Key: 806 [or 101 picklocks]' },
+              w: { m: 1, r: 5 },
+              n: { m: 1, r: 6 },
+              s: { m: 1, r: 100 }
+            }
+          },
+          { m: 1, r: 2, n: 'Gatehouse', x: { w: { m: 1, r: 1 } } },
+          {
+            m: 1,
+            r: 5,
+            n: 'Black Steel Gate',
+            x: { e: { m: 1, r: 1 } },
+            cmd: [{ say: ['touch statue', 'move statue'], need: ['summon 347'] }]
+          },
+          { m: 1, r: 6, n: 'Sleazy Shop', x: { s: { m: 1, r: 1 } } },
+          ...Array.from({ length: 40 }, (_, i) => ({
+            m: 1,
+            r: 100 + i,
+            n: 'Moat Road',
+            x: i === 39 ? { n: { m: 1, r: 2 } } : { s: { m: 1, r: 101 + i } }
+          }))
+        ],
+        {
+          mobs: [{ n: 'obsidian statue', hp: 300, i: [347], d: 'h', drops: ['gate key'] }],
+          items: [
+            { id: 806, n: 'gate key', mobs: ['obsidian statue'] },
+            {
+              id: 820,
+              n: 'moldy key',
+              from: [{ k: 'npc', w: 'sleazy shopkeeper', at: '1/6', say: ['orb'] }]
+            }
+          ]
+        }
+      );
+
+    it('knows where to say what', () => {
+      const graph = gate();
+      expect(graph.itemAsks(806)).toEqual([
+        { room: '1/5', roomName: 'Black Steel Gate', say: 'touch statue', who: 'obsidian statue' }
+      ]);
+      expect(graph.itemAsks(820)).toEqual([
+        {
+          room: '1/6',
+          roomName: 'Sleazy Shop',
+          say: 'ask sleazy shopkeeper orb',
+          who: 'sleazy shopkeeper'
+        }
+      ]);
+    });
+
+    it('offers the key the statue drops', () => {
+      const route = gate().route('1/1', '1/2', lacking, { alternatives: true });
+      expect(route.steps).toHaveLength(41);
+      expect(route.unlocks?.needs).toEqual([{ id: 806, name: 'gate key' }]);
+    });
+  });
+
   it('offers nothing for a key the realm cannot name', () => {
     // A number is not something anybody can fetch: the errand looks the
     // source up by id and counts the pack by name.
@@ -3970,6 +4095,63 @@ describe('itemWanted', () => {
  * condition the client cannot read is how a character is walked somewhere it
  * cannot get back from (mme.md §6).
  */
+/*
+ * The vortexes and the Negative Power Plane (2026-09-23): the planned way to
+ * the Dark-Elf Castle gatehouse went through `go vortex` twice and a portal
+ * room of the Plane, where the one players take is four keys long and stays
+ * out of both. MegaMUD keeps them out of planning, and so does this unless
+ * the character's settings say otherwise.
+ */
+describe('the vortexes and the Negative Power Plane', () => {
+  /** A vortex straight to the Plane and on, or a long road round. */
+  const planes = (): WorldGraph =>
+    makeWorld([
+      {
+        m: 1,
+        r: 1,
+        n: 'Darkwood Forest',
+        x: { s: { m: 1, r: 100 } },
+        cmd: [{ say: ['go vortex', 'enter vortex'], to: '3/1' }]
+      },
+      { m: 3, r: 1, n: 'Black Wasteland', x: { e: { m: 8, r: 1 } } },
+      { m: 8, r: 1, n: 'Negative Power Plane', x: { e: { m: 8, r: 2 } } },
+      { m: 8, r: 2, n: 'Castle Gatehouse', x: {} },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        m: 1,
+        r: 100 + i,
+        n: 'Long Road',
+        x: i === 29 ? { e: { m: 8, r: 2 } } : { s: { m: 1, r: 101 + i } }
+      }))
+    ]);
+  const commands = (route: Route): string[] => route.steps.map((step) => step.command);
+
+  it('takes neither where the settings leave them off', () => {
+    const route = planes().route('1/1', '8/2', { vortexes: false, negativePlane: false });
+    expect(route.steps).toHaveLength(31);
+    expect(commands(route)).not.toContain('go vortex');
+  });
+
+  it('takes the vortex only where it is on, and the Plane only where that is', () => {
+    // The vortex lands in the Wasteland, whose one way on is the Plane.
+    expect(
+      planes().route('1/1', '8/2', { vortexes: true, negativePlane: false }).steps
+    ).toHaveLength(31);
+    expect(commands(planes().route('1/1', '8/2', { vortexes: true, negativePlane: true }))).toEqual(
+      ['go vortex', 'e', 'e']
+    );
+  });
+
+  it('goes into the Plane when that is where the character asked to go', () => {
+    const route = planes().route('1/1', '8/1', { vortexes: true, negativePlane: false });
+    expect(route.blocked).toBe(false);
+    expect(commands(route)).toEqual(['go vortex', 'e']);
+  });
+
+  it('leaves both alone for a caller that says nothing', () => {
+    expect(planes().route('1/1', '8/2').steps).toHaveLength(3);
+  });
+});
+
 describe('routing through room-script teleports', () => {
   /** Two islands joined only by the script on Pool Edge. */
   const portalWorld = (cmd: Record<string, unknown>): WorldGraph =>

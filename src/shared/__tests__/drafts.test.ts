@@ -289,6 +289,9 @@ describe('a character', () => {
         walkWhileBlind: false,
         walkWhilePoisoned: false,
         walkWhileConfused: false,
+        // Off unless said: the dangerous regions stay out of planning.
+        useVortexes: false,
+        enterNegativePlane: false,
         // Except the one that is on by default and whose absence would switch
         // it off, which is the health block's rule two assertions down: a
         // payload that failed to send the field must not mean `false`.
@@ -357,6 +360,9 @@ describe('a character', () => {
         walkWhileBlind: false,
         walkWhilePoisoned: false,
         walkWhileConfused: false,
+        // Off unless said: the dangerous regions stay out of planning.
+        useVortexes: false,
+        enterNegativePlane: false,
         // The shipped default, for the same reason `restBelow` keeps 0.35
         // here: a nonsense block must not silently switch off something that
         // ships on.

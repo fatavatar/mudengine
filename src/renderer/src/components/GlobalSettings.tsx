@@ -181,6 +181,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'movement-stealth', label: t('settings.movement.stealthLegend') },
     { id: 'movement-light', label: t('settings.movement.lightLegend') },
     { id: 'movement-afflictions', label: t('settings.movement.afflictionsLegend') },
+    { id: 'movement-regions', label: t('settings.movement.regionsLegend') },
     { id: 'movement-carry', label: t('settings.movement.carryLegend') },
     { id: 'hunting', label: t('settings.hunting.legend') }
   ],
@@ -1733,6 +1734,30 @@ export default function GlobalSettings({
                 onChange={(value) =>
                   automation({
                     movement: { ...draft.automation.movement, walkWhileConfused: value }
+                  })
+                }
+              />
+            </fieldset>
+
+            <fieldset className="settings-menus" data-fieldset="movement-regions">
+              <legend>{t('settings.movement.regionsLegend')}</legend>
+              <CheckField
+                checked={draft.automation.movement.useVortexes}
+                hint={t('settings.movement.useVortexesHint')}
+                label={t('settings.movement.useVortexes')}
+                name="global-use-vortexes"
+                onChange={(value) =>
+                  automation({ movement: { ...draft.automation.movement, useVortexes: value } })
+                }
+              />
+              <CheckField
+                checked={draft.automation.movement.enterNegativePlane}
+                hint={t('settings.movement.enterNegativePlaneHint')}
+                label={t('settings.movement.enterNegativePlane')}
+                name="global-enter-negative-plane"
+                onChange={(value) =>
+                  automation({
+                    movement: { ...draft.automation.movement, enterNegativePlane: value }
                   })
                 }
               />
