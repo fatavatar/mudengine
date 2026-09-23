@@ -4232,7 +4232,7 @@ describe('a way something else opens', () => {
    * only the world can give: what opens this exit, and a route to it.
    */
   const withLevers = (
-    levers: readonly RemoteLever[],
+    levers: readonly RemoteLever[] | ((from: string, direction: string) => readonly RemoteLever[]),
     plans: Record<string, Route | string> = {}
   ): {
     walk: Walker;
@@ -4251,7 +4251,8 @@ describe('a way something else opens', () => {
       queue,
       {
         notice: (m) => notices.push(m),
-        leversFor: () => levers,
+        leversFor: (from, direction) =>
+          typeof levers === 'function' ? levers(from, direction) : levers,
         stateNow: () => at(1, here),
         replan: (to) => {
           asked.push(to);
@@ -4499,16 +4500,41 @@ describe('a way something else opens', () => {
   });
 
   /*
-   * **One errand at a time.** `detoured` is keyed by the *gate*, so a second
-   * gate met on the errand's own route passes every other guard — and `back` is
-   * taken from the route in flight, which during an errand is the way to the
-   * lever rather than the way the player asked to go. Without this the original
-   * destination is silently replaced by a lever room and arriving there fires
-   * `ended(true)`: the false arrival this whole rung exists to avoid, a loop
-   * booking a leg it never walked.
+   * **A lever behind a lever.** Reported 2026-09-23 in the Treetops of map 16:
+   * the way to 551 north's lever passes a hidden exit whose own lever is in a
+   * third room, and so on five deep. The walk used to refuse a second errand,
+   * turn back to the first gate and lap the same rooms until its rounds ran
+   * out. Now the second gate's errand is pushed on top of the first: fetched,
+   * the walk goes on to the first lever, and only then back through the gate
+   * it started at — and none of those arrivals is the journey's.
    */
-  it('does not start a second errand while one is running', () => {
-    const { walk, asked, ends, arrive } = withLevers([LEVER], { '1/9': TO_LEVER, '1/2': BACK });
+  it('fetches a lever that is itself behind a lever, then finishes the first errand', () => {
+    const inner: RemoteLever = { at: '1/7', roomName: 'Vine Room', say: 'pull vine' };
+    /** 1/1 -w-> 1/9 through a gate of its own. */
+    const gatedToLever: Route = {
+      ...TO_LEVER,
+      steps: [{ ...TO_LEVER.steps[0]!, requirement: GATED.steps[0]!.requirement }]
+    };
+    /** 1/1 -s-> 1/7, where the inner lever is. */
+    const toInner: Route = {
+      cost: 1,
+      blocked: false,
+      steps: [
+        {
+          from: '1/1',
+          to: '1/7',
+          direction: 's',
+          command: 's',
+          name: 'Vine Room',
+          requirement: null,
+          dark: false
+        }
+      ]
+    };
+    const { walk, asked, ends, arrive } = withLevers(
+      (from, direction) => (from === '1/1' && direction === 'w' ? [inner] : [LEVER]),
+      { '1/9': gatedToLever, '1/7': toInner, '1/2': BACK }
+    );
     walk.start(GATED, at(1, 1));
     walk.onBlock(block('direction-failed', { barrier: 'gate' }));
     vi.advanceTimersByTime(200);
@@ -4516,21 +4542,33 @@ describe('a way something else opens', () => {
     vi.advanceTimersByTime(200);
     expect(asked).toEqual(['1/9']);
 
-    // A second gate on the way to the lever. It gets the ordinary ladder --
-    // open, force, then the barrier hold -- and no second errand.
+    // The way to the lever is shut too: its own errand, on top of the first.
     walk.onBlock(block('direction-failed', { barrier: 'gate' }));
     vi.advanceTimersByTime(200);
     walk.onBlock(block('open-failed', { barrier: 'gate', reason: 'locked' }));
     vi.advanceTimersByTime(200);
+    expect(asked).toEqual(['1/9', '1/7']);
 
-    expect(asked).toEqual(['1/9']);
-    expect(walk.progress).toMatchObject({ status: 'walking', hold: 'barrier' });
-    expect(ends).toEqual([]);
-
-    // And the errand the walk is still on finishes as itself.
+    // The inner lever pulled, the walk goes on to the first lever's room...
+    arrive(7);
+    vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
+    expect(asked).toEqual(['1/9', '1/7', '1/9']);
+    // ...and that one pulled, on to where the journey was going.
     arrive(9);
     vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
-    expect(asked).toEqual(['1/9', '1/2']);
+    expect(asked).toEqual(['1/9', '1/7', '1/9', '1/2']);
+    expect(moves(sent)).toEqual([
+      'e',
+      'open e',
+      'w',
+      'open w',
+      's',
+      'pull vine',
+      'w',
+      'pull lever',
+      'e'
+    ]);
+    expect(ends).toEqual([]);
     walk.dispose();
   });
 
