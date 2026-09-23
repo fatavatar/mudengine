@@ -2970,8 +2970,9 @@ describe('who is in the room, between looks', () => {
   it('counts every monster that walks in, and takes one off for each that leaves', () => {
     const { tracker, feed } = inRoom();
     feed('giant war dog moves into the room from the north.');
-    feed('giant war dog moves into the room from the north.');
-    feed('giant war dog moves into the room from the north.');
+    // Paramud's own wording, which nothing read until 2026-09-23.
+    feed('A giant war dog enters the room from the south.');
+    feed('The giant war dog charges after you!');
     expect(names(tracker.current.room.occupants)).toEqual([
       'Nathaniel',
       'giant war dog',

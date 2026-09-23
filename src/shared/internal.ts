@@ -472,6 +472,12 @@ const TUNING_DEFAULTS = {
      */
     roomOwedMs: 3000,
     /**
+     * How long a room-spell fight waits, after the death that took it under
+     * `areaMinMobs`, before switching to the single-target spell: the rest of
+     * the burst's kills and the Enter's room listing are in by then.
+     */
+    areaSettleMs: 800,
+    /**
      * How long a typed `break` stands auto-combat down. The stand-down ends
      * early when the player attacks or the room changes; this is the backstop
      * for standing still.

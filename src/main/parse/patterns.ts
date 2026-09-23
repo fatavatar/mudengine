@@ -604,7 +604,13 @@ export const RULES: Rule[] = [
     // a blow nothing can name: counted, and attributed to nobody.
     pattern: /^(?:The|A|An) (?<line>[^"]*?\byou\b[^"]*?) for (?<damage>\d+) damage!/
   },
-  { type: 'mob-misses', pattern: /^The (?<line>[^"]*?\byou\b[\w' ]{0,32})[.!]$/ },
+  // Not a monster following this character in (`The %s charges after you!`),
+  // which is an arrival — see `mob-arrives-room`.
+  {
+    type: 'mob-misses',
+    pattern:
+      /^The (?!.*\b(?:after you|you into the room|you in from)\b)(?<line>[^"]*?\byou\b[\w' ]{0,32})[.!]$/
+  },
   /*
    * The same swing at this character from something with no article — a
    * player (`Rend swings at you!`, 40 lines) or a monster with a proper name
@@ -731,7 +737,7 @@ export const RULES: Rule[] = [
   {
     type: 'spell-ineffective',
     pattern:
-      /^Your spell has no effect (?:on (?<target>.+?)\.|against this monster!|in this room!)$/
+      /^Your spell has no effect (?:on (?<target>.+?)\.|against this monster!|(?<room>in this room)!)$/
   },
   /*
    * Spells, seen in the corpus rather than read out of the server.
@@ -1141,23 +1147,71 @@ export const RULES: Rule[] = [
    * article is optional for the same reason: `angry carrion beast moves into
    * the room from the east.` arrived without one (live, 2026-08-27), and the
    * article is part of the sentence the realm's operator typed, not the frame.
+   *
+   * **MegaMUD reads the same thing by phrase, and so does this** (checked in
+   * its executable, 2026-09-23): no table of monster messages, just
+   * `ParseInOut`'s list — ` in the room `, ` into the room `, ` into the
+   * area`, ` enters the room`, ` room from `, ` in from `, ` enters from `,
+   * ` arrives from `, ` appears from `, ` appears out of `, ` appears in a `,
+   * ` down from above`, ` beside you!`, ` next to you!`, ` through the
+   * wall!` in, and ` just left `, ` sneaking out` out. The server's own table
+   * (every monster move record in resources/world/messages.csv) adds its
+   * departures — `<verb> out|off|away to`, `out of the room to`, `exits to`
+   * — and the monster that follows this character in (`The %s charges after
+   * you!`). Paramud's `A giant war dog enters the room from the south.` was
+   * none of what this read before, so fifteen dogs walked in unread.
+   *
+   * Two shapes of name: where the anchor follows the monster's own verb
+   * (`stomps in from`) the verb is the name's last word and is trimmed off
+   * (`line`); where the anchor *is* the verb (`enters from`, `arrives from`)
+   * the whole of it is the name (`mob`). A name is name characters only — no
+   * comma — which keeps a room's prose (`street, and dark, narrow alleyways
+   * lead off to the east and west.`) out, and a line inside a room listing
+   * is the listing's either way (`RoomDraft.open`). Never a line about this
+   * character: `You summon a powerful tempest into the room!` is a spell.
    */
   {
     type: 'mob-arrives-room',
     pattern:
-      /^(?:(?:A|An|The) )?(?<line>.+?) (?:in(?:to)? the room from|in from) (?:the )?(?<direction>[\w ]+)[.!]$/
+      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+?)(?: in| into the room)? after you\b.*[.!]$/
+  },
+  {
+    type: 'mob-arrives-room',
+    pattern:
+      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+? (?:follows|chases|pursues)) you (?:into the room|in from\b.*)[.!]$/
+  },
+  {
+    type: 'mob-arrives-room',
+    pattern:
+      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+?) (?:(?:in(?:to)? )?the room from|in from|down from above|into the (?:room|area)(?= *[.!])|in the room(?= *[.!]))(?: (?:the )?(?<direction>[\w ]+?))?(?:,[^,]*)?[.!]$/
+  },
+  {
+    type: 'mob-arrives-room',
+    pattern:
+      /^(?!You )(?:(?:A|An|The) )?(?<mob>[\w' -]+?) (?:enters from|arrives from|peeks in from|appears (?:from|out of|in a)|enters the room(?= *[.!])|appears (?:right )?beside you|appears in front of you|is next to you)(?: (?:the )?(?<direction>[\w ]+?))?(?:,[^,]*)?[.!]$/
   },
   /*
-   * A monster walking out — the other half of the arrival, and data the same
-   * way: the server's table writes `The %s leaves to the %s.` and `%s just
-   * left to the %s.`. No live capture has one yet (2026-09-23); the frame is
-   * read off the table, and a player's one-word `just left to` is claimed by
-   * `player-leaves-room` above. Everything before the verb is the name.
+   * A monster walking out — the other half of the arrival, on the same two
+   * shapes of name. ` just left ` and ` exits to` carry no verb of the
+   * monster's; `<verb> out|off|away to` and `out of the room to` do. A
+   * player's one-word `just left to` is `player-leaves-room`'s, above.
    */
   {
     type: 'mob-leaves-room',
     pattern:
-      /^(?:(?:A|An|The) )?(?<mob>[\w' -]+?) (?:just left|leaves) (?:to (?:the )?)?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down|upwards|downwards|above|below)[.!]$/
+      /^(?!You )(?:(?:A|An|The) )?(?<mob>[\w' -]+?) (?:just left|leaves(?: the room)?|is sneaking out) (?:to )?(?:the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down|upwards|downwards|above|below)[.!]$/
+  },
+  // `exits to` only after an article: `There are no exits to the south!` is not
+  // somebody leaving.
+  {
+    type: 'mob-leaves-room',
+    pattern:
+      /^(?:A|An|The) (?<mob>[\w' -]+?) exits(?: the room)? to (?:the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down|upwards|downwards|above|below)[.!]$/
+  },
+  {
+    type: 'mob-leaves-room',
+    pattern:
+      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+?) (?:out of the room|out|off|away) to (?:the )?(?<direction>[\w ]+?)[.!]$/
   },
   /*
    * The one death sentence the server composes itself. `Mob.cs:1235` prints

@@ -224,6 +224,55 @@ describe('combat', () => {
     expect(creep).toMatchObject({ attacker: 'giant rat', direction: 'above' });
   });
 
+  /*
+   * The rest of the family, read the way MegaMUD's `ParseInOut` reads them —
+   * by phrase — and the server table's own departures and follows
+   * (2026-09-23). Paramud's `enters the room from` was the one that walked
+   * fifteen dogs in unread.
+   */
+  it('reads every way a monster comes and goes', () => {
+    const arrives = (line: string) => expectType(line, 'mob-arrives-room');
+    const leaves = (line: string) => expectType(line, 'mob-leaves-room');
+    expect(arrives('A giant war dog enters the room from the south.')['line']).toBe(
+      'giant war dog enters'
+    );
+    expect(arrives('The giant rat enters from the west.')['mob']).toBe('giant rat');
+    expect(arrives('A kobold thief sneaks into the room from nowhere.')['line']).toBe(
+      'kobold thief sneaks'
+    );
+    expect(arrives('An alchemist walks into the room!')['line']).toBe('alchemist walks');
+    expect(arrives('A giant rat walks in from the west, riddled with arrows!')['line']).toBe(
+      'giant rat walks'
+    );
+    // Following this character in is an arrival, not a swing that missed.
+    expect(arrives('The orc rogue charges after you with a battle cry!')['line']).toBe(
+      'orc rogue charges'
+    );
+    expect(arrives('The ice sorceress follows you into the room!')['line']).toBe(
+      'ice sorceress follows'
+    );
+    expect(arrives('The brine hag pursues you in from the north!')['line']).toBe(
+      'brine hag pursues'
+    );
+    expect(leaves('The large yeti stomps out to the north.')['line']).toBe('large yeti stomps');
+    expect(leaves('The giant rat walks out of the room to the east.')['line']).toBe(
+      'giant rat walks'
+    );
+    expect(leaves('The goblin leaves to the south.')['mob']).toBe('goblin');
+  });
+
+  it('leaves what only looks like coming and going to what it is', () => {
+    const not = (line: string, type: string) =>
+      expect(
+        new Classifier().classify({ seq: 1, at: 1, text: line, plain: line, terminator: 'newline' })
+          .block.type
+      ).not.toBe(type);
+    not('street, and dark, narrow alleyways lead off to the east and west.', 'mob-leaves-room');
+    not('Damyr just left the Realm.', 'mob-leaves-room');
+    not('You summon a powerful tempest into the room!', 'mob-arrives-room');
+    not('You notice Warrax sneaking out to the north.', 'mob-leaves-room');
+  });
+
   it('reads combat state and experience', () => {
     expect(expectType('*Combat Engaged*', 'combat-status')['status']).toBe('Engaged');
     expect(expectType('You gain 42 experience.', 'user-gain-experience')['exp']).toBe('42');

@@ -24,6 +24,16 @@ import { tuning } from '../app/tuning';
 export class RoomDraft {
   private draft: Room = emptyRoom();
   private description: string[] = [];
+  private drafting = false;
+
+  /**
+   * Between a room's name and its exits: a line read now is the room's own
+   * prose, whatever frame it happens to fit — `A narrow path leads off to
+   * the east.` is a description, not a monster walking out.
+   */
+  get open(): boolean {
+    return this.drafting;
+  }
 
   /**
    * A name starts a new draft. Anything half-collected belongs to a room we
@@ -32,6 +42,7 @@ export class RoomDraft {
   begin(name: string | null): void {
     this.draft = { ...emptyRoom(), name };
     this.description = [];
+    this.drafting = true;
   }
 
   /**
@@ -78,6 +89,7 @@ export class RoomDraft {
    * resolver refuses is still the room on screen.
    */
   complete(exits: ExitEntity[]): Room {
+    this.drafting = false;
     return {
       ...this.draft,
       description: this.description.length > 0 ? this.description.join(' ') : null,
@@ -93,6 +105,7 @@ export class RoomDraft {
 
   /** The room is done with — completed, superseded, or left behind. */
   discard(): void {
+    this.drafting = false;
     this.draft = emptyRoom();
     this.description = [];
   }

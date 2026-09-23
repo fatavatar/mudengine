@@ -514,6 +514,21 @@ describe("Paramud's own words for its own spells", () => {
     ]);
   });
 
+  /*
+   * Paramud ends aura of undeath under another spell's name — `The effects of
+   * protection from good wear off!` — and the two share a message record, so
+   * the start sentence says it is the same effect ending (skinny, 2026-09-23).
+   */
+  it('ends a buff on a wear-off naming another spell with the same effect', () => {
+    const { tracker, feed } = feeder(shippedSpellLore(realm));
+    feed('[HP=585/MA=420]:');
+    feed('You cast aura of undeath, surrounding everyone in the room with a black glow!');
+    feed('You feel safe from good!');
+    expect(held(tracker)).toEqual(['aura of undeath']);
+    expect(feed('The effects of protection from good wear off!')).toBe('user-buff-expired');
+    expect(held(tracker)).toEqual([]);
+  });
+
   it('lists nothing for a cast the server turned away', () => {
     const { tracker, feed, send } = feeder(shippedSpellLore(realm));
     spellbook(feed, send);

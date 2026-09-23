@@ -2038,6 +2038,10 @@ describe('asking once about one monster', () => {
     expect(sent).toEqual(['a small giant rat']);
 
     auto.openAgain();
+    // Not while the fight is still on: the heal has not switched it off yet.
+    auto.onCharacter(state({ room: here, inCombat: true, combat: { ...EMPTY_CHARACTER.combat } }));
+    drain();
+    expect(sent).toEqual(['a small giant rat']);
     auto.onCharacter(state({ room: here, inCombat: false }));
     drain();
     expect(sent).toEqual(['a small giant rat', 'a small giant rat']);
@@ -2952,6 +2956,104 @@ describe('the monster table, fighting', () => {
       auto.onCharacter(state({ room: rat }));
       drain();
       expect(sent).toEqual(['c pcloud']);
+    });
+
+    /*
+     * The server does not stop a room spell when the room is empty: it goes
+     * on casting it every round, into whatever room the character walks to.
+     * MegaMUD sends `bre` once no monster is left (the player, 2026-09-23).
+     */
+    it('breaks a room spell off once nothing is left in the room', () => {
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 1 })
+      );
+      auto.onCharacter(state({ room: rat }));
+      drain();
+      auto.onCharacter(state({ room: rat, inCombat: true }));
+      auto.onCharacter(state({ room: { ...EMPTY_CHARACTER.room, occupants: [] } }));
+      drain();
+      expect(sent).toEqual(['c pcloud', 'break']);
+    });
+
+    /*
+     * Every death is a decision while the room spell is engaged (the player's
+     * MegaMUD transcript, 2026-09-23): enough left, and the server is already
+     * casting it; too few, and the single-target spell takes over.
+     */
+    it('sends nothing while enough are left, and switches to one target when too few are', () => {
+      const dogs = (count: number) => ({
+        ...EMPTY_CHARACTER.room,
+        occupants: Array.from({ length: count }, () => mob('giant rat', 'hostile'))
+      });
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 3 })
+      );
+      auto.onCharacter(state({ room: dogs(5) }));
+      drain();
+      expect(sent).toEqual(['c pcloud']);
+      auto.onCharacter(state({ room: dogs(5), inCombat: true }));
+      // Two die, each with its own `*Combat Off*`: three left, still the room spell's.
+      auto.onCharacter(state({ room: dogs(4) }));
+      auto.onCharacter(state({ room: dogs(3) }));
+      drain();
+      expect(sent).toEqual(['c pcloud']);
+      // Two left: under the threshold — but only once the burst is over.
+      auto.onCharacter(state({ room: dogs(2) }));
+      drain();
+      expect(sent).toEqual(['c pcloud']);
+      vi.advanceTimersByTime(800);
+      drain();
+      expect(sent).toEqual(['c pcloud', 'c ma giant rat']);
+    });
+
+    /*
+     * The burst's kills print one after another: a switch decided halfway
+     * through aimed `c fury giant war dog` at a dog the rest of the burst
+     * killed — `You do not see giant war dog here!` (2026-09-23).
+     */
+    it('does not switch halfway through a burst that empties the room', () => {
+      const dogs = (count: number) => ({
+        ...EMPTY_CHARACTER.room,
+        occupants: Array.from({ length: count }, () => mob('giant rat', 'hostile'))
+      });
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 3 })
+      );
+      auto.onCharacter(state({ room: dogs(4) }));
+      drain();
+      auto.onCharacter(state({ room: dogs(4), inCombat: true }));
+      auto.onCharacter(state({ room: dogs(2) }));
+      auto.onCharacter(state({ room: dogs(1) }));
+      auto.onCharacter(state({ room: dogs(0) }));
+      vi.advanceTimersByTime(1_000);
+      drain();
+      expect(sent).toEqual(['c pcloud', 'break']);
+    });
+
+    /*
+     * `in this room` is the room spell with nothing to hit, not the spell
+     * failing: read as a failure, the next room of fifteen dogs was fought
+     * with the single-target spell (2026-09-23).
+     */
+    it('reads "no effect in this room" as an empty room, and breaks the spell off', () => {
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 1 })
+      );
+      auto.onCharacter(state({ room: { ...EMPTY_CHARACTER.room, occupants: [] } }));
+      auto.onBlock(block('spell-ineffective', { room: 'in this room' }));
+      drain();
+      expect(sent).toEqual(['break']);
+      auto.onCharacter(state({ room: rat }));
+      drain();
+      expect(sent).toEqual(['break', 'c pcloud']);
     });
 
     /*

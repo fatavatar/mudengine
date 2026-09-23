@@ -4582,9 +4582,11 @@ export class SessionManager {
     for (const dead of this.tracker.takeDeaths()) this.noteQuestKilled(dead);
     if (block.type === 'mob-dies' || block.type === 'user-gain-experience') {
       this.rereadRoom(t('automation.combat.reasonLookAfterKill'));
-    } else if (block.type === 'mob-arrives-room') {
+    } else if (block.type === 'mob-arrives-room' && !this.tracker.roomOpen) {
+      // Inside a room listing the line is the room's prose, and re-reading on
+      // it would print it again, for ever.
       this.rereadRoom(t('automation.combat.reasonLookAfterArrival'));
-    } else if (block.type === 'mob-leaves-room') {
+    } else if (block.type === 'mob-leaves-room' && !this.tracker.roomOpen) {
       this.rereadRoom(t('automation.combat.reasonLookAfterDeparture'));
     }
     // The listing that answers it: after the Enter went out, the room's exits.

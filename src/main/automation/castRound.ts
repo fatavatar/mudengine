@@ -55,7 +55,14 @@ export class CastRound implements CastGate {
 
   mayCast(): boolean {
     if (this.castAt === null) return true;
-    if (this.roundAt > this.castAt) return true;
+    /*
+     * A round that began *well after* the cast, not merely after it: the send
+     * is not when the server reads it. `c hesh` went out, the dogs' round
+     * printed 72ms later, and the server echoed the cast 290ms after the send
+     * — the round had begun before it arrived, so it was that round's cast,
+     * and the `c mahe` the round's blows let through was refused (2026-09-23).
+     */
+    if (this.roundAt - this.castAt >= tuning().spells.roundGapMs) return true;
     return this.now() - this.castAt >= tuning().spells.castRoundMs;
   }
 

@@ -876,6 +876,11 @@ export class CharacterTracker {
     return true;
   }
 
+  /** Whether a room is being listed right now — between its name and its exits. */
+  get roomOpen(): boolean {
+    return this.room.open;
+  }
+
   /**
    * Records an outbound command: what the fight may be about to bind, and what
    * the next room may be the answer to. The command path's memory is
@@ -5170,7 +5175,12 @@ export class CharacterTracker {
        * twice by the Enter that follows (`SessionManager.rereadRoom`).
        */
       case 'mob-arrives-room': {
-        const named = g['attacker'] ?? trimVerb(g['line'] ?? '');
+        // Inside a room listing it is the room's prose. See `RoomDraft.open`.
+        if (this.room.open) {
+          this.room.describe(block.text);
+          return null;
+        }
+        const named = (g['attacker'] ?? g['mob'] ?? trimVerb(g['line'] ?? '')).trim();
         if (named.length === 0) return null;
         const [arrival] = this.classify([named], s.online);
         if (arrival === undefined) return null;
@@ -5179,7 +5189,11 @@ export class CharacterTracker {
 
       /* A monster walking out, one of that name. */
       case 'mob-leaves-room': {
-        const named = g['mob']?.trim() ?? '';
+        if (this.room.open) {
+          this.room.describe(block.text);
+          return null;
+        }
+        const named = (g['attacker'] ?? g['mob'] ?? trimVerb(g['line'] ?? '')).trim();
         if (named.length === 0) return null;
         const key = mobKey(named);
         const at = s.room.occupants.findIndex((who) => mobKey(who.name) === key);
@@ -5997,7 +6011,28 @@ export class CharacterTracker {
             next = afflicted(next, condition, 'no') ?? next;
           }
         }
-        const ended = next.buffs.filter((buff) => this.buffMatches(buff, names));
+        /*
+         * **And whatever shares its start sentence**, which is the same effect
+         * under another spell's name. Paramud ends aura of undeath with `The
+         * effects of protection from good wear off!` — both carry message
+         * record 8542, `You feel safe from good!` — and matched by name alone
+         * the aura stayed on the list and was never recast (skinny,
+         * 2026-09-23).
+         */
+        const starts = new Set(
+          names
+            .map((name) => this.spellLore.startOf(name))
+            .filter((start): start is string => start !== null)
+            .map(effectKey)
+        );
+        const sameEffect = (buff: ActiveBuff): boolean =>
+          this.buffNames(buff).some((name) => {
+            const start = this.spellLore.startOf(name);
+            return start !== null && starts.has(effectKey(start));
+          });
+        const ended = next.buffs.filter(
+          (buff) => this.buffMatches(buff, names) || sameEffect(buff)
+        );
         // A wear-off naming nothing on the list is still a fact — a debuff
         // ending, or a buff cast before this session — and may have turned a
         // condition off above even when it ends no buff.
