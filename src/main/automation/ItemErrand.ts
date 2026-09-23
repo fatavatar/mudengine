@@ -84,10 +84,15 @@ interface Wanted {
   name: string;
 }
 
+/*
+ * `rest` is what the way still wants after the item in hand: a way can ask
+ * for several things (2026-09-23 — three for the long way to the Dark-Elf
+ * Castle), and walking it with the first alone stops at the second.
+ */
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'buying'; item: Wanted; owes: Route }
-  | { kind: 'hunting'; item: Wanted; owes: Route; mob: string }
+  | { kind: 'buying'; item: Wanted; rest: Wanted[]; owes: Route }
+  | { kind: 'hunting'; item: Wanted; rest: Wanted[]; owes: Route; mob: string }
   /**
    * The pack holds it and the way is still being offered to the walker.
    *
@@ -121,21 +126,36 @@ export class ItemErrand {
   }
 
   /**
-   * Go and get `item`, then walk `owes`.
+   * Go and get every one of `items`, one after another, then walk `owes`.
    *
    * Returns a refusal for the window that asked — this is a press, so the
    * person is looking at the answer — and null once something is under way.
-   * **The pack is asked first**: an item the character is already carrying
-   * means the route is walked now, which is the commonest case for a key that
-   * was collected on an earlier trip.
+   * **The pack is asked first**: what the character is already carrying is
+   * not fetched again, and a way whose every item is in the pack is walked
+   * now — the commonest case for a key collected on an earlier trip.
    */
-  collect(item: Wanted, owes: Route, state: CharacterState): string | null {
+  collect(items: readonly Wanted[], owes: Route, state: CharacterState): string | null {
     if (this.phase.kind !== 'idle') return t('automation.collect.refusalBusy');
     if (state.phase !== 'in-game') return t('automation.collect.refusalNotInRealm');
-    if (carriedCount(state, item.name) > 0) {
+    const missing = items.filter((item) => carriedCount(state, item.name) === 0);
+    const first = missing[0];
+    if (first === undefined) {
       const refused = this.planner.walk(owes);
       return refused ?? null;
     }
+    // Said once, up front, where there is more than one: the errand is then a
+    // list, and a player watching it fetch the first thing should know it is
+    // not the last.
+    if (missing.length > 1) {
+      this.events.notice?.(
+        t('automation.collect.several', { items: missing.map((item) => item.name).join(', ') })
+      );
+    }
+    return this.fetch(first, missing.slice(1), owes);
+  }
+
+  /** Start on one item, with `rest` still to come after it. */
+  private fetch(item: Wanted, rest: Wanted[], owes: Route): string | null {
     // Where the errand is taking this character afterwards, so the counter is
     // chosen by how far off *that* road it is rather than by how near it is to
     // where the character happens to be standing.
@@ -166,7 +186,7 @@ export class ItemErrand {
       };
       const refused = this.planner.buy(row);
       if (refused !== null) return this.refuse(item, refused);
-      this.phase = { kind: 'buying', item, owes };
+      this.phase = { kind: 'buying', item, rest, owes };
       /*
        * Two literal calls rather than one sentence with a figure that is
        * sometimes zero: *0 steps off the way* is a number where the reader
@@ -205,7 +225,7 @@ export class ItemErrand {
       this.planner.stopTaking(item.name);
       return this.refuse(item, refused);
     }
-    this.phase = { kind: 'hunting', item, owes, mob: lair.mob };
+    this.phase = { kind: 'hunting', item, rest, owes, mob: lair.mob };
     this.events.notice?.(
       t('automation.collect.hunting', { item: item.name, mob: lair.mob, room: lair.name })
     );
@@ -255,7 +275,7 @@ export class ItemErrand {
       return;
     }
     if (carriedCount(state, item.name) > 0) {
-      this.deliver(item, owes);
+      this.deliver(item, owes, state);
       return;
     }
     /*
@@ -276,9 +296,14 @@ export class ItemErrand {
     }
   }
 
-  /** The pack holds it: stop collecting, say which happened, and walk on. */
-  private deliver(item: Wanted, owes: Route): void {
+  /**
+   * The pack holds it: stop collecting, say which happened, and go on to the
+   * next thing the way wants — or, with nothing left, walk on.
+   */
+  private deliver(item: Wanted, owes: Route, state: CharacterState): void {
     const hunting = this.phase.kind === 'hunting';
+    const rest =
+      this.phase.kind === 'idle' || this.phase.kind === 'delivering' ? [] : this.phase.rest;
     this.give();
     this.phase = { kind: 'idle' };
     if (hunting) this.planner.stopLoop(t('automation.collect.stoppedGotIt', { item: item.name }));
@@ -299,6 +324,14 @@ export class ItemErrand {
       because: t('automation.collect.becauseDoor', { item: item.name }),
       acted: true
     });
+    // Whatever the way still wants and the pack still lacks — something the
+    // last errand picked up along the way is not fetched twice.
+    const still = rest.filter((next) => carriedCount(state, next.name) === 0);
+    const next = still[0];
+    if (next !== undefined) {
+      this.fetch(next, still.slice(1), owes);
+      return;
+    }
     /*
      * **Offered, not fired once.** The loop that just found this has a step on
      * the wire — it stepped on before the server confirmed the pick-up — so

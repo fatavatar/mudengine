@@ -6948,12 +6948,13 @@ export class SessionManager {
    * Collect what the way needs, then walk it (todo 07).
    *
    * The one door for *collect it first* — the route panel's tick beside its
-   * *Walk it*, offered on whichever way is on screen where that way names an
-   * item (`itemWanted`). The errand reports its own refusal back to the window
-   * that pressed, because a person is looking at the answer.
+   * *Walk it*, offered on whichever way is on screen where that way names
+   * items (`itemsWanted`) — every one of them, fetched in turn. The errand
+   * reports its own refusal back to the window that pressed, because a person
+   * is looking at the answer.
    */
-  collectThenWalk(item: { id: number; name: string }, route: Route): string | null {
-    return this.itemErrand.collect(item, route, this.tracker.current);
+  collectThenWalk(items: Array<{ id: number; name: string }>, route: Route): string | null {
+    return this.itemErrand.collect(items, route, this.tracker.current);
   }
 
   /**

@@ -4021,6 +4021,7 @@ automation:
     buyingOnTheWay: 'Going to buy {item} at {shop} in {room} first; the way there goes past it.'
     gotAndKept: '{item} is in the pack, and it is on the keep list, so it stays.'
     gotForTheDoor: '{item} is in the pack — collected for this door, not kept.'
+    several: 'This way needs {items}; collecting each in turn before walking it.'
     hunting: 'Looking for {item}: {mob} drops it, starting at {room}.'
     loopName: 'Collect: {item}'
     refusalBusy: Something is already being collected.

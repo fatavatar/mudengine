@@ -2963,7 +2963,8 @@ export default function App() {
   const walkRoute = useCallback((route: Route) => api.walkRoute(session, route), [api, session]);
   /** *Collect it first*, from the route panel's alternative that needs one (todo 07). */
   const collectThenWalk = useCallback(
-    (item: { id: number; name: string }, route: Route) => api.collectThenWalk(session, item, route),
+    (items: Array<{ id: number; name: string }>, route: Route) =>
+      api.collectThenWalk(session, items, route),
     [api, session]
   );
 

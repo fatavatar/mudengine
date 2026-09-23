@@ -22,6 +22,7 @@ import {
   describeBlock,
   hazardAvoided,
   itemWanted,
+  itemsWanted,
   lairsAlong,
   landingRooms
 } from '../../../shared/world';
@@ -3934,6 +3935,30 @@ describe('itemWanted', () => {
     // `blocks` on a walkable plan is another route's errand, and that route is
     // offered as `carrying` where there is one.
     expect(itemWanted(route({ blocks: [door] }))).toBeNull();
+  });
+
+  /*
+   * Every one, not the first (2026-09-23): the long way to the Dark-Elf Castle
+   * wanted three things, the tick named one, and the errand fetched one.
+   */
+  it('lists everything the way wants, each once, doors before spells', () => {
+    const gate: RouteBlock = { ...door, at: '1/5', to: '1/6', keyId: 170, itemName: 'iron key' };
+    expect(itemsWanted(route({ walls: [door, gate, door], hazards: [raft] }))).toEqual([
+      { id: 593, name: 'black serpent key' },
+      { id: 170, name: 'iron key' },
+      { id: 41, name: 'log raft' }
+    ]);
+    expect(
+      itemsWanted(
+        route({
+          needs: [
+            { id: 593, name: 'black serpent key' },
+            { id: 170, name: 'iron key' }
+          ]
+        })
+      ).map((item) => item.name)
+    ).toEqual(['black serpent key', 'iron key']);
+    expect(itemsWanted(route({}))).toEqual([]);
   });
 });
 

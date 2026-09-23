@@ -1669,17 +1669,27 @@ function registerIpc(): void {
    * on a socket — and the item is checked as narrowly as the route: an id and
    * a name, both of which the realm gave the window in the first place.
    */
-  handle(Invoke.collectThenWalk, (_caller, session: SessionId, item: unknown, payload: unknown) => {
-    const slot = host?.get(session);
-    if (!slot) return t('app.session.notConnected');
-    const route = asRoute(payload);
-    if (!route) return t('app.route.invalidPayload');
-    const asked = item as { id?: unknown; name?: unknown } | null;
-    const id = typeof asked?.id === 'number' && Number.isFinite(asked.id) ? asked.id : null;
-    const name = typeof asked?.name === 'string' ? asked.name.trim() : '';
-    if (id === null || name.length === 0) return t('app.route.invalidPayload');
-    return slot.manager.collectThenWalk({ id, name }, route);
-  });
+  handle(
+    Invoke.collectThenWalk,
+    (_caller, session: SessionId, items: unknown, payload: unknown) => {
+      const slot = host?.get(session);
+      if (!slot) return t('app.session.notConnected');
+      const route = asRoute(payload);
+      if (!route) return t('app.route.invalidPayload');
+      // Every entry checked, and one bad entry refuses the lot: an errand that
+      // silently dropped an item would walk into the door that item opens.
+      if (!Array.isArray(items) || items.length === 0) return t('app.route.invalidPayload');
+      const wanted: Array<{ id: number; name: string }> = [];
+      for (const item of items) {
+        const asked = item as { id?: unknown; name?: unknown } | null;
+        const id = typeof asked?.id === 'number' && Number.isFinite(asked.id) ? asked.id : null;
+        const name = typeof asked?.name === 'string' ? asked.name.trim() : '';
+        if (id === null || name.length === 0) return t('app.route.invalidPayload');
+        wanted.push({ id, name });
+      }
+      return slot.manager.collectThenWalk(wanted, route);
+    }
+  );
   /*
    * The one play button and the one stop button.
    *

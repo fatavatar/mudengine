@@ -12,7 +12,7 @@ import {
   asRoomReference,
   describeBlock,
   DIRECTION_NAME,
-  itemWanted,
+  itemsWanted,
   lairsAlong,
   roomId,
   trapsAlong,
@@ -26,6 +26,11 @@ import {
 import { keepFocus } from '../lib/focus';
 import { tuning } from '../lib/tuning';
 import type { Replanned, WalkStart } from '@shared/movement';
+
+/** Every item's name, for the one sentence that offers to fetch them all. */
+function named(items: ReadonlyArray<{ name: string }>): string {
+  return items.map((item) => item.name).join(', ');
+}
 
 /** Which of the plan's routes is on screen — see `chosen`. */
 type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'keyed';
@@ -60,9 +65,13 @@ export interface RoutePanelProps {
    * Collects what the way needs first, then walks it (todo 07).
    *
    * Offered on whichever way is on screen, where it names an item to go and
-   * get — a door it crosses, or a spell its rooms cast (`itemWanted`).
+   * get — the doors it crosses, the spells its rooms cast (`itemsWanted`) —
+   * every one of them, fetched in turn.
    */
-  onCollectThenWalk(item: { id: number; name: string }, route: Route): Promise<string | null>;
+  onCollectThenWalk(
+    items: Array<{ id: number; name: string }>,
+    route: Route
+  ): Promise<string | null>;
   /**
    * A destination chosen elsewhere — clicking the map — to plan on opening.
    *
@@ -525,10 +534,9 @@ export default function RoutePanel({
   const walk = useCallback(
     (plan: Route): void => {
       /*
-       * *Collect it first* is a different press: main goes and gets the item
-       * and walks the way that wanted it when the pack holds it. The item is
-       * the first that way asks for — the panel names them all in the sentence
-       * above, and the errand refuses out loud if it cannot reach that one.
+       * *Collect it first* is a different press: main goes and gets every
+       * item the way asks for, one after another, and walks it once the pack
+       * holds them all. The errand refuses out loud if it cannot reach one.
        *
        * **Only about the whole way on screen**, which is what the tick was
        * drawn from. A prefix is built by slicing the steps (`peek`, and a
@@ -536,7 +544,7 @@ export default function RoutePanel({
        * `hazards` onto a walk that stops three rooms along — so *Walk here*
        * would leave to go shopping for a key for a door it never reaches.
        */
-      const needed = collectFirst && plan === shown ? itemWanted(plan) : null;
+      const needed = collectFirst && plan === shown ? itemsWanted(plan) : [];
       /*
        * *Stop before entering* drops the last step, by the same rule: about
        * the whole way on screen, never a prefix, because *Walk here* has
@@ -566,7 +574,7 @@ export default function RoutePanel({
        * there is nothing for it to redraw.
        */
       const started: Promise<WalkStart> =
-        needed === null
+        needed.length === 0
           ? onWalk(walked)
           : onCollectThenWalk(needed, walked).then((reason) =>
               reason === null ? { started: true } : { refused: reason }
@@ -852,12 +860,12 @@ export default function RoutePanel({
                   {/* A way only a key opens is an errand, not a dead end: main
                   planned where it goes once the pack holds the key
                   (`Route.unlocks`), and this sends the character to get it and
-                  then walks that. Offered only when the key alone is enough —
-                  `itemWanted` answers null for a way that is gated as well. */}
+                  then walks that. Offered only when the keys alone are enough —
+                  `itemsWanted` answers nothing for a way that is gated as well. */}
                   {(() => {
-                    const wanted = itemWanted(route);
+                    const wanted = itemsWanted(route);
                     const unlocks = route.unlocks;
-                    if (wanted === null || unlocks === undefined) return null;
+                    if (wanted.length === 0 || unlocks === undefined) return null;
                     return (
                       <div className="route-fetch">
                         <button
@@ -873,7 +881,7 @@ export default function RoutePanel({
                           onMouseDown={keepFocus}
                           type="button"
                         >
-                          {t('cards.route.fetchThenWalk', { itemName: wanted.name })}
+                          {t('cards.route.fetchThenWalk', { itemName: named(wanted) })}
                         </button>
                       </div>
                     );
@@ -1071,8 +1079,8 @@ export default function RoutePanel({
                     below this row, and a tick that says only *it* is a tick
                     about something the reader has to go and look for. */}
                     {(() => {
-                      const wanted = itemWanted(shown);
-                      if (wanted === null) return null;
+                      const wanted = itemsWanted(shown);
+                      if (wanted.length === 0) return null;
                       return (
                         <label className="route-collect">
                           <input
@@ -1081,7 +1089,7 @@ export default function RoutePanel({
                             onMouseDown={keepFocus}
                             type="checkbox"
                           />
-                          {t('cards.route.collectFirst', { itemName: wanted.name })}
+                          {t('cards.route.collectFirst', { itemName: named(wanted) })}
                         </label>
                       );
                     })()}
