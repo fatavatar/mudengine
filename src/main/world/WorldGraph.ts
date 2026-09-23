@@ -3144,6 +3144,15 @@ export class WorldGraph {
   }
 
   /**
+   * Every row of the realm's Spells table, castable or not — a monster's
+   * spell prints its sentences on this character too. See
+   * `withRealmSpellNames`.
+   */
+  allSpells(): readonly WorldSpell[] {
+    return this.spells;
+  }
+
+  /**
    * Every spell a player could cast, named for a settings picker.
    *
    * The `isCastable` discriminator `names()` already uses, for the same

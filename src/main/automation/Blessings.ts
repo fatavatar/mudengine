@@ -46,6 +46,7 @@
  * entry allows it mid-fight, coalesced by the entry's spell — which is the
  * row's identity: the list holds one row per spell.
  */
+import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
 import { canPayFor, manaAtLeast } from './mana';
 import { t } from '../app/i18n';
@@ -55,6 +56,16 @@ import type { Block } from '../../shared/blocks';
 import { resolveSpell, spellCost } from '../../shared/spellcraft';
 import type { WorldSpell } from '../../shared/world';
 import { tuning } from '../app/tuning';
+
+/** What `Blessings` asks of the stat sheet. See its `askFirst`. */
+export interface BlessingSheet {
+  /** Ask for an `st` sheet; the tracker drops what it no longer prints. */
+  ask(): void;
+  /** Forget a measured duration the sheet has contradicted. */
+  forget(spell: string): void;
+}
+
+const NO_SHEET: BlessingSheet = { ask: () => {}, forget: () => {} };
 
 /** One key per blessing per person, so a party of four is four clocks. */
 function clockKey(entry: BlessingConfig, target: string): string {
@@ -87,6 +98,8 @@ export class Blessings {
    * thirds of which is refused.
    */
   private lastProposalAt = 0;
+  /** When each self clock last asked the sheet whether its buff is still up. See `askFirst`. */
+  private readonly sheetAskedAt = new Map<string, number>();
 
   constructor(
     private config: SpellsConfig,
@@ -113,7 +126,12 @@ export class Blessings {
      * given two callbacks for them; anything wanting a third would have got a
      * third. See `resolveSpell`.
      */
-    private readonly realmSpell: (name: string) => WorldSpell | null = () => null
+    private readonly realmSpell: (name: string) => WorldSpell | null = () => null,
+    /**
+     * The `st` sheet, for a watchdog to ask before it recasts (`askFirst`), and
+     * the measured durations, for one the sheet has shown to be wrong.
+     */
+    private readonly sheet: BlessingSheet = NO_SHEET
   ) {}
 
   /**
@@ -133,6 +151,30 @@ export class Blessings {
     return a !== null && b !== null && a === b;
   }
 
+  /** The one heal, blessing or cure a round allows. See `CastRound`. */
+  private gate: CastGate = OPEN_GATE;
+  /** The last blessing this sent, and when, for the refusal that may answer it. */
+  private lastSent: { key: string; at: number } | null = null;
+
+  useCastGate(gate: CastGate): void {
+    this.gate = gate;
+  }
+
+  /**
+   * The server answered `You have already cast a spell this round!`. If the
+   * last cast this module sent is what it answered, that cast failed: its
+   * clock is given back, so it goes again once the round has passed rather
+   * than on its retry floor (the player, 2026-09-23 — *this should be caught
+   * as a failure and retried later*).
+   */
+  noteRefused(): void {
+    const sent = this.lastSent;
+    this.lastSent = null;
+    if (sent === null || this.now() - sent.at > tuning().spells.refusedWindowMs) return;
+    this.proposedAt.delete(sent.key);
+    this.castAt.delete(sent.key);
+  }
+
   configure(config: SpellsConfig, enabled: boolean): void {
     this.config = config;
     this.enabled = enabled;
@@ -143,6 +185,7 @@ export class Blessings {
     this.proposedAt.clear();
     this.castAt.clear();
     this.dueNow.clear();
+    this.sheetAskedAt.clear();
     this.lastProposalAt = 0;
     this.stop();
   }
@@ -267,6 +310,9 @@ export class Blessings {
   private propose(state: CharacterState, prioritized: boolean): void {
     const now = this.now();
     if (now - this.lastProposalAt < tuning().spells.blessCooldownMs) return;
+    // This round's heal or blessing already went: a second is refused, and
+    // the refusal switches the fight off (`CastRound`).
+    if (!this.gate.mayCast()) return;
 
     for (const entry of this.config.blessings) {
       if (entry.prioritizeOverHeal !== prioritized) continue;
@@ -296,12 +342,14 @@ export class Blessings {
     const held = state.buffs.find((buff) =>
       [buff.spell, ...(buff.candidates ?? [])].some((name) => this.sameSpell(name, entry.spell))
     );
-    if (held !== undefined && !this.lapsed(held, entry, now)) return false;
-
     // `@self`, not this character's name: a self cast goes out bare, so it
     // needs no name at all, and `@` keeps the clock apart from any party
     // member's — a player name cannot start with it.
     const key = clockKey(entry, '@self');
+    if (held !== undefined) {
+      if (!this.lapsed(held, entry, now)) return false;
+      if (this.askFirst(held, entry, key, now)) return false;
+    }
     const proposed = this.proposedAt.get(key) ?? 0;
     // The last proposal may still be queued, in flight, or refused; a
     // confirmation resets nothing here — the buff appearing on the list is
@@ -354,12 +402,52 @@ export class Blessings {
      * is what the todo asked for — *use the st time if available.*
      */
     if (buff.expiresAt !== undefined) return now >= buff.expiresAt;
+    return now - buff.appliedAt >= this.watchdogMs(buff, entry);
+  }
+
+  /** The measured duration plus slack, or the shipped watchdog before one. */
+  private watchdogMs(buff: ActiveBuff, entry: BlessingConfig): number {
     const learned = this.learnedDuration(buff.spell) ?? this.learnedDuration(entry.spell);
-    const watchdogMs =
-      learned !== null && learned > 0
-        ? learned * 1000 * (1 + tuning().spells.blessSlack)
-        : tuning().spells.blessWatchdogMs;
-    return now - buff.appliedAt >= watchdogMs;
+    return learned !== null && learned > 0
+      ? learned * 1000 * (1 + tuning().spells.blessSlack)
+      : tuning().spells.blessWatchdogMs;
+  }
+
+  /**
+   * A watchdog that ran out on a buff the sheet speaks for asks the sheet
+   * before it recasts — true while that is the answer being waited on.
+   *
+   * The watchdog is a guess, and a wrong one recasts a shield that is up on
+   * every lap of it: a measured 29s for hellfire shield (its start taken from
+   * the login sheet rather than a cast) recast it every 36s all evening
+   * (2026-09-23), and the recast reset the clock before the real ending could
+   * ever correct the figure. The sheet is the check (the player's rule: *check
+   * stat*): a buff it no longer prints is dropped by the tracker and cast on
+   * the next pass, and one it still prints past the watchdog proves the
+   * measured duration wrong, which is then forgotten.
+   *
+   * A buff the sheet has never printed, a server-stated end, and a sheet that
+   * does not come within `blessRetryMs` all fall back to the recast.
+   */
+  private askFirst(buff: ActiveBuff, entry: BlessingConfig, key: string, now: number): boolean {
+    if (buff.expiresAt !== undefined || buff.listedAt === undefined) return false;
+    if (buff.listedAt >= buff.appliedAt + this.watchdogMs(buff, entry)) {
+      for (const name of new Set([buff.spell, entry.spell])) {
+        if (this.learnedDuration(name) !== null) this.sheet.forget(name);
+      }
+      // Now on the shipped watchdog; asked again only if that runs out too.
+      if (!this.lapsed(buff, entry, now)) return true;
+    }
+    const retry = tuning().spells.blessRetryMs;
+    const asked = this.sheetAskedAt.get(key);
+    const answered = asked !== undefined && buff.listedAt >= asked;
+    if (asked === undefined || (answered && now - buff.listedAt >= retry)) {
+      this.sheetAskedAt.set(key, now);
+      this.sheet.ask();
+      return true;
+    }
+    // Still printed a moment ago, or waiting on the answer — for a while.
+    return answered || now - asked < retry;
   }
 
   /**
@@ -394,6 +482,7 @@ export class Blessings {
     const found = resolveSpell(entry.spell, state.spellbook, this.realmSpell);
     if (!canPayFor(state, spellCost(found))) return false;
     this.proposedAt.set(key, now);
+    this.sheetAskedAt.delete(key);
     this.lastProposalAt = now;
     const word = found.word;
     this.queue.enqueue({
@@ -403,6 +492,20 @@ export class Blessings {
       priority: state.inCombat ? 'combat' : 'probe',
       coalesceKey: `blessing:${key}`,
       expiresAt: now + tuning().spells.buffExpiresMs,
+      /*
+       * Dropped unsent when this round's cast has gone meanwhile — and then it
+       * was never asked, so its retry clock is given back: the next round
+       * proposes it again rather than `blessRetryMs` later.
+       */
+      stillWanted: () => {
+        if (this.gate.mayCast()) return true;
+        this.proposedAt.delete(key);
+        return false;
+      },
+      onSent: () => {
+        this.gate.noteCast();
+        this.lastSent = { key, at: this.now() };
+      },
       reason: t('automation.blessing.reason', { name: entry.spell })
     });
     return true;

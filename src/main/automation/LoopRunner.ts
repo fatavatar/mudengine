@@ -50,6 +50,7 @@ import { fightIsRunning } from './Walker';
 import type { CharacterState } from '../../shared/character';
 import {
   DEFAULT_CONFIG,
+  manaHolding,
   resumeAtHealth,
   type HealthConfig,
   type MovementConfig,
@@ -110,6 +111,8 @@ export interface LoopPlanner {
    * window itself (`Recovery.restInFlight`), so the lap waits a beat at most.
    */
   restInFlight(): boolean;
+  /** A room re-read owed after a monster came, went or died. See `SessionManager.rereadRoom`. */
+  roomUnsettled?(): boolean;
   /** Whether the character is standing in the stop already. */
   here(stop: { name: string; at: { map: number; room: number } | null }): boolean;
   /**
@@ -200,6 +203,8 @@ export class LoopRunner {
   private locates = 0;
   /** Holding for health; see `health.restBelow`. */
   private hurt = false;
+  /** Holding for mana, the `hurt` hold's other half. See `manaHolding`. */
+  private drained = false;
   /**
    * Holding for a stated affliction — blind, held or poisoned — between legs;
    * see `afflictionHolding`. The walker holds the step *within* a leg on the
@@ -355,26 +360,28 @@ export class LoopRunner {
             ? 'fight'
             : this.hurt
               ? 'health'
-              : this.afflicted !== null
-                ? this.afflicted
-                : this.escaped
-                  ? 'retreated'
-                  : this.errand
-                    ? 'errand'
-                    : /*
-                       * Asked of the planner rather than latched (todo 14).
-                       *
-                       * A flag would have to be cleared on every path that ends
-                       * the wait, and there are six: the timer, `onCharacter`
-                       * planning the leg the moment the rest lands, `stop`,
-                       * `skip`, `resume` and `reset` — five of which call
-                       * `clearTimer` and so kill the only thing that would have
-                       * cleared it. The window is the fact; reading it is
-                       * always true and never stale.
-                       */
-                      this.planner.restInFlight()
-                      ? 'resting'
-                      : null
+              : this.drained
+                ? 'mana'
+                : this.afflicted !== null
+                  ? this.afflicted
+                  : this.escaped
+                    ? 'retreated'
+                    : this.errand
+                      ? 'errand'
+                      : /*
+                         * Asked of the planner rather than latched (todo 14).
+                         *
+                         * A flag would have to be cleared on every path that ends
+                         * the wait, and there are six: the timer, `onCharacter`
+                         * planning the leg the moment the rest lands, `stop`,
+                         * `skip`, `resume` and `reset` — five of which call
+                         * `clearTimer` and so kill the only thing that would have
+                         * cleared it. The window is the fact; reading it is
+                         * always true and never stale.
+                         */
+                        this.planner.restInFlight()
+                        ? 'resting'
+                        : null
         : null,
       startedAt: this.startedAt,
       lapBegunAt: this.lapBegunAt,
@@ -393,6 +400,7 @@ export class LoopRunner {
     this.failures = 0;
     this.locates = 0;
     this.hurt = false;
+    this.drained = false;
     this.afflicted = null;
     this.heldSince = null;
     this.escaped = false;
@@ -603,6 +611,7 @@ export class LoopRunner {
     this.waiting = false;
     this.lingering = false;
     this.hurt = false;
+    this.drained = false;
     this.afflicted = null;
     this.heldSince = null;
     this.escaped = false;
@@ -983,6 +992,7 @@ export class LoopRunner {
       if (this.hurt) {
         if (fraction < this.resumeAt()) return;
         this.hurt = false;
+        this.drained = false;
         this.events.notice?.(t('automation.loops.mended'));
         this.publish();
       } else if (fraction < this.health.restBelow && this.status === 'running') {
@@ -992,6 +1002,28 @@ export class LoopRunner {
         this.publish();
         return;
       }
+    }
+    /*
+     * And mana, on the same terms: `meditateBelow` stops the lap and a margin
+     * above it lets it go (`resumeAtMana`). `Recovery` meditates while the lap
+     * stands here, which it cannot do while the lap is marching.
+     */
+    const { mana, manaMax } = state.vitals;
+    const margin = tuning().loop.resumeMarginWhenUncapped;
+    if (this.drained) {
+      if (manaHolding(this.health, mana, manaMax, true, margin)) return;
+      this.drained = false;
+      this.events.notice?.(t('automation.loops.manaBack'));
+      this.publish();
+    } else if (
+      this.status === 'running' &&
+      manaHolding(this.health, mana, manaMax, false, margin)
+    ) {
+      this.drained = true;
+      this.waiting = true;
+      this.events.notice?.(t('automation.loops.lowMana'));
+      this.publish();
+      return;
     }
     if (this.escaped) {
       /*
@@ -1084,6 +1116,13 @@ export class LoopRunner {
      * treatment one line up.
      */
     if (this.planner.restInFlight()) return this.waitForRest();
+    /*
+     * Nor out of a room whose occupants are being read again — a monster came,
+     * went or died, and the Enter that says who is left is on its way
+     * (`SessionManager.rereadRoom`). Fifteen dogs walked in on skinny's lap
+     * and the lap walked on after the first died (2026-09-23).
+     */
+    if (this.planner.roomUnsettled?.() === true) return this.waitForRest();
 
     const target = splitStop(stop);
     if (this.planner.here(target)) {
@@ -1278,7 +1317,9 @@ export class LoopRunner {
     // is done. The errand was missing, and it is the one of the four that is
     // *started* by the character standing still — `Supplies.consider` refuses
     // while anything else has it — so a dwell is where it always begins.
-    if (this.fighting || this.hurt || this.escaped || this.errand || this.offline) return;
+    if (this.fighting || this.hurt || this.drained || this.escaped || this.errand || this.offline) {
+      return;
+    }
     this.lingering = false;
     this.waiting = false;
     this.step();

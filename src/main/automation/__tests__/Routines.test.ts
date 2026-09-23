@@ -643,6 +643,32 @@ describe('asking for the stat sheet to settle a buff ending', () => {
     expect(commandsIn(queue).filter((command) => command === 'st')).toHaveLength(1);
   });
 
+  /*
+   * Deferred rather than dropped (2026-09-23): a cast whose start is being
+   * learned, or a watchdog checking a shield before it recasts, asks inside
+   * the floor of an earlier sheet and nothing asks again after — so the one
+   * question it had to wait on went unanswered.
+   */
+  it('asks once the floor has passed for a question that came inside it', () => {
+    vi.useFakeTimers();
+    try {
+      const { routines, queue } = make();
+      const enqueue = vi.spyOn(queue, 'enqueue');
+      routines.askSheet(Date.now());
+      vi.advanceTimersByTime(5_000);
+      routines.askSheet(Date.now());
+      routines.askSheet(Date.now());
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(25_000);
+      expect(enqueue).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(60_000);
+      expect(enqueue).toHaveBeenCalledTimes(2);
+      routines.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('asks nothing with automation off', () => {
     const { routines, queue } = make({ enabled: false });
     routines.askSheet(1_000);

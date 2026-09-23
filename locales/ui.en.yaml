@@ -3094,6 +3094,10 @@ settings:
       Auto-Retreat.
     meditateBelowHint: Sends med below this. Ignored for a class with no mana.
     meditateBelowLabel: Meditate If Below Mana %
+    meditateToHint:
+      Meditates again after something breaks it, and keeps a walk or loop standing still, until mana
+      reaches this. 0 walks on 10% above Meditate If Below. Lifted to Meditate If Below if set under it.
+    meditateToLabel: Keep Meditating To Mana %
     outnumberedHint: A health threshold notices being swarmed too late. 0 never.
     outnumberedLabel: Retreat If Attackers Exceed
     pvpActionHint:
@@ -4170,9 +4174,10 @@ automation:
       standing still.'
   combat:
     reason: 'auto-combat: {why}'
-    reasonArrivalUnplaced: 'auto-combat: something walked in the realm data could not place'
     reasonRefresh: 'auto-combat: re-reading the room'
     reasonLookAfterKill: 'something died: looking for what it dropped'
+    reasonLookAfterArrival: 'something walked in: reading the room again'
+    reasonLookAfterDeparture: 'something walked out: reading the room again'
     reasonRoundAreaSpell: 'auto-combat: the room is crowded enough for the AE spell'
     reasonRoundSpell: 'auto-combat: round spell'
     reasonOpeningSpell: 'auto-combat: {why}, opening with {spell}'
@@ -4395,6 +4400,8 @@ automation:
     started: 'Looping {loopName}: {stopCount} stops.'
     stopped: 'Loop stopped: {reason}'
     tooHurt: Health below path threshold; resting to recover.
+    lowMana: Mana below the meditate threshold; meditating before walking on.
+    manaBack: Mana is back; the loop walks on.
     afflicted: Waiting out a condition before the next leg.
     afflictionOver: The condition has passed; the loop walks on.
     heldAfterEscape: Ran away; the loop holds here until the fight is over and health is back.
@@ -4622,6 +4629,8 @@ automation:
       '{spellName} dropped you somewhere the room name and its exits cannot tell apart; asking the
       realm where that is.'
     healthResumed: Health is back; walking on.
+    manaHolding: Mana is low; meditating here before walking on.
+    manaResumed: Mana is back; walking on.
     askingWhere: '{roomName} could be one of several rooms; asking the realm where this is.'
     landedElsewhere: '{command} put you in {roomName}, not where the route said; planning again from here.'
     trapHolding:

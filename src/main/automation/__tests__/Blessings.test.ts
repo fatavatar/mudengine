@@ -146,6 +146,116 @@ describe('keeping a blessing up on this character', () => {
     blessings.dispose();
   });
 
+  /*
+   * Skinny's hellfire shield (2026-09-23): a 29s duration measured off the
+   * login sheet rather than a cast recast it every 36s, and each recast reset
+   * the clock before the real ending could correct the figure. A buff the
+   * sheet speaks for is checked on the sheet before it is recast.
+   */
+  describe('a watchdog on a buff the sheet prints', () => {
+    const measured = (): {
+      durations: Map<string, number>;
+      asked: number[];
+      blessings: Blessings;
+    } => {
+      const durations = new Map([['protection', 29]]);
+      const asked: number[] = [];
+      const blessings = new Blessings(
+        spells([armour]),
+        true,
+        queue,
+        undefined,
+        (spell) => durations.get(spell) ?? null,
+        undefined,
+        { ask: () => asked.push(Date.now()), forget: (spell) => durations.delete(spell) }
+      );
+      return { durations, asked, blessings };
+    };
+
+    it('asks the sheet instead of recasting, and forgets a duration the sheet outlives', () => {
+      const { durations, asked, blessings } = measured();
+      const applied = Date.now();
+      const buff = { spell: 'protection', by: null, appliedAt: applied, cast: true as const };
+      blessings.onCharacter(state({ buffs: [{ ...buff, listedAt: applied + 1_000 }] }));
+      vi.advanceTimersByTime(37_000);
+      expect(sent).toEqual([]);
+      expect(asked).toHaveLength(1);
+
+      // The sheet still prints it, past the 36s clock: the clock was wrong.
+      blessings.onCharacter(state({ buffs: [{ ...buff, listedAt: Date.now() }] }));
+      expect(durations.has('protection')).toBe(false);
+      vi.advanceTimersByTime(60_000);
+      expect(sent).toEqual([]);
+      blessings.dispose();
+    });
+
+    it('recasts once the sheet has dropped it', () => {
+      const { asked, blessings } = measured();
+      const applied = Date.now();
+      blessings.onCharacter(
+        state({ buffs: [{ spell: 'protection', by: null, appliedAt: applied, listedAt: applied }] })
+      );
+      vi.advanceTimersByTime(37_000);
+      expect(asked).toHaveLength(1);
+      // The tracker takes off what the sheet no longer prints.
+      blessings.onCharacter(state({ buffs: [] }));
+      expect(sent).toEqual(['c protection']);
+      blessings.dispose();
+    });
+
+    it('recasts when no sheet comes, and on the watchdog alone for a buff never printed', () => {
+      const { asked, blessings } = measured();
+      const applied = Date.now();
+      blessings.onCharacter(
+        state({ buffs: [{ spell: 'protection', by: null, appliedAt: applied, listedAt: applied }] })
+      );
+      vi.advanceTimersByTime(37_000);
+      expect(asked).toHaveLength(1);
+      expect(sent).toEqual([]);
+      vi.advanceTimersByTime(31_000);
+      expect(sent).toEqual(['c protection']);
+      blessings.dispose();
+
+      const unprinted = measured();
+      unprinted.blessings.onCharacter(
+        state({ buffs: [{ spell: 'protection', by: null, appliedAt: Date.now() }] })
+      );
+      vi.advanceTimersByTime(37_000);
+      expect(unprinted.asked).toEqual([]);
+      expect(sent).toEqual(['c protection', 'c protection']);
+      unprinted.blessings.dispose();
+    });
+  });
+
+  /*
+   * `c ritu` answered `You have already cast a spell this round!` (skinny,
+   * 2026-09-23): the blessing did not land, and it goes again once the round
+   * has passed rather than thirty seconds on.
+   */
+  it('takes the round’s refusal as a failure and casts again after it', () => {
+    let open = true;
+    const blessings = new Blessings(spells([{ ...armour, minMana: 0 }]), true, queue);
+    blessings.useCastGate({
+      mayCast: () => open,
+      noteCast: () => {
+        open = false;
+      }
+    });
+    blessings.onCharacter(state());
+    expect(sent).toEqual(['c protection']);
+
+    blessings.noteRefused();
+    // The round is spent: nothing yet.
+    vi.advanceTimersByTime(6_500);
+    blessings.onCharacter(state());
+    expect(sent).toEqual(['c protection']);
+    // The next round, well inside the thirty-second retry floor.
+    open = true;
+    blessings.onCharacter(state());
+    expect(sent).toEqual(['c protection', 'c protection']);
+    blessings.dispose();
+  });
+
   it('waits out a fight unless the entry allows it, and waits under its own mana floor', () => {
     const patient = new Blessings(spells([{ ...armour, inCombat: false }]), true, queue);
     patient.onCharacter(state({ inCombat: true }));

@@ -99,7 +99,12 @@ import { countThreats } from './RuleEngine';
 import { willNotOpen, type KnownMob, type MonsterRule } from '../../shared/monsterRules';
 import { t } from '../app/i18n';
 import type { CharacterState } from '../../shared/character';
-import { DEFAULT_CONFIG, type HealthConfig, type PartyConfig } from '../../shared/config';
+import {
+  DEFAULT_CONFIG,
+  resumeAtMana,
+  type HealthConfig,
+  type PartyConfig
+} from '../../shared/config';
 import { tuning } from '../app/tuning';
 
 /**
@@ -215,6 +220,14 @@ export class Recovery {
    */
   private sitting = false;
   /**
+   * The mana half of `sitting`: a stretch of meditating that carries on to
+   * `resumeAtMana`, the figure a walk held for mana walks on at. Without it a
+   * cast that broke the meditation above `meditateBelow` left the character
+   * standing for the rest of a hold that was waiting on the mana it was no
+   * longer regaining. Armed by the wire's `(Meditating)`, cleared at the figure.
+   */
+  private meditatingOn = false;
+  /**
    * A figure a walk is waiting on, in hit points, or null.
    *
    * The walker stands still before a trap until health covers it
@@ -302,6 +315,7 @@ export class Recovery {
     this.state = null;
     this.askedUntil = 0;
     this.sitting = false;
+    this.meditatingOn = false;
     this.needed = null;
     this.refused.clear();
     this.saidPoisoned = false;
@@ -414,6 +428,7 @@ export class Recovery {
       // very next line is re-proposed on it.
       this.askedUntil = 0;
       if (resting) this.sitting = true;
+      if (meditating) this.meditatingOn = true;
       return;
     }
     /*
@@ -494,7 +509,7 @@ export class Recovery {
      * that *has* a figure and is still refused — a mystic's Kai, measured
      * 2026-09-04 — is what `refused` is for.
      */
-    if (this.below(mana, manaMax, this.config.meditateBelow) && !this.refused.has('med')) {
+    if (this.wantsMeditation(mana, manaMax) && !this.refused.has('med')) {
       this.propose('med', t('automation.recovery.reasonMana'));
       return;
     }
@@ -580,6 +595,16 @@ export class Recovery {
     if (restTo <= 0 || !this.sitting) return false;
     if (this.below(hp, hpMax, restTo)) return true;
     this.sitting = false;
+    return false;
+  }
+
+  /** `meditateBelow` starts a stretch; `resumeAtMana` is what carries it on. */
+  private wantsMeditation(mana: number | null, manaMax: number | null): boolean {
+    if (this.below(mana, manaMax, this.config.meditateBelow)) return true;
+    if (!this.meditatingOn) return false;
+    const to = resumeAtMana(this.config, tuning().loop.resumeMarginWhenUncapped);
+    if (this.below(mana, manaMax, to)) return true;
+    this.meditatingOn = false;
     return false;
   }
 

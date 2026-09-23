@@ -1280,83 +1280,6 @@ describe('what to swing with', () => {
 });
 
 /*
- * The arrival sentence is the only announcement a monster walking in gets, and
- * its name is read out of it by counting words — the verb is realm data. When
- * that lands short the occupant has no disposition, nothing here will swing at
- * it, and the character stands in the room being hit by something the client
- * is looking straight at. `Also here:` prints the server's own spelling, which
- * the realm's monster table can be asked about directly.
- */
-describe('an arrival the realm data could not place', () => {
-  const empty = () => state({ room: { ...EMPTY_CHARACTER.room, occupants: [] } });
-  const holding = (occupant: RoomOccupant) =>
-    state({ room: { ...EMPTY_CHARACTER.room, occupants: [occupant] } });
-
-  it('asks the room to say it again, with a bare Enter rather than a look', () => {
-    const auto = make(combat());
-    auto.onCharacter(empty());
-    auto.onBlock(block('mob-arrives-room', { line: 'thing lurches' }));
-    auto.onCharacter(holding(unplaced('thing')));
-    drain();
-    // The read, and no attack: an occupant the realm cannot place is exactly
-    // what `choose` declines.
-    expect(sent).toEqual(['']);
-  });
-
-  /* `unknown` is the other half of "could not be placed": a capitalised name
-     absent from the roster and from the monster table. */
-  it('asks again for an arrival nothing could even call a monster', () => {
-    const auto = make(combat());
-    auto.onCharacter(empty());
-    auto.onBlock(block('mob-arrives-room', { line: 'Grimjaw stalks' }));
-    auto.onCharacter(holding(unplaced('Grimjaw')));
-    drain();
-    expect(sent).toEqual(['']);
-  });
-
-  it('spends nothing when the arrival was placed', () => {
-    const auto = make(combat());
-    auto.onCharacter(empty());
-    auto.onBlock(block('mob-arrives-room', { attacker: 'giant rat' }));
-    auto.onCharacter(holding(mob('giant rat', 'hostile')));
-    drain();
-    // The attack, and only the attack.
-    expect(sent).toEqual(['a giant rat']);
-  });
-
-  /* A step is unanswered, so the room block would be attributed to the move —
-     the expectation-queue bug in a new hat. */
-  it('waits rather than re-reading a room it is leaving', () => {
-    const auto = make(combat());
-    auto.onCharacter(empty());
-    auto.noteMovePending(true);
-    auto.onBlock(block('mob-arrives-room', { line: 'thing lurches' }));
-    auto.onCharacter(holding(unplaced('thing')));
-    drain();
-    expect(sent).toEqual([]);
-  });
-
-  /*
-   * A listing is not an arrival. Without this the answer to the re-read —
-   * `Also here:` naming the same unplaceable thing — would be another re-read,
-   * for as long as it stood there.
-   */
-  it('does not re-read its own answer', () => {
-    const auto = make(combat());
-    auto.onCharacter(empty());
-    auto.onBlock(block('mob-arrives-room', { line: 'thing lurches' }));
-    auto.onCharacter(holding(unplaced('thing')));
-    drain();
-    sent.length = 0;
-
-    // The room, said again, still naming something nothing can place.
-    auto.onCharacter(holding(unplaced('thing')));
-    drain();
-    expect(sent).toEqual([]);
-  });
-});
-
-/*
  * The refusal is printed *in the room*, so a client that kept sending a verb
  * the character cannot use would announce it once a fight. The opener is what
  * is matched against one now that the round verbs are gone.
@@ -2100,6 +2023,26 @@ describe('casting in a fight', () => {
  * The mechanisms are documented on `endFight` and `noteUserCommand`.
  */
 describe('asking once about one monster', () => {
+  /*
+   * A heal switches the fight off with the monster still here (skinny,
+   * 2026-09-23), and the re-engage waited out the four-second cooldown since
+   * the first attack — past the server's next round, every time.
+   */
+  it('engages again at once after a cast of its own switched the fight off', () => {
+    const auto = make(combat());
+    const rat = mob('small giant rat', 'hostile');
+    const here = { ...EMPTY_CHARACTER.room, occupants: [rat] };
+    auto.onCharacter(state({ room: here }));
+    drain();
+    auto.onCharacter(state({ room: here, inCombat: true }));
+    expect(sent).toEqual(['a small giant rat']);
+
+    auto.openAgain();
+    auto.onCharacter(state({ room: here, inCombat: false }));
+    drain();
+    expect(sent).toEqual(['a small giant rat', 'a small giant rat']);
+  });
+
   it('keeps the engage cooldown across the end of a fight', () => {
     // Re-attacking makes the server answer `*Combat Off*` then `*Combat
     // Engaged*`; clearing the cooldown on the Off half re-armed the very next

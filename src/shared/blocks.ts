@@ -741,6 +741,7 @@ export type BlockType =
    * fight, and only one of them belongs in the room's monster count.
    */
   | 'mob-arrives-room'
+  | 'mob-leaves-room'
   /**
    * A monster's death sentence. `MobType.DeathMessage.Line3` is realm data
    * (todo 04, 2026-09-12), so only the server-composed fallback is a pattern;
@@ -967,6 +968,7 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'player-arrives-room': 'presence',
   'player-leaves-room': 'presence',
   'mob-arrives-room': 'presence',
+  'mob-leaves-room': 'presence',
   'mob-dies': 'combat',
   'room-light': 'room',
   'room-unseen': 'room',

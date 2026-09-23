@@ -409,9 +409,9 @@ tuning:
     # exactly as it was.
     engageCooldownMs: 4000
 
-    # How long an arrival sentence stays pending its own state change. Short,
-    # because what it bounds is the case where the change never comes.
-    arrivalWindowMs: 2000
+    # How long a room re-read owed after a monster came, went or died holds
+    # walking and resting still, when its answer never comes.
+    roomOwedMs: 3000
 
     # How long a typed `break` stands auto-combat down. The stand-down ends
     # early when the player attacks or the room changes; this is the backstop
@@ -514,6 +514,17 @@ tuning:
     # How soon after a cast an onset line (`You feel safe from evil!`) is
     # learned as that spell's, so the `st` timer can be attributed to it.
     onsetWindowMs: 3000
+    # A cast only the command named: the last unread line of its burst is the
+    # onset, learned once a line arrives this long after it.
+    onsetSettleMs: 500
+    # The quiet between two rounds' blows: the first blow after it opens a new
+    # round, and with it the one heal, blessing or cure a round allows.
+    roundGapMs: 1500
+    # How long that cast holds the gate when no new round is seen.
+    castRoundMs: 6000
+    # How soon after a heal, blessing or cure went out the round's refusal is
+    # taken as its answer, and the cast retried once the round has passed.
+    refusedWindowMs: 2000
     # How long a sentence nothing recognised is kept as a possible ending for a
     # buff whose ending is unknown, waiting for an `st` sheet to settle it.
     pendingStopMs: 600000

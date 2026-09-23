@@ -59,8 +59,14 @@ import {
 import { Belongings, peekSpellbook } from './session/Belongings';
 import type { BelongingsSink } from '../shared/belongings';
 import { NO_LORE, type MobLore } from '../shared/lore';
-import { SpellMessageBook, spellLoreOf, type SpellLore } from '../shared/spell-messages';
-import { loadSpellMessages } from './world/SpellMessages';
+import {
+  SpellMessageBook,
+  spellLoreOf,
+  withRealmSpellNames,
+  type SpellLore,
+  type SpellMessageRow
+} from '../shared/spell-messages';
+import { loadSpellMessageRows } from './world/SpellMessages';
 import { loadShippedSentences } from './world/ShippedSentences';
 import type { ShippedSentences } from '../shared/sentences';
 import { NO_REALM_PLAYERS, type RealmPlayers } from '../shared/players';
@@ -233,7 +239,9 @@ let worldBook: WorldBook | null = null;
  */
 let lore: RealmLore | null = null;
 /** The shipped spell message table, read once on first use. See `spellLoreFor`. */
-let spellMessages: SpellMessageBook | null = null;
+let spellMessages: SpellMessageRow[] | null = null;
+/** That table as each realm names its spells, built once per realm. See `spellLoreFor`. */
+const spellBooks = new Map<string, SpellMessageBook>();
 /** The shipped emote and death-sentence tables, read once on first use. See `sentences`. */
 let shippedSentences: ShippedSentences | null = null;
 /**
@@ -379,15 +387,24 @@ function loreFor(id: SessionId): MobLore {
  * and what is learned then goes nowhere, which is the honest answer.
  */
 function spellLoreFor(id: SessionId): SpellLore {
-  spellMessages ??= loadSpellMessages(
+  spellMessages ??= loadSpellMessageRows(
     path.join(resourcesDir(), 'world', 'spell-messages.csv'),
     (message) => announce('world', message)
   );
   const world = worldFor(id);
-  return (
-    lore?.spellsFor(world?.info.source ?? 'none', spellMessages) ??
-    spellLoreOf(spellMessages, new SpellMessageBook())
-  );
+  const realm = world?.info.source ?? 'none';
+  /*
+   * Under the realm's own spell names as well as the file's, joined by the
+   * message record each row carries (`withRealmSpellNames`): a derivative
+   * realm renames spells and keeps their sentences.
+   */
+  let shipped = spellBooks.get(realm);
+  if (shipped === undefined) {
+    const rows = world ? withRealmSpellNames(spellMessages, world.allSpells()) : spellMessages;
+    shipped = SpellMessageBook.fromRows(rows);
+    spellBooks.set(realm, shipped);
+  }
+  return lore?.spellsFor(realm, shipped) ?? spellLoreOf(shipped, new SpellMessageBook());
 }
 
 /**

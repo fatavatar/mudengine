@@ -758,7 +758,13 @@ export class Classifier {
         if (names[2] !== undefined) groups['target'] = names[2];
       }
       if (figure !== undefined) groups['amount'] = figure;
-      if (groups['spell'] === undefined) {
+      /*
+       * A `%s` is greedy, and a spell's name holds no comma: `You cast %s!`
+       * fitted to `You cast aura of undeath, surrounding everyone in the room
+       * with a black glow!` named the whole tail as the spell (2026-09-23).
+       */
+      if (groups['spell'] !== undefined) groups['spell'] = groups['spell'].split(',')[0]!.trim();
+      if (groups['spell'] === undefined || groups['spell'].length === 0) {
         return this.build(line, 'realm-message', this.messageGroups(hit), text, confidence);
       }
       groups['message'] = String(hit.number);

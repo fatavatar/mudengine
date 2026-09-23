@@ -2961,6 +2961,30 @@ describe('who is in the room, between looks', () => {
     const soul = tracker.current.room.occupants.find((who) => who.name === 'Soul');
     expect(soul?.kind).toBe('player');
   });
+
+  /*
+   * One sentence is one monster (skinny, 2026-09-23): fifteen giant war dogs
+   * walked in and were one on the list, so the first kill emptied the room as
+   * far as the client knew.
+   */
+  it('counts every monster that walks in, and takes one off for each that leaves', () => {
+    const { tracker, feed } = inRoom();
+    feed('giant war dog moves into the room from the north.');
+    feed('giant war dog moves into the room from the north.');
+    feed('giant war dog moves into the room from the north.');
+    expect(names(tracker.current.room.occupants)).toEqual([
+      'Nathaniel',
+      'giant war dog',
+      'giant war dog',
+      'giant war dog'
+    ]);
+    feed('The giant war dog leaves to the south.');
+    expect(names(tracker.current.room.occupants)).toEqual([
+      'Nathaniel',
+      'giant war dog',
+      'giant war dog'
+    ]);
+  });
 });
 
 /*
@@ -8614,10 +8638,42 @@ describe('the spell message table and what it teaches', () => {
     expect(names(tracker).sort()).toEqual(['strange glow', 'way of the tiger']);
   });
 
-  it('learns the start of a spell the table lacks from the cast it follows', () => {
+  /*
+   * The player's procedure (2026-09-23): cast it, read the sheet, and the line
+   * the cast added is its start. The burst alone is not enough — Paramud
+   * prints the cast's chatter and the effect as two unread lines, and only the
+   * effect is reprinted on the sheet.
+   */
+  it('learns the start of a spell the table lacks from the sheet read after its cast', () => {
     const { lore, taught } = table();
+    const asked = play(
+      [
+        '[HP=34]:',
+        'You cast strange glow on yourself!',
+        'Arcane words hang in the air.',
+        'You shimmer with a strange light.',
+        { wait: 1_000 },
+        '[HP=34]:'
+      ],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      lore
+    );
+    // The burst is over and nothing is learned: the sheet is asked instead.
+    expect(taught).toEqual([]);
+    expect(asked.takeSheetRequest()).toBe(true);
+
     play(
-      ['[HP=34]:', 'You cast strange glow on yourself!', 'You shimmer with a strange light.'],
+      [
+        '[HP=34]:',
+        'You cast strange glow on yourself!',
+        'Arcane words hang in the air.',
+        'You shimmer with a strange light.',
+        { wait: 1_000 },
+        ...sheet('You shimmer with a strange light.')
+      ],
       undefined,
       undefined,
       undefined,
@@ -8668,23 +8724,37 @@ describe('the spell message table and what it teaches', () => {
     expect(taught.map((lesson) => lesson.text)).not.toContain('The thug nods.');
   });
 
-  it('learns the one unknown ending when one such buff is up, and acts on it', () => {
+  /*
+   * And the other half of the procedure: the effect wears off, the sheet is
+   * read again, and the line has gone — which is what ties the sentence to it.
+   */
+  it('learns the one unknown ending once the sheet has stopped printing the start', () => {
     const { lore, taught } = table();
+    const cast = [
+      '[HP=34]:',
+      'You cast strange glow on yourself!',
+      'You shimmer with a strange light.',
+      { wait: 1_000 },
+      ...sheet('You shimmer with a strange light.'),
+      { wait: 60_000 },
+      'The strange light fades.'
+    ];
+    const waiting = play(cast, undefined, undefined, undefined, undefined, lore);
+    // One suspect, but the sheet can check it: asked, and nothing concluded yet.
+    expect(names(waiting)).toEqual(['strange glow']);
+    expect(waiting.takeSheetRequest()).toBe(true);
+    expect(taught.filter((lesson) => lesson.kind === 'stop')).toEqual([]);
+
+    const { lore: fresh, taught: lessons } = table();
     const tracker = play(
-      [
-        '[HP=34]:',
-        'You cast strange glow on yourself!',
-        'You shimmer with a strange light.',
-        { wait: 60_000 },
-        'The strange light fades.'
-      ],
+      [...cast, { wait: 2_000 }, ...sheet()],
       undefined,
       undefined,
       undefined,
       undefined,
-      lore
+      fresh
     );
-    expect(taught.map((lesson) => `${lesson.kind}: ${lesson.text}`)).toEqual([
+    expect(lessons.map((lesson) => `${lesson.kind}: ${lesson.text}`)).toEqual([
       'start: You shimmer with a strange light.',
       'stop: The strange light fades.'
     ]);
@@ -8693,40 +8763,27 @@ describe('the spell message table and what it teaches', () => {
 
   it('holds an ending against several suspects until the sheet says which', () => {
     const { lore, taught } = table();
-    const tracker = play(
-      [
-        '[HP=34]:',
-        'You cast strange glow on yourself!',
-        'You shimmer with a strange light.',
-        { wait: 5_000 },
-        'You cast odd hum on yourself!',
-        'You hum oddly.',
-        { wait: 60_000 },
-        'The strange light fades.'
-      ],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      lore
-    );
+    const both = [
+      '[HP=34]:',
+      'You cast strange glow on yourself!',
+      'You shimmer with a strange light.',
+      { wait: 1_000 },
+      ...sheet('You shimmer with a strange light.'),
+      { wait: 5_000 },
+      'You cast odd hum on yourself!',
+      'You hum oddly.',
+      { wait: 1_000 },
+      ...sheet('You shimmer with a strange light.', 'You hum oddly.'),
+      { wait: 60_000 },
+      'The strange light fades.'
+    ];
+    const tracker = play(both, undefined, undefined, undefined, undefined, lore);
     // Two buffs with unknown endings: nothing is concluded yet.
     expect(names(tracker).sort()).toEqual(['odd hum', 'strange glow']);
     expect(taught.filter((lesson) => lesson.kind === 'stop')).toEqual([]);
 
     const settled = play(
-      [
-        '[HP=34]:',
-        'You cast strange glow on yourself!',
-        'You shimmer with a strange light.',
-        { wait: 5_000 },
-        'You cast odd hum on yourself!',
-        'You hum oddly.',
-        { wait: 60_000 },
-        'The strange light fades.',
-        { wait: 2_000 },
-        ...sheet('You hum oddly.')
-      ],
+      [...both, { wait: 2_000 }, ...sheet('You hum oddly.')],
       undefined,
       undefined,
       undefined,
@@ -8741,13 +8798,15 @@ describe('the spell message table and what it teaches', () => {
     ]);
   });
 
-  it('takes back a learned ending the sheet contradicts', () => {
-    const { lore, taught, forgot } = table();
+  it('learns no ending the sheet contradicts', () => {
+    const { lore, taught } = table();
     const tracker = play(
       [
         '[HP=34]:',
         'You cast strange glow on yourself!',
         'You shimmer with a strange light.',
+        { wait: 1_000 },
+        ...sheet('You shimmer with a strange light.'),
         { wait: 60_000 },
         'The room grows quiet.',
         { wait: 5_000 },
@@ -8759,8 +8818,7 @@ describe('the spell message table and what it teaches', () => {
       undefined,
       lore
     );
-    expect(taught.some((lesson) => lesson.text === 'The room grows quiet.')).toBe(true);
-    expect(forgot).toEqual([{ spell: 'strange glow', kind: 'stop' }]);
+    expect(taught.some((lesson) => lesson.text === 'The room grows quiet.')).toBe(false);
     expect(lore.stopOf('strange glow')).toBeNull();
     expect(names(tracker)).toEqual(['strange glow']);
   });
@@ -8804,7 +8862,9 @@ describe('the spell message table and what it teaches', () => {
         'You are enveloped in a green jelly!',
         ...sheet('You are enveloped in a green jelly!'),
         { wait: 60_000 },
-        'The green jelly dissolves.'
+        'The green jelly dissolves.',
+        { wait: 2_000 },
+        ...sheet()
       ],
       undefined,
       undefined,
@@ -8855,7 +8915,9 @@ describe('the spell message table and what it teaches', () => {
         'Poison burns through your veins!',
         { wait: 60_000 },
         'The green jelly dissolves.',
-        'The dizzying poison runs its course.'
+        'The dizzying poison runs its course.',
+        { wait: 1_000 },
+        ...sheet()
       ],
       undefined,
       undefined,
@@ -8958,6 +9020,8 @@ describe('the spell message table and what it teaches', () => {
 
   it('wants the stat sheet only when a sheet could settle the question', () => {
     const { lore } = table();
+    // Learned already, so the cast itself asks nothing.
+    lore.learn('strange glow', 'start', 'You shimmer with a strange light.', 0);
     // A learned start means the sheet would print it: one buff, one unknown ending — ask.
     const single = play(
       [
@@ -9161,6 +9225,61 @@ describe('the spell message table and what it teaches', () => {
     feed('The strange light fades.', 10_000);
     expect(Object.keys(durations)).toEqual(['speed']);
     expect(durations['speed']).toBeCloseTo(60, 0);
+  });
+
+  /*
+   * Only from a cast: a buff first seen with no cast in front of it — the
+   * login sheet, typically — says nothing about when it began. Skinny's
+   * hellfire shield ended 29s after the sheet that first showed it, and 29s
+   * was recast on every 36s from then on (2026-09-23). An ending the sheet
+   * checked is measured from the cast to the sentence, not to the sheet.
+   */
+  it('measures only what this character cast, to the sentence the sheet checked', () => {
+    const { lore } = table();
+    const durations: Record<string, number> = {};
+    const tracker = new CharacterTracker(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      lore
+    );
+    tracker.useBelongings({
+      ...NO_BELONGINGS,
+      rememberSpellDuration: (spell, seconds) => {
+        durations[spell] = seconds;
+      }
+    });
+    const classifier = new Classifier(undefined, (text) => lore.match(text));
+    let at = 1_700_000_000_000;
+    const feed = (plain: string, after = 1): void => {
+      at += after;
+      const { block, batch } = classifier.classify({
+        seq: at,
+        at,
+        text: plain,
+        plain,
+        terminator: 'newline'
+      });
+      tracker.apply(block);
+      if (batch) tracker.apply(batch, batch.rows);
+    };
+    feed('[HP=34]:');
+    feed('You feel fast!');
+    feed('You slow down.', 29_000);
+    expect(durations).toEqual({});
+
+    feed('You cast strange glow on yourself!');
+    feed('You shimmer with a strange light.');
+    // A second on, once the burst is over; the rest of the sheet at once.
+    sheet('You shimmer with a strange light.').forEach((line, row) =>
+      feed(line, row === 0 ? 1_000 : 1)
+    );
+    feed('The strange light fades.', 89_000);
+    sheet().forEach((line, row) => feed(line, row === 0 ? 1_000 : 1));
+    expect(Object.keys(durations)).toEqual(['strange glow']);
+    expect(durations['strange glow']).toBeCloseTo(90, 0);
   });
 });
 
@@ -10216,6 +10335,9 @@ describe('the spellbook and the belongings record', () => {
         recallSpellDurations: () => state.durations,
         rememberSpellDuration: (spell: string, seconds: number) => {
           state.durations[spell.toLowerCase()] = Math.round(seconds);
+        },
+        forgetSpellDuration: (spell: string) => {
+          delete state.durations[spell.toLowerCase()];
         },
         recallAbilities: () => state.abilities,
         rememberAbilities: (abilities: AbilitySums) => {

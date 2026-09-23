@@ -3195,6 +3195,72 @@ describe('a rest whose answer has not come back', () => {
   });
 });
 
+/*
+ * Mana on the health hold's terms (skinny, 2026-09-23): `med` went out at 46%
+ * and the lap's next step stood the character straight back up, so it walked
+ * the lap between 42% and 44% with `meditateBelow` at 50%.
+ */
+describe('walking while drained', () => {
+  const drained = (fraction: number): CharacterState => {
+    const state = at(1, 1);
+    state.vitals = {
+      ...state.vitals,
+      hp: 100,
+      hpMax: 100,
+      mana: Math.round(fraction * 100),
+      manaMax: 100
+    };
+    return state;
+  };
+
+  it('stands still under meditateBelow and walks on a margin above it', async () => {
+    let current = drained(0.42);
+    const walk = new Walker(
+      { ...config, health: { ...config.health, restBelow: 0, meditateBelow: 0.5 } },
+      queue,
+      { notice: (m) => notices.push(m), stateNow: () => current }
+    );
+    expect(walk.start(ROUTE, current)).toBeNull();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(sent).toEqual([]);
+    expect(walk.progress.hold).toBe('mana');
+    expect(notices.some((notice) => /mana is low/i.test(notice))).toBe(true);
+
+    // Over the floor but under the margin: still held, or the next cast puts it back.
+    current = drained(0.55);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sent).toEqual([]);
+
+    current = drained(0.61);
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(sent[0]).toBe('e');
+    expect(walk.progress.hold).toBeNull();
+    walk.dispose();
+  });
+});
+
+/*
+ * A room being read again after a monster came, went or died: the step waits
+ * for the listing that says who is left (skinny, 2026-09-23).
+ */
+describe('a room being read again', () => {
+  it('holds the step until the re-read is answered', async () => {
+    let owed = true;
+    const walk = new Walker(config, queue, {
+      stateNow: () => at(1, 1),
+      roomUnsettled: () => owed
+    });
+    walk.start(ROUTE, at(1, 1));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(sent).toEqual([]);
+    expect(walk.progress.hold).toBe('room');
+    owed = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sent).toEqual(['e']);
+    walk.dispose();
+  });
+});
+
 describe('walking while hurt', () => {
   /** A character at a stated fraction of full health, standing in 1/1. */
   const hurt = (fraction: number): CharacterState => {

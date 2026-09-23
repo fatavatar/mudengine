@@ -71,6 +71,7 @@
  * (`castWord`). In the `combat` band: a heal that arrives after the round has
  * been lost has lost it, unlike a rest.
  */
+import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
 import type { CharacterState } from '../../shared/character';
@@ -129,6 +130,29 @@ export class AutoHeal {
       family: RealmFamily | null;
     } = () => ({ combat: null, magery: null, family: null })
   ) {}
+
+  /** The one heal, blessing or cure a round allows. See `CastRound`. */
+  private gate: CastGate = OPEN_GATE;
+  /** The last heal this sent, and when, for the refusal that may answer it. */
+  private lastSent: { key: string; at: number } | null = null;
+
+  useCastGate(gate: CastGate): void {
+    this.gate = gate;
+  }
+
+  /**
+   * The server answered `You have already cast a spell this round!`. If the
+   * last cast this module sent is what it answered, that cast failed: its
+   * clock is given back, so it goes again once the round has passed rather
+   * than on its retry floor (the player, 2026-09-23 — *this should be caught
+   * as a failure and retried later*).
+   */
+  noteRefused(): void {
+    const sent = this.lastSent;
+    this.lastSent = null;
+    if (sent === null || this.now() - sent.at > tuning().spells.refusedWindowMs) return;
+    this.lastCastAt.delete(sent.key);
+  }
 
   configure(config: SpellsConfig, enabled: boolean): void {
     this.config = config;
@@ -348,6 +372,9 @@ export class AutoHeal {
     const at = this.now();
     const last = this.lastCastAt.get(key);
     if (last !== undefined && at - last < tuning().spells.healCooldownMs) return;
+    // This round's heal or blessing already went: a second is refused, and
+    // the refusal switches the fight off (`CastRound`).
+    if (!this.gate.mayCast()) return;
     const found = resolveSpell(spell, state.spellbook, this.realmSpell);
     /*
      * A cast that cannot be paid for is not sent, and no cooldown is spent on
@@ -370,6 +397,11 @@ export class AutoHeal {
       priority: 'combat',
       coalesceKey: `heal:${key}`,
       expiresAt: at + tuning().spells.healExpiresMs,
+      stillWanted: () => this.gate.mayCast(),
+      onSent: () => {
+        this.gate.noteCast();
+        this.lastSent = { key, at: this.now() };
+      },
       reason
     });
   }

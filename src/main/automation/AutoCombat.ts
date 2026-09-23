@@ -400,20 +400,6 @@ export class AutoCombat {
   /** Whether a step is outstanding, as of the last line. See `movePending`. */
   private movePendingNow = false;
   /**
-   * When the last arrival sentence came in, waiting for the state it produced.
-   *
-   * `onBlock` runs before the tracker applies the block and `onCharacter`
-   * after, so this is how the two halves of one fact meet: the sentence says
-   * something walked in, and the state that follows says whether the realm
-   * could place it. See `confirmArrival`.
-   *
-   * A timestamp rather than a flag because the state change is not guaranteed
-   * — an arrival the room had already listed changes nothing, and nothing
-   * would come to clear it — and a flag left standing would spend a command
-   * on the next unrelated change instead.
-   */
-  private arrivedAt = 0;
-  /**
    * The last decision written down, so the same one is not written again.
    *
    * Cleared on `reset()` with everything else: a new session's first refusal is
@@ -591,7 +577,6 @@ export class AutoCombat {
     this.declined = false;
     this.standDownUntil = 0;
     this.movePendingNow = false;
-    this.arrivedAt = 0;
     this.lastDecision = null;
     this.clearRound();
   }
@@ -795,15 +780,6 @@ export class AutoCombat {
         this.armRound();
         return;
 
-      /*
-       * Something walked in. Whether the realm could *place* it is not known
-       * yet — the tracker has not applied this block — so the answer is read
-       * off the state that follows. See `confirmArrival`.
-       */
-      case 'mob-arrives-room':
-        this.arrivedAt = Date.now();
-        return;
-
       case 'spell-ineffective':
         this.noteIneffective();
         return;
@@ -952,7 +928,6 @@ export class AutoCombat {
         this.queue.cancel((intent) => intent.coalesceKey === `attack:${key}`);
         this.opened.delete(key);
       }
-      this.confirmArrival(was, state);
     }
 
     /*
@@ -1730,6 +1705,22 @@ export class AutoCombat {
   }
 
   /**
+   * This character cast between rounds — a heal, a blessing, a cure — or the
+   * server refused a cast. Either is answered `*Combat Off*` with the monster
+   * still standing here, and the fight has to be engaged again **at once**.
+   *
+   * The engage cooldown is a floor on asking about a monster whose answer has
+   * not come, and this is not that: the answer came, and a cast of this
+   * character's own undid it. Kept, it lost a round after every heal on skinny
+   * (2026-09-23) — `c mahe`, `*Combat Off*`, and the re-engage waiting out the
+   * four seconds since `c fury giant war dog`, past the server's next round,
+   * because every dog in the room shares the name.
+   */
+  openAgain(): void {
+    this.opened.clear();
+  }
+
+  /**
    * A monster this client has swung at inside the cooldown that is still in
    * the room, or null.
    *
@@ -2223,59 +2214,6 @@ export class AutoCombat {
     // asks again, which is what *rounds between looks* means when one of them
     // never went out.
     if (asked) this.rounds = 0;
-  }
-
-  /**
-   * An arrival the realm could not place asks the room to say it again.
-   *
-   * The arrival sentence is the *only* announcement a monster walking in ever
-   * gets, and its name has to be read out of it by counting words: the verb is
-   * realm data (`MobType.MoveMessage`), so `A large lashworm crawls in from
-   * the west!` is parsed as a frame with everything before `in from` split
-   * into a name and a verb by position. That works — measured live, 152 of
-   * 152 — right up until it does not, and when it does not the occupant lands
-   * with **no disposition**, or as `unknown` outright, and nothing here will
-   * ever swing at it: `choose` declines an unplaceable monster and refuses an
-   * `unknown` on principle. The character then stands in the room being hit by
-   * something the client is looking straight at.
-   *
-   * `Also here:` prints the server's own spelling, which the realm's monster
-   * table can be asked about directly. So one re-read, on the arrival that
-   * could not be placed and no other — the listing that answers it never sets
-   * `arrivedAt`, which is what keeps this from re-reading its own answer.
-   *
-   * Three bounds, all the ones the periodic refresh has:
-   *
-   * - **`REREAD_ROOM`, not `l`.** A monster nobody can name is not a reason to
-   *   announce to everybody present that this character is looking around.
-   * - **Not while a step is unanswered.** The room block would be attributed
-   *   to the move, which is the expectation-queue bug in a new hat.
-   * - **`probe` band, coalesced**, so four things wandering in together are
-   *   one Enter rather than four.
-   */
-  private confirmArrival(was: CharacterState, state: CharacterState): void {
-    const arrived = this.arrivedAt;
-    this.arrivedAt = 0;
-    // Only the state change the sentence itself produced. A later one is
-    // answering something else.
-    if (arrived === 0 || Date.now() - arrived > tuning().combat.arrivalWindowMs) return;
-    if (this.movePending) return;
-
-    const before = new Set(was.room.occupants.map((who) => mobKey(who.name)));
-    const unplaced = state.room.occupants.some(
-      (who) => !before.has(mobKey(who.name)) && (who.kind !== 'mob' || who.disposition === null)
-    );
-    if (!unplaced) return;
-
-    this.queue.enqueue({
-      command: REREAD_ROOM,
-      priority: 'probe',
-      coalesceKey: 'combat-refresh',
-      // Worthless late, for the same reason the periodic read is: by then the
-      // room has been listed by something else or the thing has left.
-      expiresAt: Date.now() + tuning().combat.roundMs * 20,
-      reason: t('automation.combat.reasonArrivalUnplaced')
-    });
   }
 
   /**

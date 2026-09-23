@@ -1018,6 +1018,18 @@ export default function GlobalSettings({
                   bar={barOfMana(draft.automation.health.meditateBelow)}
                   value={percent(draft.automation.health.meditateBelow)}
                 />
+                <NumberField
+                  hint={t('settings.health.meditateToHint')}
+                  label={t('settings.health.meditateToLabel')}
+                  name="global-med-to"
+                  onChange={(value) =>
+                    automation({
+                      health: { ...draft.automation.health, meditateTo: fraction(value) }
+                    })
+                  }
+                  bar={barOfMana(draft.automation.health.meditateTo)}
+                  value={percent(draft.automation.health.meditateTo)}
+                />
               </div>
               <CheckField
                 checked={draft.automation.health.restNextDoor}

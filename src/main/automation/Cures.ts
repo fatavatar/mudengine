@@ -23,6 +23,7 @@
  * on the caster, and the `Cast` command reads exactly one word as the spell,
  * which is the realm's short name (`castWord`).
  */
+import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
 import { canPayFor, manaAtLeast } from './mana';
 import { t } from '../app/i18n';
@@ -68,6 +69,29 @@ export class Cures {
     /** Where a derived cure is said, once (todo 09). */
     private readonly events: { notice?(message: string): void } = {}
   ) {}
+
+  /** The one heal, blessing or cure a round allows. See `CastRound`. */
+  private gate: CastGate = OPEN_GATE;
+  /** The last cure this sent, and when, for the refusal that may answer it. */
+  private lastSent: { cure: Cure; at: number } | null = null;
+
+  useCastGate(gate: CastGate): void {
+    this.gate = gate;
+  }
+
+  /**
+   * The server answered `You have already cast a spell this round!`. If the
+   * last cast this module sent is what it answered, that cast failed: its
+   * clock is given back, so it goes again once the round has passed rather
+   * than on its retry floor (the player, 2026-09-23 — *this should be caught
+   * as a failure and retried later*).
+   */
+  noteRefused(): void {
+    const sent = this.lastSent;
+    this.lastSent = null;
+    if (sent === null || this.now() - sent.at > tuning().spells.refusedWindowMs) return;
+    this.lastCastAt.delete(sent.cure);
+  }
 
   configure(config: SpellsConfig, enabled: boolean): void {
     this.config = config;
@@ -123,6 +147,7 @@ export class Cures {
       const last = this.lastCastAt.get(cure);
       const onset = before !== 'yes';
       if (!onset && last !== undefined && at - last < RETRY_MS) continue;
+      if (!this.gate.mayCast()) continue;
 
       const found = resolveSpell(spell, state.spellbook, this.realmSpell);
       /*
@@ -138,6 +163,11 @@ export class Cures {
         priority: 'combat',
         coalesceKey: `cure:${cure}`,
         expiresAt: at + tuning().spells.cureExpiresMs,
+        stillWanted: () => this.gate.mayCast(),
+        onSent: () => {
+          this.gate.noteCast();
+          this.lastSent = { cure, at: this.now() };
+        },
         reason: t('automation.cure.reason', { affliction: cure })
       });
     }

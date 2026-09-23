@@ -440,6 +440,8 @@ export interface ProfileDraft {
     restNextDoor: boolean;
     restBeforeTraps: number;
     meditateBelow: number;
+    /** Meditate on, and hold a walk, until this. See `HealthConfig`. */
+    meditateTo: number;
     /** The *use this when that* rules. See `PotionRule`. */
     potions: PotionRule[];
   };
@@ -886,6 +888,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
         DEFAULT_CONFIG.automation.health.restBeforeTraps
       ),
       meditateBelow: unit(health['meditateBelow']),
+      meditateTo: unit(health['meditateTo']),
       /*
        * The rules, parsed at the boundary like everything else here: a row
        * with no name is dropped (a rule naming nothing fires on nothing), a

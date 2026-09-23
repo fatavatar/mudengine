@@ -435,6 +435,9 @@ const STATED_AFFLICTIONS: ReadonlyArray<readonly [MessageEffect, keyof Afflictio
   ['held', 'held']
 ];
 
+/** A sentence about casting rather than about an effect. See the `unknown` case. */
+const ABOUT_CASTING = /\b(?:cast|casting|spells?|mana)\b/i;
+
 export function looksLikeEffectSentence(text: string): boolean {
   if (!/^[A-Z][^\d"]*[.!]$/.test(text)) return false;
   return wordsOf(text).length <= 14;
@@ -526,8 +529,44 @@ export class CharacterTracker {
    * cast confirmation, which does name the spell, so the pair is learned from
    * that adjacency. Session-scoped: a buff is re-cast every session and the
    * `st` timer is a live read, so nothing has to persist.
+   *
+   * `confirmed` is whether the server named the spell. A cast it answers in
+   * the realm's own words only (`You begin to chant an evil blood ritual.`,
+   * `The undead skin builds on your body as you feel protected.`) is named by
+   * the command that sent it instead (`noteSelfCastSent`), and nothing has put
+   * its buff on the list yet. `heard` is what its burst printed that nothing
+   * read, one line of which is the onset — which one, the sheet says
+   * (`learningStarts`).
    */
-  private lastSelfCast: { spell: string; at: number } | null = null;
+  private lastSelfCast: {
+    spell: string;
+    at: number;
+    confirmed: boolean;
+    heard?: string[];
+    heardAt?: number;
+  } | null = null;
+  /**
+   * A cast whose start sentence is not known yet, waiting for the `st` sheet
+   * asked for after it to say which line is new.
+   *
+   * The player's procedure (2026-09-23): cast it, read the sheet, and the line
+   * the cast added is its start. The burst alone cannot say — Paramud prints
+   * the cast's chatter and the effect as two unread lines, and the sheet
+   * reprints only the effect. A line the burst printed that the sheet carries
+   * is the answer; failing that, the one line on this sheet that was not on
+   * `before`, the last sheet read ahead of the cast — only soon after it,
+   * since anything else may have landed meanwhile. One sheet decides each,
+   * and an ambiguous one teaches nothing: the next cast asks again. One per
+   * spell, so a round of blessings cast a few seconds apart is one sheet.
+   */
+  private learningStarts: Array<{
+    spell: string;
+    at: number;
+    heard: readonly string[];
+    before: ReadonlySet<string> | null;
+  }> = [];
+  /** The effect lines the last `st` sheet printed, by `effectKey`. See `learningStarts`. */
+  private lastSheet: Set<string> | null = null;
   /**
    * The last line the table could not read, kept for exactly one block.
    *
@@ -850,6 +889,8 @@ export class CharacterTracker {
    * ages an attack nothing answered (`FightTracker.attacking`).
    */
   observeCommand(command: string, at: number = Date.now()): boolean {
+    // Whatever a cast's burst ended on, the next command begins something else.
+    this.settleOnset();
     const trimmed = command.trim();
     const space = trimmed.indexOf(' ');
     const named = commandOf(trimmed);
@@ -917,6 +958,7 @@ export class CharacterTracker {
         (who) => who.kind === 'mob' && who.name === occupant
       );
       if (monster) this.fight.noteAttack(aimed, named, at);
+      else this.noteSelfCastSent(gap < 0 ? argument : argument.slice(0, gap), aimed, at);
     }
     return this.expect.observeCommand(command, {
       inGame: this.state.phase === 'in-game',
@@ -924,6 +966,121 @@ export class CharacterTracker {
       typedExit: (text) => this.directionOfTypedExit(text),
       occupantNamed: (typed) => this.occupantNamed(typed)
     });
+  }
+
+  /**
+   * A cast at this character, named by the command that sent it.
+   *
+   * Paramud answers most of its own spells in its own words and never names
+   * them (captured 2026-09-23): `c ritu` printed `You begin to chant an evil
+   * blood ritual.`, `c undd` printed `The undead skin builds on your body as
+   * you feel protected.`, and `c rsto` only the effect itself. Without a
+   * confirmation nothing put the buff on the list, the effect's sentence was
+   * filed as an unnamed effect, and `Blessings` recast all five of a
+   * character's blessings every thirty seconds with every one of them up. The
+   * command is this character's own statement of what it cast, so it names
+   * the spell until the server says otherwise.
+   *
+   * Only bare or at this character's own name — a cast at anybody else lands
+   * on their screen — and only a spell the realm does not call instant.
+   */
+  private noteSelfCastSent(word: string, aimed: string, at: number): void {
+    const own = this.state.name?.toLowerCase() ?? null;
+    if (aimed.length > 0 && aimed.toLowerCase() !== own) return;
+    const spell = this.spellCalled(word);
+    if (spell === null) return;
+    const known = this.world?.spellNamed(spell) ?? null;
+    if (known !== null && known.duration === undefined) return;
+    this.settleOnset();
+    this.lastSelfCast = { spell, at, confirmed: false };
+  }
+
+  /** The whole name a cast's word stands for: the spellbook's, then the realm's. */
+  private spellCalled(word: string): string | null {
+    const key = spellKey(word);
+    if (key.length === 0) return null;
+    const known = (this.state.spellbook ?? []).find(
+      (spell) =>
+        spellKey(spell.name) === key || (spell.short !== null && spellKey(spell.short) === key)
+    );
+    return known?.name ?? this.world?.spellNamed(word)?.name ?? null;
+  }
+
+  /**
+   * Closes a cast's burst once it is over: a line arriving `onsetSettleMs`
+   * after its last unread one, or the next command. Called with no time, it
+   * closes whatever is open.
+   *
+   * Nothing is learned here. A spell whose start is not known yet asks for the
+   * sheet, which says which of the lines the burst printed is the effect
+   * (`learningStarts`).
+   */
+  private settleOnset(at?: number): void {
+    const cast = this.lastSelfCast;
+    const heard = cast?.heard;
+    if (!cast || heard === undefined || heard.length === 0) return;
+    if (at !== undefined && at - (cast.heardAt ?? cast.at) < tuning().spells.onsetSettleMs) return;
+    this.lastSelfCast = null;
+    if (this.spellLore.startOf(cast.spell) !== null) return;
+    const key = spellKey(cast.spell);
+    this.learningStarts = this.learningStarts.filter(
+      (learning) => spellKey(learning.spell) !== key
+    );
+    this.learningStarts.push({ spell: cast.spell, at: cast.at, heard, before: this.lastSheet });
+    this.sheetWanted = true;
+  }
+
+  /**
+   * The start sentences of the spells in `learningStarts`, read off a sheet.
+   * Returns the effects this adopted, whose unnamed buffs the sheet must drop.
+   */
+  private learnStartFromSheet(lines: readonly string[], at: number): Set<string> {
+    const adopted = new Set<string>();
+    const waiting = this.learningStarts;
+    this.learningStarts = [];
+    for (const learning of waiting) {
+      if (at - learning.at > tuning().spells.pendingStopMs) continue;
+      if (this.spellLore.startOf(learning.spell) !== null) continue;
+      // A line no named spell accounts for — asked afresh for each, so a line
+      // just learned for one spell is no longer the next one's. A line filed
+      // as an unnamed effect is still unaccounted for.
+      const unclaimed = lines.filter(
+        (line) => looksLikeEffectSentence(line) && this.spellsBegunBy(line).every(isUnnamedEffect)
+      );
+      const heard = new Set(learning.heard.map(effectKey));
+      let found = unclaimed.filter((line) => heard.has(effectKey(line)));
+      const before = learning.before;
+      if (
+        found.length === 0 &&
+        before !== null &&
+        at - learning.at <= tuning().spells.effectVerdictMs
+      ) {
+        found = unclaimed.filter((line) => !before.has(effectKey(line)));
+      }
+      if (new Set(found.map(effectKey)).size !== 1) continue;
+      const sentence = found[0]!;
+      for (const effect of this.spellLore.match(sentence)?.starts ?? []) {
+        if (!isUnnamedEffect(effect)) continue;
+        this.adoptEffect(effect, learning.spell, at);
+        adopted.add(spellKey(effect));
+      }
+      this.spellLore.learn(learning.spell, 'start', sentence, at);
+    }
+    return adopted;
+  }
+
+  /**
+   * An effect this realm had filed under its own sentence, now named: its
+   * sentences move to the spell. Found by a cast whose onset the sentence
+   * was, after a sheet (or a cast nothing named) had filed it first.
+   */
+  private adoptEffect(effect: string, spell: string, at: number): void {
+    const start = this.spellLore.startOf(effect);
+    const stop = this.spellLore.stopOf(effect);
+    this.spellLore.unlearn(effect, 'start');
+    this.spellLore.unlearn(effect, 'stop');
+    if (start !== null) this.spellLore.learn(spell, 'start', start, at);
+    if (stop !== null) this.spellLore.learn(spell, 'stop', stop, at);
   }
 
   /**
@@ -1161,6 +1318,8 @@ export class CharacterTracker {
     this.lastSelfCast = null;
     this.buffEffects.clear();
     this.pendingStops = [];
+    this.learningStarts = [];
+    this.lastSheet = null;
     this.pendingOnsets = [];
     this.sheetOpen = false;
     this.effectEnded.clear();
@@ -1195,6 +1354,8 @@ export class CharacterTracker {
     this.expect.dropHint();
     // The buffs go with the realm, and so does every half-learned ending.
     this.pendingStops = [];
+    this.learningStarts = [];
+    this.lastSheet = null;
     this.pendingOnsets = [];
     this.sheetOpen = false;
     this.effectEnded.clear();
@@ -2268,6 +2429,8 @@ export class CharacterTracker {
   }
 
   apply(block: Block, rows?: Array<Record<string, string>>, collecting = false): boolean {
+    // A cast's burst that has gone quiet has said its onset.
+    this.settleOnset(block.at);
     const before = this.state;
     /*
      * Whether this block is a weapon's chance-on-hit, decided **before** the
@@ -2648,12 +2811,21 @@ export class CharacterTracker {
     const up = new Set<string>();
     const timers = new Map<string, number>();
     const printed: string[] = [];
+    const lines: Array<{ sentence: string; seconds: number | null }> = [];
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim();
       if (line.length === 0) continue;
       const timed = /^(?<line>.+?)\s*\((?<seconds>\d+)s\)$/.exec(line);
-      const sentence = timed?.groups?.['line'] ?? line;
-      const seconds = timed ? Number(timed.groups?.['seconds']) : null;
+      lines.push({
+        sentence: timed?.groups?.['line'] ?? line,
+        seconds: timed ? Number(timed.groups?.['seconds']) : null
+      });
+    }
+    // First, so the line it names is read below as that spell's own.
+    const sentences = lines.map((line) => line.sentence);
+    const adopted = this.learnStartFromSheet(sentences, at);
+    this.lastSheet = new Set(sentences.filter(looksLikeEffectSentence).map(effectKey));
+    for (const { sentence, seconds } of lines) {
       const names = this.spellsBegunBy(sentence);
       // Only a line that accounted for nothing is a candidate effect: a
       // sentence the frames or the learned onset map already turned into a
@@ -2673,15 +2845,18 @@ export class CharacterTracker {
     const kept: ActiveBuff[] = [];
     for (const buff of s.buffs) {
       const names = this.buffNames(buff);
+      // An effect the sheet has just named: the named buff stands for it.
+      if (names.every((name) => adopted.has(spellKey(name)))) continue;
       const listed = names.some((name) => up.has(spellKey(name)));
       if (!listed && this.knowsStart(buff)) continue;
       const expiresAt = names
         .map((name) => timers.get(spellKey(name)))
         .find((v) => v !== undefined);
       // The server's statement, so it overwrites any earlier `expiresAt`.
-      kept.push(expiresAt === undefined ? { ...buff } : { ...buff, expiresAt });
+      const restated = listed ? { ...buff, listedAt: at } : { ...buff };
+      kept.push(expiresAt === undefined ? restated : { ...restated, expiresAt });
     }
-    this.settlePending(up, at);
+    this.settlePending(up, at, s.buffs);
     // A newly named effect that nothing on the list already covers. Appended
     // after the keeping so its own `appliedAt` is this sheet rather than the
     // sighting, which is the honest reading: when it landed is not known.
@@ -2730,7 +2905,7 @@ export class CharacterTracker {
       this.spellLore.effects.lasting(sentence, 'yes', at);
       this.spellLore.learn(spell, 'start', sentence, at);
       up.add(spellKey(spell));
-      found.push({ spell, by: null, appliedAt: at });
+      found.push({ spell, by: null, appliedAt: at, listedAt: at });
       /*
        * And it is not an ending. The same sentence may have been acted on as
        * the one buff whose stop nobody knew, or be waiting on a shortlist of
@@ -2825,9 +3000,11 @@ export class CharacterTracker {
       }
       if (now !== 'no') continue;
       // Still up while the condition has gone: whatever this effect does, it
-      // is not that.
+      // is not that. Unless its ending has been heard and only waits on the
+      // sheet to check it — that effect is ending in this same breath.
       for (const sentence of up) {
         if (ledger.seen(sentence)?.causes?.[condition] === undefined) continue;
+        if (this.endingHeard(sentence)) continue;
         ledger.causes(sentence, condition, null);
       }
       this.conditionEnded.set(condition, at);
@@ -2855,6 +3032,17 @@ export class CharacterTracker {
         if (at - ended <= window) this.confirmCause(sentence, condition);
       }
     }
+  }
+
+  /** Whether an unnamed effect is a suspect of an ending heard and not yet checked. */
+  private endingHeard(sentence: string): boolean {
+    const key = effectKey(sentence);
+    return this.pendingStops.some((pending) =>
+      pending.suspects.some((name) => {
+        const suspect = unnamedEffectSentence(name);
+        return suspect !== null && effectKey(suspect) === key;
+      })
+    );
   }
 
   /** A suspicion the wire has now shown twice over. Never a promotion of nothing. */
@@ -2937,7 +3125,7 @@ export class CharacterTracker {
     return names;
   }
 
-  private settlePending(up: ReadonlySet<string>, at: number): void {
+  private settlePending(up: ReadonlySet<string>, at: number, buffs: readonly ActiveBuff[]): void {
     this.pendingStops = this.pendingStops.filter((pending) => {
       if (at - pending.at > tuning().spells.pendingStopMs) return false;
       pending.suspects = pending.suspects.filter((name) => !up.has(spellKey(name)));
@@ -2949,6 +3137,11 @@ export class CharacterTracker {
       // about keeps the sentence waiting.
       if (this.spellLore.startOf(name) === null) return true;
       this.spellLore.learn(name, 'stop', pending.text, pending.at);
+      // Cast, ended and checked: the one duration this client trusts.
+      const ended = buffs.find((buff) => buff.cast === true && this.buffMatches(buff, [name]));
+      if (ended !== undefined && pending.at > ended.appliedAt) {
+        this.belongings.rememberSpellDuration(ended.spell, (pending.at - ended.appliedAt) / 1000);
+      }
       return false;
     });
   }
@@ -2981,7 +3174,7 @@ export class CharacterTracker {
    */
   private buffsEnded(ended: readonly ActiveBuff[], at: number, recognised: boolean): void {
     for (const buff of ended) {
-      if (recognised && buff.by === null) {
+      if (recognised && buff.cast === true) {
         const seconds = (at - buff.appliedAt) / 1000;
         if (seconds > 0) this.belongings.rememberSpellDuration(buff.spell, seconds);
       }
@@ -3032,7 +3225,15 @@ export class CharacterTracker {
   }
 
   private withBuff(s: CharacterState, buff: ActiveBuff): CharacterState {
-    const kept = s.buffs.filter((held) => !this.buffMatches(held, this.buffNames(buff)));
+    const names = this.buffNames(buff);
+    const kept = s.buffs.filter((held) => !this.buffMatches(held, names));
+    // The sheet has printed this effect before, and still speaks for it.
+    let listedAt: number | undefined;
+    for (const held of s.buffs) {
+      if (held.listedAt === undefined || !this.buffMatches(held, names)) continue;
+      listedAt = Math.max(listedAt ?? 0, held.listedAt);
+    }
+    if (listedAt !== undefined && buff.listedAt === undefined) buff = { ...buff, listedAt };
     // A list-size bound, not a knob: nothing legitimate holds this many.
     return { ...s, buffs: [...kept.slice(-15), buff] };
   }
@@ -4959,13 +5160,32 @@ export class CharacterTracker {
         return after;
       }
 
+      /*
+       * **One sentence is one monster**, whatever else of that name stands
+       * here. This refused an arrival whose name the room already listed, so
+       * fifteen giant war dogs walking in were one on the list (skinny,
+       * 2026-09-23): the first kill emptied the room as far as the client
+       * knew, and it sat down to meditate and walked on through the other
+       * fourteen. A listing replaces the whole list, so nothing is counted
+       * twice by the Enter that follows (`SessionManager.rereadRoom`).
+       */
       case 'mob-arrives-room': {
         const named = g['attacker'] ?? trimVerb(g['line'] ?? '');
         if (named.length === 0) return null;
-        if (s.room.occupants.some((who) => mobKey(who.name) === mobKey(named))) return null;
         const [arrival] = this.classify([named], s.online);
         if (arrival === undefined) return null;
         return { ...s, room: { ...s.room, occupants: [...s.room.occupants, arrival] } };
+      }
+
+      /* A monster walking out, one of that name. */
+      case 'mob-leaves-room': {
+        const named = g['mob']?.trim() ?? '';
+        if (named.length === 0) return null;
+        const key = mobKey(named);
+        const at = s.room.occupants.findIndex((who) => mobKey(who.name) === key);
+        if (at < 0) return null;
+        const occupants = [...s.room.occupants.slice(0, at), ...s.room.occupants.slice(at + 1)];
+        return { ...s, room: { ...s.room, occupants } };
       }
 
       case 'player-leaves-room': {
@@ -5559,7 +5779,7 @@ export class CharacterTracker {
             : target === 'yourself' || target === 'you' || (own !== null && target === own);
         if (!isSelf) return null;
         // Remember it, so the onset that follows can be learned against it.
-        this.lastSelfCast = { spell, at: block.at };
+        this.lastSelfCast = { spell, at: block.at, confirmed: true };
         /*
          * Only what the realm calls a duration spell, where the realm can
          * say: an instant cure tracked as a buff would sit on the list for
@@ -5569,15 +5789,18 @@ export class CharacterTracker {
          */
         const known = this.world?.spellNamed(spell) ?? null;
         if (known !== null && known.duration === undefined) return null;
-        const kept = s.buffs.filter((buff) => buff.spell.toLowerCase() !== spell.toLowerCase());
-        // A list-size bound, not a knob: nothing legitimate holds this many.
-        return {
-          ...s,
-          buffs: [
-            ...kept.slice(-15),
-            { spell, by: caster === 'You' ? null : caster, appliedAt: block.at }
-          ]
-        };
+        /*
+         * Replacing whatever answers to the name, candidates included: the
+         * sheet may have listed this effect under another spell that shares
+         * its sentence (`unholy aura`, with `aura of undeath` among the
+         * candidates), and the cast settles which it was.
+         */
+        return this.withBuff(s, {
+          spell,
+          by: caster === 'You' ? null : caster,
+          appliedAt: block.at,
+          ...(caster === 'You' ? { cast: true as const } : {})
+        });
       }
 
       /*
@@ -5619,6 +5842,15 @@ export class CharacterTracker {
             if (effect) this.buffEffects.set(effect, cast.spell);
             this.spellLore.learn(cast.spell, 'start', block.text.trim(), block.at);
             this.lastSelfCast = null;
+            // Nothing but the command named it, so nothing has listed it yet.
+            if (!cast.confirmed) {
+              return this.withBuff(held ?? s, {
+                spell: cast.spell,
+                by: null,
+                appliedAt: cast.at,
+                cast: true
+              });
+            }
           }
           return held;
         }
@@ -5637,8 +5869,34 @@ export class CharacterTracker {
         if (followsCast && named !== undefined) {
           if (effect) this.buffEffects.set(effect, cast.spell);
           this.lastSelfCast = null;
-          if (base.buffs.some((buff) => this.buffMatches(buff, [cast.spell]))) return held;
-          return this.withBuff(base, { spell: cast.spell, by: null, appliedAt: cast.at });
+          // A confirmation already listed it; a recast only its command named
+          // renews it here, under the name the command gave.
+          if (cast.confirmed && base.buffs.some((buff) => this.buffMatches(buff, [cast.spell]))) {
+            return held;
+          }
+          return this.withBuff(base, {
+            spell: cast.spell,
+            by: null,
+            appliedAt: cast.at,
+            cast: true
+          });
+        }
+
+        /*
+         * A sentence this realm had filed as an effect nothing could name —
+         * off a sheet read before any cast, typically — landing on this
+         * character's own cast. Listed under the cast's name now, and the
+         * sentences move over (`adoptEffect`) once the sheet asked for after
+         * the burst says this is the line the cast added (`learningStarts`).
+         */
+        if (followsCast && candidates.every(isUnnamedEffect)) {
+          cast.heard = [...(cast.heard ?? []), block.text.trim()];
+          cast.heardAt = block.at;
+          const rest = base.buffs.filter((buff) => !this.buffMatches(buff, candidates));
+          return this.withBuff(
+            { ...base, buffs: rest },
+            { spell: cast.spell, by: null, appliedAt: cast.at, cast: true }
+          );
         }
 
         /*
@@ -5677,6 +5935,11 @@ export class CharacterTracker {
         if (spell && this.lastSelfCast?.spell.toLowerCase() === spell) this.lastSelfCast = null;
         return null;
       }
+
+      // Refused outright: nothing is coming for a cast only its command named.
+      case 'spell-refused':
+        if (this.lastSelfCast?.confirmed === false) this.lastSelfCast = null;
+        return null;
 
       /*
        * A wear-off ends the buff it names. Matched against what is actually
@@ -6049,6 +6312,21 @@ export class CharacterTracker {
        */
       case 'mob-misses': {
         const attacker = this.swingingAtMe(s, this.vouchedFor(s, g));
+        /*
+         * Nobody the room holds, inside the burst of this character's own
+         * cast: the cast's chatter in the swing's grammar — Paramud's `The
+         * undead skin builds on your body as you feel protected.` (2026-09-23)
+         * — and no blow at all.
+         */
+        const cast = this.lastSelfCast;
+        if (
+          attacker === undefined &&
+          cast !== null &&
+          !cast.confirmed &&
+          block.at - cast.at <= tuning().spells.onsetWindowMs
+        ) {
+          return null;
+        }
         const blow = this.fight.blowOnMe(s, block.at, attacker);
         // Only a swing the realm will vouch for costs the stealth: this
         // pattern is loose enough to catch a sentence that is about nothing
@@ -6270,9 +6548,28 @@ export class CharacterTracker {
         if (!looksLikeEffectSentence(text) || this.namesSomebody(s, text)) return null;
         const cast = this.lastSelfCast;
         if (cast !== null && block.at - cast.at <= tuning().spells.onsetWindowMs) {
-          this.spellLore.learn(cast.spell, 'start', text, block.at);
-          this.lastSelfCast = null;
-          return null;
+          /*
+           * A sentence about the casting itself — a refusal the frames do not
+           * read, `You do not have enough mana to cast that spell.` — is no
+           * effect, and where only the command named the cast it says
+           * nothing landed.
+           */
+          if (ABOUT_CASTING.test(text)) {
+            if (!cast.confirmed) this.lastSelfCast = null;
+            return null;
+          }
+          /*
+           * One of these lines is the spell's start, and the burst cannot say
+           * which — the cast's chatter comes first on Paramud, the effect
+           * last. Kept for the sheet asked for once the burst is over
+           * (`settleOnset`), which reprints the effect and nothing else.
+           */
+          cast.heard = [...(cast.heard ?? []), text];
+          cast.heardAt = block.at;
+          if (cast.confirmed) return null;
+          // Only the command named it: it answered in the realm's words, so
+          // it landed, and nothing else will list it.
+          return this.withBuff(s, { spell: cast.spell, by: null, appliedAt: cast.at, cast: true });
         }
         /*
          * **A line of the sheet is the listing restating what is up**, not an
@@ -6300,7 +6597,13 @@ export class CharacterTracker {
         // suspect whose start it would print is one it can confirm gone, or
         // still up — which is the contradiction that takes a lesson back.
         this.sheetWanted ||= suspects.some((buff) => this.knowsStart(buff));
-        if (suspects.length === 1) {
+        /*
+         * One suspect is taken at once only where the sheet cannot speak for
+         * it. Where it can, the sheet asked for above is the check the player
+         * asked for (2026-09-23): the ending is learned when the sheet stops
+         * printing the start (`settlePending`), never on the coincidence alone.
+         */
+        if (suspects.length === 1 && !this.knowsStart(suspects[0]!)) {
           const buff = suspects[0]!;
           this.spellLore.learn(buff.spell, 'stop', text, block.at);
           this.recentlyStopped.set(spellKey(buff.spell), block.at);
