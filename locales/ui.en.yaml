@@ -4038,6 +4038,7 @@ automation:
     several: 'This way needs {items}; collecting each in turn before walking it.'
     asking: 'Going to {room} to say "{say}" for {item}.'
     sayReason: 'collecting: {command}'
+    packReason: 'collecting: did it arrive?'
     refusalNotReached: 'Not collecting: the walk to {room} ended somewhere else.'
     refusalAskedNothing: 'Said "{say}", and no {item} came of it; not walking the way that needed it.'
     hunting: 'Looking for {item}: {mob} drops it, starting at {room}.'
@@ -4093,6 +4094,7 @@ automation:
     reason: 'auto-combat: {why}'
     reasonArrivalUnplaced: 'auto-combat: something walked in the realm data could not place'
     reasonRefresh: 'auto-combat: re-reading the room'
+    reasonLookAfterKill: 'something died: looking for what it dropped'
     reasonRoundAreaSpell: 'auto-combat: the room is crowded enough for the AE spell'
     reasonRoundSpell: 'auto-combat: round spell'
     refusedAlreadyFighting: already fighting {target}

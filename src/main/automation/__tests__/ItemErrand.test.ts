@@ -50,6 +50,7 @@ let looping: boolean;
 let keptNames: string[];
 let walkedTo: string[];
 let said: string[];
+let packChecks: number;
 let walking: boolean;
 let here: string;
 
@@ -63,6 +64,9 @@ function errand(over: Partial<ItemPlanner> = {}, now?: () => number): ItemErrand
     },
     walking: () => walking,
     say: (command) => said.push(command),
+    checkPack: () => {
+      packChecks += 1;
+    },
     sourcesOf: () => sources,
     buy: (row) => {
       bought.push(row);
@@ -112,6 +116,7 @@ beforeEach(() => {
   keptNames = [];
   walkedTo = [];
   said = [];
+  packChecks = 0;
   walking = false;
   here = '1/1';
   sources = { shops: [], lairs: [], asks: [] };
@@ -442,6 +447,59 @@ describe('collecting what is had by saying something', () => {
     expect(said).toEqual([]);
     expect(auto.running).toBe(false);
     expect(decisions.at(-1)).toMatchObject({ action: 'collect', acted: false });
+  });
+
+  /*
+   * The reported failure (2026-09-23): `ask gnome commander orb` got the orb,
+   * but the handover is said in the commander's words, which nothing reads, so
+   * the pack never showed it and the errand waited out its three minutes.
+   */
+  it('asks for the pack straight after saying it, so a handover is seen', () => {
+    const ORB = { id: 811, name: 'bloodstone orb' };
+    const gnome = { room: '8/459', roomName: 'Gnome Camp', say: 'ask gnome commander orb' };
+    sources = { shops: [], lairs: [], asks: [gnome] };
+    here = '8/459';
+    const auto = errand();
+    auto.collect([ORB], OWED, ready());
+    walking = false;
+    auto.onCharacter(ready());
+    expect(said).toEqual(['ask gnome commander orb']);
+    expect(packChecks).toBe(1);
+    // The listing that answers it holds the orb.
+    auto.onCharacter(carrying('bloodstone orb'));
+    expect(walked).toEqual([OWED]);
+  });
+
+  it('asks for the pack again while it waits, on the clock alone', () => {
+    sources = { shops: [], lairs: [], asks: [statue] };
+    let clock = 0;
+    const auto = errand({}, () => clock);
+    auto.collect([GATE_KEY], OWED, ready());
+    walking = false;
+    here = '8/461';
+    auto.onCharacter(ready());
+    expect(packChecks).toBe(1);
+    clock += tuning().walk.errandPackCheckMs - 1;
+    auto.tick(ready());
+    expect(packChecks).toBe(1);
+    clock += 1;
+    auto.tick(ready());
+    expect(packChecks).toBe(2);
+    auto.tick(ready());
+    expect(packChecks).toBe(2);
+    // And the wait is given up by the clock too, with nothing on the wire.
+    clock += tuning().walk.errandAskMs;
+    auto.tick(ready());
+    expect(auto.running).toBe(false);
+  });
+
+  it('does not ask for the pack before anything is said', () => {
+    sources = { shops: [], lairs: [], asks: [statue] };
+    const auto = errand();
+    auto.collect([GATE_KEY], OWED, ready());
+    auto.tick(ready());
+    auto.onCharacter(ready());
+    expect(packChecks).toBe(0);
   });
 
   it('buys before it asks, and asks before it hunts', () => {

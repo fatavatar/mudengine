@@ -27,7 +27,7 @@ import type { StandDown } from '../../automation/LoginAutomator';
 import { NO_REALM_PLAYERS } from '../../../shared/players';
 import type { Find } from '../../../shared/finds';
 import { DEFAULT_INTERNAL } from '../../../shared/internal';
-import { setTuning } from '../../app/tuning';
+import { setTuning, tuning } from '../../app/tuning';
 import type { RewriteDesign } from '../../../shared/rewrites';
 import type { RewritesUiConfig } from '../../../shared/config';
 import type { Route } from '../../../shared/world';
@@ -5886,6 +5886,30 @@ describe('the fight of 2026-09-22', () => {
     await settled(115);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(attacks(seen())).toHaveLength(1);
+  });
+
+  /*
+   * A drop is rarely announced — only a look's `You notice … here.` shows a
+   * key on the floor — so a death is followed by one Enter (2026-09-23). The
+   * death sentence and the experience line are one kill, and one read.
+   */
+  it('reads the room once after a kill, to see what was dropped', async () => {
+    const { socket, seen } = await inTheForest();
+    // Everything the client wrote, one command per entry.
+    const sent = (): string[] =>
+      seen()
+        .split(/\r\n?|\n/)
+        .slice(0, -1);
+    socket.write(ROUND);
+    await until(() => attacks(seen()).length === 1);
+    const before = sent().filter((line) => line === '').length;
+    socket.write(
+      'The dark goblin spits up blood and dies!\r\n[HP=215/MA=214]:\r\n' +
+        'You gain 735 experience.\r\n[HP=215/MA=214]:\r\n'
+    );
+    await until(() => sent().filter((line) => line === '').length > before);
+    await new Promise((resolve) => setTimeout(resolve, tuning().combat.lookAfterKillMs + 200));
+    expect(sent().filter((line) => line === '').length).toBe(before + 1);
   });
 
   it('goes on fighting after an attack on a goblin that has already died is said out loud', async () => {
