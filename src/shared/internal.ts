@@ -459,6 +459,14 @@ const TUNING_DEFAULTS = {
      */
     engageCooldownMs: 4000,
     /**
+     * How long after a monster dies the room is read again (an Enter), so
+     * what it dropped is seen and a wanted item picked up (2026-09-23). A
+     * pause rather than at once: the death sentence and the experience line
+     * are two lines for one kill and collapse into one read, and the drop
+     * lines land before it.
+     */
+    lookAfterKillMs: 400,
+    /**
      * How long an arrival sentence stays pending its own state change. Short,
      * because what it bounds is the case where the change never comes.
      */
@@ -990,6 +998,15 @@ const TUNING_DEFAULTS = {
      * errand says it asked and nothing came, and walks nowhere.
      */
     errandAskMs: 180_000,
+    /**
+     * How often the item errand asks for the pack (`i`) while it waits on a
+     * thing it asked for (2026-09-23). A handover is said in the giver's own
+     * words — no pattern reads *the gnome commander gives you …* — so the
+     * listing is how the client learns the orb arrived; it is asked once
+     * straight after the phrase, and again at this spacing until the item is
+     * there or `errandAskMs` is up.
+     */
+    errandPackCheckMs: 10_000,
     /**
      * How long a walk stands still for a condition before spending one step
      * to find out whether it is over.

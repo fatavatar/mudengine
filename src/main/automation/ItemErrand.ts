@@ -61,6 +61,12 @@ export interface ItemPlanner {
   /** Send what is said to get the item, in the room it is said in. */
   say(command: string): void;
   /**
+   * Ask the realm what the pack holds (`i`). A handover is said in the giver's
+   * own words, which nothing reads, so the listing is how the errand learns
+   * the thing arrived.
+   */
+  checkPack(): void;
+  /**
    * Where the realm says this item comes from, from where the character stands
    * on the way to `to` — the counters by what stopping at each would add to
    * that journey, the lairs nearest first.
@@ -107,7 +113,7 @@ type Phase =
   | { kind: 'hunting'; item: Wanted; rest: Wanted[]; owes: Route; mob: string }
   /**
    * Going to say something for it: walking to `place`, then — `saidAt` set —
-   * waiting for the pack to hold it.
+   * waiting for the pack to hold it, asking for the pack at `checkedAt`.
    */
   | {
       kind: 'asking';
@@ -116,6 +122,7 @@ type Phase =
       owes: Route;
       place: { room: RoomId; roomName: string; say: string };
       saidAt: number | null;
+      checkedAt: number | null;
     }
   /**
    * The pack holds it and the way is still being offered to the walker.
@@ -244,7 +251,15 @@ export class ItemErrand {
       const refused = this.planner.walkTo(ask.room);
       if (refused !== null) return this.refuse(item, refused);
       this.planner.alsoTake(item.name);
-      this.phase = { kind: 'asking', item, rest, owes, place: ask, saidAt: null };
+      this.phase = {
+        kind: 'asking',
+        item,
+        rest,
+        owes,
+        place: ask,
+        saidAt: null,
+        checkedAt: null
+      };
       this.events.notice?.(
         t('automation.collect.asking', { item: item.name, say: ask.say, room: ask.roomName })
       );
@@ -285,6 +300,15 @@ export class ItemErrand {
     this.give();
     this.phase = { kind: 'idle' };
     this.refuse(item, t('automation.collect.abandoned', { item: item.name, why: reason }));
+  }
+
+  /**
+   * The session's clock. Waiting on a thing asked for can be quiet — nothing
+   * on the wire, so no state — and the pack is asked for, and the wait given
+   * up, by time.
+   */
+  tick(state: CharacterState): void {
+    if (this.phase.kind === 'asking' && this.phase.saidAt !== null) this.onCharacter(state);
   }
 
   /** Every state change: has the pack got it yet? */
@@ -412,9 +436,23 @@ export class ItemErrand {
         this.refuse(item, t('automation.collect.refusalNotReached', { room: place.roomName }));
         return;
       }
+      /*
+       * **Said, then the pack asked for.** A handover is announced in the
+       * giver's words — the gnome commander's orb never read as carried, and
+       * the errand stood there until it gave up (reported 2026-09-23). The
+       * realm answers in order, so the listing comes after whatever the
+       * phrase got.
+       */
       this.planner.say(place.say);
-      this.phase = { ...phase, saidAt: this.now() };
+      this.planner.checkPack();
+      this.phase = { ...phase, saidAt: this.now(), checkedAt: this.now() };
       return;
+    }
+    // And again while it waits: a summons is a fight before it is an item.
+    const checkedAt = phase.checkedAt ?? phase.saidAt;
+    if (this.now() - checkedAt >= tuning().walk.errandPackCheckMs) {
+      this.planner.checkPack();
+      this.phase = { ...phase, checkedAt: this.now() };
     }
     if (this.now() - phase.saidAt < tuning().walk.errandAskMs) return;
     this.give();

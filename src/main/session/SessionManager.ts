@@ -1959,6 +1959,15 @@ export class SessionManager {
             reason: t('automation.collect.sayReason', { command })
           });
         },
+        // Behind the phrase in the same band, so the listing answers after it.
+        checkPack: () => {
+          this.queue.enqueue({
+            command: 'i',
+            priority: 'movement',
+            coalesceKey: 'item-errand-pack',
+            reason: t('automation.collect.packReason')
+          });
+        },
         sourcesOf: (item, to) => this.itemSources(item, to),
         buy: (row) => this.supplies.fetch(row, this.tracker.current),
         buying: () => this.supplies.current !== null,
@@ -2866,6 +2875,30 @@ export class SessionManager {
     this.noteQuestReached(
       stepSaid(quests, command, roomAddress(this.tracker.current.room), this.countersNow())
     );
+  }
+
+  /**
+   * Something died here: read the room again, so what it dropped is seen.
+   *
+   * The drop itself is rarely announced — a key lies on the floor and only a
+   * look's `You notice … here.` says so — and `AutoLoot` picks up from that
+   * line, including a name the item errand added for the errand's length. Asked after `lookAfterKillMs`, coalesced, so a
+   * kill's two lines (the death sentence, the experience) are one Enter and
+   * the drop lines are in before it.
+   */
+  private lookAfterKill(): void {
+    if (!this.automationConfig.enabled) return;
+    if (this.tracker.current.phase !== 'in-game') return;
+    const now = Date.now();
+    this.queue.enqueue({
+      command: REREAD_ROOM,
+      priority: 'probe',
+      coalesceKey: 'look-after-kill',
+      notBefore: now + tuning().combat.lookAfterKillMs,
+      expiresAt: now + tuning().session.retreatPatienceMs,
+      stillWanted: () => this.tracker.current.phase === 'in-game',
+      reason: t('automation.combat.reasonLookAfterKill')
+    });
   }
 
   /**
@@ -4418,6 +4451,7 @@ export class SessionManager {
      * room the corpse is in either way.
      */
     for (const dead of this.tracker.takeDeaths()) this.noteQuestKilled(dead);
+    if (block.type === 'mob-dies' || block.type === 'user-gain-experience') this.lookAfterKill();
 
     /*
      * A prompt is an acknowledgement: the server has finished with the last
@@ -4821,6 +4855,7 @@ export class SessionManager {
     const state = this.tracker.current;
     if (state.phase !== 'in-game') return;
     if (this.isRetreating()) return;
+    this.itemErrand.tick(state);
     this.heal.onCharacter(state);
     this.potions.onCharacter(state);
     this.cures.onCharacter(state);
