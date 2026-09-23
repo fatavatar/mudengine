@@ -53,10 +53,17 @@ export function countMobs(occupants: readonly RoomOccupant[]): number {
  * `playersHere` errs in, and for the same reason: this guard decides whether to
  * act, and acting on a guess is worse than not acting.
  */
-export function countThreats(state: CharacterState): number {
+export function countThreats(
+  state: CharacterState,
+  /** A monster the caller knows will not open on this character, whatever the realm rates it. */
+  harmless?: (name: string) => boolean
+): number {
   const mine = ownAlignment(state);
   return state.room.occupants.filter(
-    (who) => who.kind === 'mob' && attacksOnSight(who.disposition, mine) === true
+    (who) =>
+      who.kind === 'mob' &&
+      attacksOnSight(who.disposition, mine) === true &&
+      harmless?.(who.name) !== true
   ).length;
 }
 

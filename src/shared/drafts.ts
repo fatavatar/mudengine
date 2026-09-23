@@ -74,6 +74,7 @@ import type { TrainedAttribute } from './training';
 import type { StreamEncoding } from './types';
 import { isRecord } from './values';
 import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
+import { asMonsterRules, type MonsterRule } from './monsterRules';
 
 const ENCODINGS: readonly StreamEncoding[] = ['cp437', 'utf8', 'latin1'];
 
@@ -412,6 +413,8 @@ export interface ProfileDraft {
     avoid: string[];
     /** The player's own ranking of the realm's monsters. See `CombatConfig`. */
     mobPriority: MobPriority[];
+    /** This character's own monster rows, laid over the realm's. See `CombatConfig`. */
+    monsters: MonsterRule[];
     maxTargetHealth: number;
     minMobs: number;
     maxMonsterExperience: number;
@@ -848,6 +851,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       refreshRounds: Math.min(20, Math.max(0, Math.trunc(Number(combat['refreshRounds']) || 0))),
       avoid: words(combat['avoid'], 64),
       mobPriority: normalizeMobPriorities(combat['mobPriority']),
+      monsters: asMonsterRules(combat['monsters']),
       maxTargetHealth: Math.max(0, Math.round(Number(combat['maxTargetHealth']) || 0)),
       minMobs: Math.max(0, Math.min(99, Math.round(Number(combat['minMobs']) || 0))),
       maxMonsterExperience: Math.max(0, Math.round(Number(combat['maxMonsterExperience']) || 0))

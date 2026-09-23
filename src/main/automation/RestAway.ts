@@ -19,6 +19,7 @@ import { tuning } from '../app/tuning';
 import type { SafetyDecision } from '../../shared/automation';
 import type { CharacterState } from '../../shared/character';
 import type { HealthConfig } from '../../shared/config';
+import { willNotOpen, type KnownMob, type MonsterRule } from '../../shared/monsterRules';
 import { OPPOSITE, type Direction, type RoomId } from '../../shared/world';
 
 export interface RestAwayPlanner {
@@ -70,9 +71,20 @@ export class RestAway {
     private readonly now: () => number = () => Date.now()
   ) {}
 
-  configure(config: HealthConfig, enabled: boolean): void {
+  configure(config: HealthConfig, enabled: boolean, monsters?: readonly MonsterRule[]): void {
     this.config = config;
     this.enabled = enabled;
+    if (monsters) this.monsters = monsters;
+  }
+
+  /** The monster table, so a monster `Recovery` would rest beside is not one this waits on. */
+  private monsters: readonly MonsterRule[] = [];
+  /** The realm's monster names, so a row reaches through a modifier only (`ruleFor`). */
+  private known: KnownMob | undefined = undefined;
+
+  /** Where the realm's monster names are asked for. See `ruleFor`. */
+  useKnownMob(known: KnownMob): void {
+    this.known = known;
   }
 
   reset(): void {
@@ -110,7 +122,8 @@ export class RestAway {
     if (clock === null || clock > tuning().rest.lairClockMaxSeconds) return 'not-mine';
     if (this.allowedIn === here) return 'rest-here';
     // `Recovery` refuses these itself; nothing steps out of a fight either.
-    if (fightIsHere(state) || countThreats(state) > 0) return 'took-over';
+    const harmless = (name: string): boolean => willNotOpen(this.monsters, name, this.known);
+    if (fightIsHere(state) || countThreats(state, harmless) > 0) return 'took-over';
     if (this.planner.moveInFlight() || this.planner.walking() || this.planner.busy()) {
       return 'took-over';
     }

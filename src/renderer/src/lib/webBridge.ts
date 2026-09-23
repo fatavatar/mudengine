@@ -261,6 +261,10 @@ export function createWebBridge(): IpcApi {
     loadMessages: (realm) => invoke(Invoke.loadMessages, realm),
     importMessages: (realm, fileName, text) => invoke(Invoke.importMessages, realm, fileName, text),
     saveMessages: (realm, triggers) => invoke(Invoke.saveMessages, realm, triggers),
+    loadMonsters: (realm) => invoke(Invoke.loadMonsters, realm),
+    importMonsters: (realm, fileName, monsters) =>
+      invoke(Invoke.importMonsters, realm, fileName, monsters),
+    saveMonsters: (realm, monsters) => invoke(Invoke.saveMonsters, realm, monsters),
     searchRooms: (session, query) => invoke(Invoke.searchRooms, session, query),
     mobNames: (session) => invoke(Invoke.mobNames, session),
     worldInfo: (session) => invoke(Invoke.worldInfo, session),

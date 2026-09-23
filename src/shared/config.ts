@@ -50,6 +50,7 @@ import {
 import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
 import type { ConnectionTarget, StreamEncoding } from './types';
 import { mobKey } from './world';
+import { asMonsterRules, type MonsterRule } from './monsterRules';
 // A value import, and safe: `commands.ts` imports nothing from `shared/`, so
 // there is no cycle for a bundler to resolve the wrong way round.
 import { REREAD_ROOM } from './commands';
@@ -925,6 +926,17 @@ export interface CombatConfig {
    * every other list here — see `mergeMobPriorities`.
    */
   mobPriority: MobPriority[];
+  /**
+   * What this character says about particular monsters — MegaMUD's *Monster
+   * Details*: relationship, band, rest and backstab flags, and a spell to
+   * fight each with (`MonsterRule`).
+   *
+   * Laid **field by field** over the realm's imported table
+   * (`servers/<id>/monsters.yaml`) when a session is configured, so a row here
+   * need state only what this character does differently — a shaman's attack
+   * spell for a monster the realm marks Flee keeps the Flee.
+   */
+  monsters: MonsterRule[];
   /**
    * Do not open on anything the realm says has more health than this.
    * 0 never refuses.
@@ -2577,6 +2589,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       refreshRounds: 3,
       avoid: [],
       mobPriority: [],
+      monsters: [],
       maxTargetHealth: 0,
       minMobs: 0,
       maxMonsterExperience: 0
@@ -4070,6 +4083,7 @@ function normalizeCombat(value: unknown): CombatConfig {
     refreshRounds: int(raw['refreshRounds'], d.refreshRounds, 0, 20),
     avoid: mobNames(raw['avoid']),
     mobPriority: normalizeMobPriorities(raw['mobPriority']),
+    monsters: asMonsterRules(raw['monsters']),
     minMobs: int(raw['minMobs'], d.minMobs, 0, 99),
     maxMonsterExperience: int(raw['maxMonsterExperience'], d.maxMonsterExperience, 0, 100_000_000),
     // Capped far above any health the shipped realm states, so a typo cannot

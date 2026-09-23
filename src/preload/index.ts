@@ -127,6 +127,10 @@ const api: IpcApi = {
   importMessages: (realm, fileName, text) =>
     ipcRenderer.invoke(Invoke.importMessages, realm, fileName, text),
   saveMessages: (realm, triggers) => ipcRenderer.invoke(Invoke.saveMessages, realm, triggers),
+  loadMonsters: (realm) => ipcRenderer.invoke(Invoke.loadMonsters, realm),
+  importMonsters: (realm, fileName, monsters) =>
+    ipcRenderer.invoke(Invoke.importMonsters, realm, fileName, monsters),
+  saveMonsters: (realm, monsters) => ipcRenderer.invoke(Invoke.saveMonsters, realm, monsters),
   searchRooms: (session, query) => ipcRenderer.invoke(Invoke.searchRooms, session, query),
   mobNames: (session) => ipcRenderer.invoke(Invoke.mobNames, session),
   worldInfo: (session) => ipcRenderer.invoke(Invoke.worldInfo, session),

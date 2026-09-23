@@ -47,6 +47,7 @@ import type { RealmDestinations } from '../world/DestinationBook';
 import type { BelongingsSink } from '../../shared/belongings';
 import type { TalkSink } from './TalkLog';
 import type { MessageTrigger } from '../../shared/messageTriggers';
+import type { MonsterRule } from '../../shared/monsterRules';
 import { isTalkBlock } from '../../shared/talk';
 import { SessionDebug } from './SessionDebug';
 
@@ -127,6 +128,12 @@ export interface SessionHostOptions {
    * answers no sentences.
    */
   messagesFor?(id: SessionId): readonly MessageTrigger[];
+  /**
+   * The monster table of *this character's* realm (`servers/<id>/monsters.yaml`),
+   * laid under the character's own `combat.monsters` rows. Optional: a host
+   * without one leaves every monster to the character's own rows.
+   */
+  monstersFor?(id: SessionId): readonly MonsterRule[];
   /**
    * Where what *this character* learns about the realm is kept.
    *
@@ -482,6 +489,7 @@ export class SessionHost {
 
     manager.configureInternal(this.options.internal());
     manager.configureMessages(this.options.messagesFor?.(id) ?? []);
+    manager.configureMonsters(this.options.monstersFor?.(id) ?? []);
     const slot: SessionSlot = {
       id,
       manager,
@@ -600,6 +608,7 @@ export class SessionHost {
       );
       slot.manager.configureInternal(this.options.internal());
       slot.manager.configureMessages(this.options.messagesFor?.(slot.id) ?? []);
+      slot.manager.configureMonsters(this.options.monstersFor?.(slot.id) ?? []);
     }
   }
 

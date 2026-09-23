@@ -497,6 +497,8 @@ describe('a character', () => {
         maxMonsterExperience: 0,
         // Absent above, and empty: nothing is ranked until somebody ranks it.
         mobPriority: [],
+        // Absent above, and empty: the realm's monster table stands as it is.
+        monsters: [],
         engage: 'all',
         retaliate: false,
         // Absent above, and off: it spends a command per fight.

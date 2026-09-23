@@ -82,9 +82,18 @@ import { ATTACK_COMMANDS, commandOf, REREAD_ROOM } from '../../shared/commands';
 import {
   DEFAULT_MOB_PRIORITY,
   type CombatConfig,
+  type MobPriority,
+  type MobPriorityBand,
   type PartyConfig,
   type SpellsConfig
 } from '../../shared/config';
+import {
+  relationshipLabel,
+  ruleFor,
+  type MonsterRule,
+  type MonsterSpell,
+  type Relationship
+} from '../../shared/monsterRules';
 import type { MobEntity } from '../../shared/entities';
 import { WEAPON_HAND } from '../../shared/items';
 import { weighRoom, type HazardKind, type Menace } from '../../shared/menace';
@@ -133,6 +142,12 @@ export interface AutoCombatEvents {
    * and the stealth state decides as it always did.
    */
   canHide?(): boolean | null;
+  /**
+   * Whether the realm's monster table names a monster exactly (`mobKey`), so
+   * a monster-table row reaches through a name modifier and no further — an
+   * Avoid row for `rogue` is not about an `orc rogue`. See `ruleFor`.
+   */
+  knownMob?(key: string): boolean;
 }
 
 /**
@@ -184,6 +199,20 @@ const REFUSED_WORDS: Record<string, readonly string[]> = {
  * Only an identity is wanted — has the hand changed since the server refused
  * a backstab — so a name is the whole answer and `null` is a real one.
  */
+/** A cast `AutoCombat` proposed, until the server answers it or it goes stale. */
+interface CastProposal {
+  spell: string;
+  at: number;
+  /** When `You cast … on …` confirmed it; it counts against its cap once. */
+  confirmedAt: number | null;
+}
+
+/** How full the mana pool is, 0–1, or null when its maximum is unknown. */
+function manaFraction(state: CharacterState): number | null {
+  const { mana, manaMax } = state.vitals;
+  return mana !== null && manaMax !== null && manaMax > 0 ? mana / manaMax : null;
+}
+
 function weaponInHand(state: CharacterState): string | null {
   const held = state.inventory.items.find((item) => item.equipped && item.slot === WEAPON_HAND);
   return held?.name ?? null;
@@ -314,16 +343,42 @@ export class AutoCombat {
   /** The derivation's last refusal said, once per kind. */
   private saidChoiceRefusal: SpellChoiceRefusal | null = null;
   /**
-   * The round spell last proposed, and when. The only record of *which* spell
-   * `Your spell has no effect on …` is about — the sentence names the target
-   * and never the spell — and of which spell a cast confirmation counts
-   * against. Dropped with the fight.
+   * The casts proposed and not yet answered, oldest first, one per spell. The
+   * only record of *which* spell `Your spell has no effect on …` is about —
+   * the sentence names the target and never the spell — and of which spell a
+   * cast confirmation counts against. More than one because a fight can open
+   * with two: a monster row's pre-attack spell, then the attack spell that
+   * starts the fight (`swing`). Dropped with the fight.
    */
-  private lastCast: { spell: string; at: number } | null = null;
+  private proposed: CastProposal[] = [];
   /** Spells the server has said have no effect on the current target, this fight. */
   private readonly ineffective = new Set<string>();
   /** Confirmed casts against the current target, by configured spell — `attackCasts` / `areaCasts`. */
   private readonly casts = new Map<string, number>();
+  /**
+   * What the fight is repeating: the spell it was engaged with, null for the
+   * melee verb, undefined when nothing here knows (no fight, or one this
+   * module neither opened nor switched).
+   *
+   * **The server repeats an attack spell by itself**, exactly as it repeats a
+   * swing: engaged with `c harm small bandit`, it answers `You cast harm at
+   * small bandit for 17 damage!` once a round with nothing more sent. And
+   * every cast sent into a fight re-engages it — `*Combat Off*` and `*Combat
+   * Engaged*` as one answer — which restarts the character's round. Captured
+   * 2026-09-23: the round tick casting `harm` every round, each one answered
+   * by that pair, and each `*Combat Off*` read as the fight over and answered
+   * with a second opening cast — two casts a round, and the fight reset
+   * twice. So the round tick sends only a *change* of action (`roundSpell`).
+   */
+  private combatAction: string | null | undefined = undefined;
+  /**
+   * A change of action sent mid-fight, until the server's `*Combat Off*` /
+   * `*Combat Engaged*` pair for it has come back. That `*Combat Off*` is the
+   * fight carrying on with a new action, not ending: nothing is reset for it
+   * and nothing is opened in it. `off` is whether its `*Combat Off*` has
+   * arrived; `key` is the monster it was aimed at.
+   */
+  private switching: { until: number; key: string; off: boolean } | null = null;
   /** Set while an escape is in flight; nothing opens a fight through it. */
   private retreating = false;
   /** True while `Walker` has a route running. */
@@ -489,8 +544,7 @@ export class AutoCombat {
     const there = state.room.occupants.find(
       (who) => who.kind === 'mob' && mobKey(who.name) === wanted
     );
-    if (!there || this.config.avoid.includes(wanted) || this.isPlayer(state, there.name))
-      return null;
+    if (!there || this.spared(wanted) || this.isPlayer(state, there.name)) return null;
     return { name: there.name, leader };
   }
 
@@ -514,9 +568,7 @@ export class AutoCombat {
       const there = state.room.occupants.find(
         (who) => who.kind === 'mob' && mobKey(who.name) === wanted
       );
-      if (!there || this.config.avoid.includes(wanted) || this.isPlayer(state, there.name)) {
-        continue;
-      }
+      if (!there || this.spared(wanted) || this.isPlayer(state, there.name)) continue;
       if (best === null || seen.at > best.at) best = { name: there.name, member, at: seen.at };
     }
     return best === null ? null : { name: best.name, member: best.member };
@@ -705,6 +757,15 @@ export class AutoCombat {
       return;
     }
     if (name !== null && ATTACK_COMMANDS.has(name)) this.standDownUntil = 0;
+    /*
+     * And what the fight is repeating, when the player changes it: a swing
+     * or an attack spell typed at something re-engages the fight with it, and
+     * the round tick must not undo the player's choice by "correcting" it.
+     */
+    if (this.state?.inCombat !== true) return;
+    const words = command.trim().split(/\s+/);
+    if (name !== null && ATTACK_COMMANDS.has(name) && words.length > 1) this.combatAction = null;
+    if (name === 'Cast' && words.length > 2) this.combatAction = words[1] ?? null;
   }
 
   /**
@@ -826,10 +887,20 @@ export class AutoCombat {
      * spells found to have no effect are facts about the monster that *was* in
      * front of the character, and the next one may well take the spell the
      * last one shrugged off. MegaMUD's `ClearOnceEngaged`, read literally.
+     *
+     * Opened on *leaving* a target, not on gaining one: a fight opened with a
+     * spell (`openingCast`) has that cast confirmed around the same moment
+     * `*Combat Engaged*` names the target, and clearing on the name would
+     * forget the first cast against the row's cap whenever the confirmation
+     * came first. Nothing else is counted while there is no target.
      */
-    if ((was?.combat.target ?? null) !== state.combat.target) {
+    const switching = this.stillSwitching(state);
+    const before = was?.combat.target ?? null;
+    if (!switching && before !== null && before !== state.combat.target) {
       this.ineffective.clear();
       this.casts.clear();
+      // And what the fight repeats against the next one is nobody's to say.
+      this.combatAction = undefined;
     }
 
     // A journey the player declined still reports itself: `engage` reaches
@@ -844,6 +915,12 @@ export class AutoCombat {
      */
     this.releaseWeaponRefusals(state);
 
+    /*
+     * Mid-switch, the `*Combat Off*` is the fight changing its action rather
+     * than ending, and nothing is decided until the `*Combat Engaged*` after
+     * it: a fight opened into that gap is the second cast of 2026-09-23.
+     */
+    if (switching) return;
     // A fight that has ended takes its opener and its round cycle with it.
     if (was?.inCombat && !state.inCombat) this.endFight();
 
@@ -968,7 +1045,7 @@ export class AutoCombat {
      * to an occupant here.
      */
     const candidates = state.combat.attackers.filter(
-      (name) => !this.isPlayer(state, name) && !this.config.avoid.includes(mobKey(name))
+      (name) => !this.isPlayer(state, name) && !this.spared(name)
     );
     if (candidates.length === 0) return false;
     const entities = candidates.map(
@@ -1098,9 +1175,7 @@ export class AutoCombat {
    * fact that chose this monster.
    */
   private whyRanked(target: string, count: number, others: readonly string[]): string {
-    const band = this.config.mobPriority.find(
-      (row) => mobKey(row.mob) === mobKey(target)
-    )?.priority;
+    const band = this.bandOf(target);
     if (band !== undefined) {
       return count <= 1
         ? t('automation.combat.whyRankedAlone', { target, band })
@@ -1114,17 +1189,54 @@ export class AutoCombat {
      * route -- so the sentence names the listed monster that was pushed past
      * instead, which is the fact that actually decided.
      */
-    const demoted = others.find((name) =>
-      this.config.mobPriority.some((row) => mobKey(row.mob) === mobKey(name))
-    );
+    const demoted = others.find((name) => this.bandOf(name) !== undefined);
     if (demoted === undefined) return t('automation.combat.whyInRoom');
-    const its = this.config.mobPriority.find((row) => mobKey(row.mob) === mobKey(demoted));
     return t('automation.combat.whyRankedOver', {
       target,
       count,
       other: demoted,
-      band: its?.priority ?? DEFAULT_MOB_PRIORITY
+      band: this.bandOf(demoted) ?? DEFAULT_MOB_PRIORITY
     });
+  }
+
+  /**
+   * The band a monster is attacked in: a `mobPriority` row for it, else what
+   * its monster row says (the realm's imported table, or the character's).
+   * The priority list is the more specific statement and wins.
+   */
+  private bandOf(name: string): MobPriorityBand | undefined {
+    const key = mobKey(name);
+    return (
+      this.config.mobPriority.find((row) => mobKey(row.mob) === key)?.priority ??
+      this.ruleOf(name)?.priority
+    );
+  }
+
+  /**
+   * The bands of these monsters as rows `rankByPriority` reads — resolved
+   * per monster here, because a monster row may name only part of a name
+   * (`guardsman` for `nasty guardsman`) and the ranking matches whole keys.
+   */
+  private bandsFor(names: readonly string[]): MobPriority[] {
+    const rows: MobPriority[] = [];
+    for (const name of names) {
+      const band = this.bandOf(name);
+      if (band !== undefined) rows.push({ mob: name, priority: band });
+    }
+    return rows;
+  }
+
+  /** A monster the table marks *Stop to kill*. */
+  private stopsFor(name: string): boolean {
+    return this.ruleOf(name)?.stopToKill === true;
+  }
+
+  /**
+   * Never swung at, even to hit back: a name on `avoid`, or a monster the
+   * table calls a friend.
+   */
+  private spared(name: string): boolean {
+    return this.config.avoid.includes(mobKey(name)) || this.relationOf(name) === 'friend';
   }
 
   private explain(
@@ -1366,7 +1478,17 @@ export class AutoCombat {
      * ends, and a room that is too small is refused for the same reason a room
      * that is too crowded is.
      */
-    if (this.config.minMobs > 0 && here < this.config.minMobs) {
+    /*
+     * Not below it for a monster the table marks *Stop to kill*: MegaMUD's
+     * flag for the one worth stopping for even when the room is too small to
+     * be worth the round otherwise. `maxMobs` above still refuses, as
+     * MegaMUD's own help says it does.
+     */
+    if (
+      this.config.minMobs > 0 &&
+      here < this.config.minMobs &&
+      !state.room.occupants.some((who) => who.kind === 'mob' && this.stopsFor(who.name))
+    ) {
       return t('automation.combat.refusedMinMobs', { here, min: this.config.minMobs });
     }
     return null;
@@ -1424,6 +1546,24 @@ export class AutoCombat {
         continue;
       }
       /*
+       * What the monster table says about it (MegaMUD's relationships). Only
+       * an enemy is started on: a friend never is, an avoided monster waits
+       * to swing first (and is hit back then — see `retaliate`), a monster to
+       * flee from is run from rather than fought, and one to hang up on ends
+       * the session before a fight could matter.
+       */
+      const relationship = this.relationOf(who.name);
+      if (relationship !== 'enemy') {
+        decline(
+          who,
+          t('automation.combat.refusedRelationship', {
+            target: who.name,
+            relationship: relationshipLabel(relationship, t).toLowerCase()
+          })
+        );
+        continue;
+      }
+      /*
        * Somebody outside the party is already fighting it — MegaMUD's
        * *PoliteAttacks*. The sighting is the tracker's (`combat.claimed`) and
        * it ages out on the same clock a sighting of the leader's target does:
@@ -1434,6 +1574,8 @@ export class AutoCombat {
       if (
         this.config.politeAttacks &&
         claim !== undefined &&
+        // MegaMUD: polite attacks are ignored for a Stop-to-kill monster.
+        !this.stopsFor(who.name) &&
         Date.now() - claim.at <= tuning().combat.assistFreshMs
       ) {
         decline(who, t('automation.combat.refusedClaimed', { target: who.name, player: claim.by }));
@@ -1533,10 +1675,8 @@ export class AutoCombat {
      * all on this path, and the trace says the band rather than a menace
      * figure that did not make the decision.
      */
-    const ranked = rankByPriority(
-      candidates.map((who) => who.name),
-      this.config.mobPriority
-    );
+    const names = candidates.map((who) => who.name);
+    const ranked = rankByPriority(names, this.bandsFor(names));
     if (ranked !== null) {
       const index = ranked[0] ?? 0;
       const pick = candidates[index] ?? candidates[0]!;
@@ -1624,14 +1764,39 @@ export class AutoCombat {
     const asked = this.opened.get(key);
     if (asked !== undefined && now - asked < cooldown) return false;
 
-    const verb = this.opener(this.state) ?? this.config.attack;
-    if (verb.length === 0) return false;
+    const opener = this.opener(this.state, target);
+    const aimed = this.aimedAt(target);
+    const cast = opener === null && aimed !== null ? this.openingCast(aimed, target) : null;
+    const verb = opener ?? this.config.attack;
+    if (cast === null && verb.length === 0) return false;
 
     // Past the cooldown an entry answers nothing, so the map holds only what
     // is still deciding something — the room's occupants, at most.
     for (const [name, at] of this.opened) if (now - at >= cooldown) this.opened.delete(name);
     this.opened.set(key, now);
     this.openerSpent = true;
+    /*
+     * The monster row's pre-attack spell, ahead of whatever opens the fight.
+     * It opens nothing itself — MegaMUD's pre-attack is what is cast *before*
+     * attacking (the player, 2026-09-23) — so the engage still follows it,
+     * and the queue sends the two in the order they were proposed. Not ahead
+     * of a backstab: a cast breaks the stealth the backstab needs, and the
+     * round tick casts it once the fight is on instead.
+     */
+    const backstab = opener !== null && answersTo('backstab', opener);
+    const pre = aimed === null || backstab ? null : this.preAttackCast(aimed, target);
+    if (pre !== null) {
+      this.queue.enqueue({
+        command: pre.command,
+        priority: 'combat',
+        coalesceKey: `pre-attack:${key}`,
+        expiresAt: now + tuning().combat.engageCooldownMs,
+        reason: t('automation.combat.reasonPreAttackSpell', { why, spell: pre.spell })
+      });
+      this.proposeCast(pre.spell, now);
+    }
+    if (cast !== null) this.proposeCast(cast.spell, now);
+    this.combatAction = cast?.spell ?? null;
     /*
      * Not announced, unlike an escape.
      *
@@ -1643,14 +1808,84 @@ export class AutoCombat {
      * an attack happens every fight, and a grind would be a console of them.
      */
     return this.queue.enqueue({
-      command: `${verb} ${target}`,
+      command: cast?.command ?? `${verb} ${target}`,
       priority: 'combat',
       coalesceKey: `attack:${key}`,
       // Worthless if it arrives late: by then the thing has moved, died, or is
       // already fighting somebody else, and the command opens a *new* fight.
       expiresAt: now + tuning().combat.engageCooldownMs,
-      reason: t('automation.combat.reason', { why })
+      reason:
+        cast === null
+          ? t('automation.combat.reason', { why })
+          : t('automation.combat.reasonOpeningSpell', { why, spell: cast.spell })
     });
+  }
+
+  /**
+   * The state as the round spell would see it with `target` as the target:
+   * its own realm row, and no health read of whatever was fought before it.
+   */
+  private aimedAt(target: string): CharacterState | null {
+    const state = this.state;
+    if (state === null) return null;
+    const current = state.combat.target;
+    if (current !== null && mobKey(current) === mobKey(target)) return state;
+    return {
+      ...state,
+      combat: {
+        ...state.combat,
+        target,
+        targetEntity:
+          state.room.occupants.find((who) => mobKey(who.name) === mobKey(target))?.mob ?? null,
+        health: null
+      }
+    };
+  }
+
+  /**
+   * The attack spell that opens the fight in place of the engage verb, or
+   * null for the verb.
+   *
+   * An attack spell opens combat exactly as `a` does (the player,
+   * 2026-09-23), and waiting for the round tick to cast it lost the spell
+   * altogether on anything that died in the first round: a row saying `harm`
+   * for `thug`, and two thugs killed with `a` alone, one round each. So the
+   * spell the first round would cast — the room spell when the fight is
+   * crowded enough, the monster row's attack spell, else the round spell, its
+   * fallback or the chosen one, under the same mana floor and caps — is the
+   * opening command, and the rounds after it cast on as before.
+   *
+   * **Never the pre-attack spell**, which opens nothing (`preAttackCast`).
+   * The tracker binds `*Combat Engaged*` to a targeted cast as it does an
+   * attack (`CharacterTracker.observeCommand`); a room spell names nobody,
+   * and its first damage line names the target instead. The configured
+   * opener wins over any spell, being the player's own choice of first move.
+   */
+  private openingCast(
+    aimed: CharacterState,
+    target: string
+  ): { spell: string; command: string } | null {
+    const cast = this.castable(aimed, { preAttack: false });
+    if (cast === null) return null;
+    const command = this.castCommand(aimed, cast, target);
+    return command === null ? null : { spell: cast.spell, command };
+  }
+
+  /** The monster row's pre-attack spell for `target`, while it is owed. */
+  private preAttackCast(
+    aimed: CharacterState,
+    target: string
+  ): { spell: string; command: string } | null {
+    const pre = this.ruleOf(target)?.preAttack;
+    if (pre === undefined || !this.preAttackOwed(pre)) return null;
+    if (!this.aboveFloor(manaFraction(aimed))) return null;
+    const command = this.castCommand(aimed, { spell: pre.spell, area: false }, target);
+    return command === null ? null : { spell: pre.spell, command };
+  }
+
+  /** Whether a pre-attack spell still has casts to spend on this target. */
+  private preAttackOwed(pre: MonsterSpell): boolean {
+    return !this.ineffective.has(pre.spell) && !this.capped(pre.spell, pre.max > 0 ? pre.max : 1);
   }
 
   /**
@@ -1678,12 +1913,18 @@ export class AutoCombat {
    * Only a verb the command table calls `backstab` is held. `ju` is an
    * opener too and has nothing to do with stealth.
    */
-  private opener(state: CharacterState | null): string | null {
+  private opener(state: CharacterState | null, target: string): string | null {
     if (this.openerSpent) return null;
     const opener = this.config.opener.trim();
     if (opener.length === 0) return null;
     if (this.isRefused(opener)) return null;
     if (answersTo('backstab', opener)) {
+      /*
+       * A monster the table marks *Don't backstab* — MegaMUD's flag for the
+       * ones practically immune to it. Quietly, and for this fight only: it
+       * is the player's own statement about this monster, not a refusal.
+       */
+      if (this.ruleOf(target)?.noBackstab === true) return null;
       /*
        * **A class that cannot hide will never land one** (todo 28,
        * 2026-09-12). `combat.opener` survives a reroll — a profile set up for
@@ -1797,26 +2038,135 @@ export class AutoCombat {
   }
 
   /**
-   * The attack spell, once per round.
+   * The fight's action, changed when it should be — and only then.
    *
    * Only when something has been named to cast at: a bare cast falls back to
    * the server's `LastTarget`, which after a monster dies is whatever the room
    * has left. Naming it is what keeps that from happening.
    *
-   * **This is the whole of what a round sends.** A `rounds` list of melee verbs
-   * cycled beside it went on 2026-09-02: nothing in the realm asks a character
-   * for its attack every round — one engage verb starts the fight and the
-   * server rolls it — so those commands were spent to be answered by nothing,
-   * out of the budget the fight is being fought with. A caster is different
-   * only because a *spell* genuinely is one cast per round, which is why this
-   * tick still exists.
+   * **Nothing, while the fight is already doing the right thing.** The server
+   * rolls the engaged action every round by itself — the swing, and the
+   * attack spell too (`combatAction`) — so a round sends a command only when
+   * the action should *change*: the room grew crowded enough for the room
+   * spell or thinned out of it, the row's cast count ran out, the pool fell
+   * under the floor, the server said the spell has no effect and the fallback
+   * takes over, or the chosen spell changed. No spell to cast means the melee
+   * verb, sent only when the fight was casting. A `rounds` list of melee verbs
+   * went on 2026-09-02 for the same reason: the server was answering them
+   * with nothing.
+   *
+   * The monster row's pre-attack spell is never cast here. It belongs before
+   * the fight (`swing`), and one cast into it would re-engage the fight with
+   * something that is not an attack.
    */
   private roundSpell(state: CharacterState): void {
     const target = state.combat.target;
     if (target === null) return;
+    const cast = this.castable(state, { preAttack: false });
+    const command = cast === null ? null : this.castCommand(state, cast, target);
+    const want = cast === null || command === null ? null : cast.spell;
+    const doing = this.combatAction;
+    if (doing !== undefined && this.sameSpell(doing, want)) return;
+    const now = Date.now();
+    if (want === null || command === null || cast === null) {
+      // Melee is what an unknown fight is taken to be doing: the fight this
+      // module did not open was opened by somebody's swing.
+      if (doing === undefined || doing === null) return;
+      const verb = this.config.attack.trim();
+      if (verb.length === 0) return;
+      const sent = this.queue.enqueue({
+        command: `${verb} ${target}`,
+        priority: 'combat',
+        coalesceKey: 'round-attack',
+        expiresAt: now + tuning().combat.roundMs * 20,
+        reason: t('automation.combat.reasonBackToMelee', { spell: doing })
+      });
+      if (sent) this.switchTo(null, target, now);
+      return;
+    }
+    const sent = this.queue.enqueue({
+      command,
+      priority: 'combat',
+      coalesceKey: 'round-attack',
+      expiresAt: now + tuning().combat.roundMs * 20,
+      reason: cast.area
+        ? t('automation.combat.reasonRoundAreaSpell')
+        : t('automation.combat.reasonRoundSpell')
+    });
+    if (!sent) return;
+    this.proposeCast(cast.spell, now);
+    this.switchTo(cast.spell, target, now);
+  }
 
-    const cast = this.castable(state);
-    const found = cast === null ? null : resolveSpell(cast.spell, state.spellbook, this.realmSpell);
+  /**
+   * Whether a change of action is still waiting on its `*Combat Engaged*`.
+   * Over when that arrives after the `*Combat Off*`, when the monster is gone
+   * (a kill inside the window is a real end), or when the window runs out —
+   * and a fight found not to be on when it ends is ended here, since the
+   * `*Combat Off*` that would have ended it was passed over.
+   */
+  private stillSwitching(state: CharacterState): boolean {
+    const pending = this.switching;
+    if (pending === null) return false;
+    const gone = !state.room.occupants.some((who) => mobKey(who.name) === pending.key);
+    const target = state.combat.target;
+    const elsewhere = target !== null && mobKey(target) !== pending.key;
+    if (gone || elsewhere || Date.now() > pending.until) {
+      this.switching = null;
+      if (!state.inCombat) this.endFight();
+      return false;
+    }
+    if (!state.inCombat) {
+      pending.off = true;
+      return true;
+    }
+    if (pending.off) {
+      this.switching = null;
+      return false;
+    }
+    return true;
+  }
+
+  /** The fight's action changed by a command this module just sent. */
+  private switchTo(spell: string | null, target: string, now: number): void {
+    this.combatAction = spell;
+    this.switching = {
+      until: now + tuning().combat.roundMs * 20,
+      key: mobKey(target),
+      off: false
+    };
+  }
+
+  /**
+   * Whether two spellings name one spell — a configured name against the
+   * word a command carried or a confirmation printed. Null is the melee verb.
+   */
+  private sameSpell(a: string | null, b: string | null): boolean {
+    if (a === null || b === null) return a === b;
+    const spelled = b.trim().toLowerCase();
+    return (
+      this.spellingsOf(a).includes(spelled) || this.spellingsOf(b).includes(a.trim().toLowerCase())
+    );
+  }
+
+  /** Every spelling the resolver knows for a configured spell, lowercase. */
+  private spellingsOf(spell: string): string[] {
+    const found = resolveSpell(spell, this.state?.spellbook, this.realmSpell);
+    return [spell, found.word, found.known?.name, found.known?.short, found.realm?.name]
+      .filter((name): name is string => typeof name === 'string')
+      .map((name) => name.trim().toLowerCase());
+  }
+
+  /**
+   * The command that casts `cast.spell` at `target`, or null when the book
+   * does not hold it or the pool cannot pay.
+   */
+  private castCommand(
+    state: CharacterState,
+    cast: { spell: string; area: boolean },
+    target: string
+  ): string | null {
+    const found = resolveSpell(cast.spell, state.spellbook, this.realmSpell);
     /*
      * And sends nothing when the pool cannot pay for it, which is the same
      * thing `castable`'s own `minMana` floor does one step earlier — except
@@ -1825,25 +2175,15 @@ export class AutoCombat {
      * mana on a character holding one. The server answers that out loud in the
      * room, once a round. See `canPayFor`.
      */
-    if (cast !== null && found !== null && canPayFor(state, spellCost(found))) {
-      // The realm's short name — the `Cast` command reads exactly one word
-      // as the spell (`castWord`), so `mmis giant rat`, never
-      // `c minor missile giant rat`.
-      const word = found.word;
-      this.queue.enqueue({
-        // A room spell is cast bare: the wire shows an area cast with no
-        // target answering `You cast poison cloud on the room!`
-        // (captures/131); a named target on one has never been seen.
-        command: cast.area ? `c ${word}` : `c ${word} ${target}`,
-        priority: 'combat',
-        coalesceKey: 'round-attack',
-        expiresAt: Date.now() + tuning().combat.roundMs * 20,
-        reason: cast.area
-          ? t('automation.combat.reasonRoundAreaSpell')
-          : t('automation.combat.reasonRoundSpell')
-      });
-      this.lastCast = { spell: cast.spell, at: Date.now() };
-    }
+    if (found === null || !canPayFor(state, spellCost(found))) return null;
+    // The realm's short name — the `Cast` command reads exactly one word
+    // as the spell (`castWord`), so `mmis giant rat`, never
+    // `c minor missile giant rat`.
+    const word = found.word;
+    // A room spell is cast bare: the wire shows an area cast with no target
+    // answering `You cast poison cloud on the room!` (captures/131); a named
+    // target on one has never been seen.
+    return cast.area ? `c ${word}` : `c ${word} ${target}`;
   }
 
   /**
@@ -1949,9 +2289,11 @@ export class AutoCombat {
    * maximum that has not arrived must never stop something happening, only ever
    * start it.
    */
-  private castable(state: CharacterState): { spell: string; area: boolean } | null {
-    const { mana, manaMax } = state.vitals;
-    const fraction = mana !== null && manaMax !== null && manaMax > 0 ? mana / manaMax : null;
+  private castable(
+    state: CharacterState,
+    { preAttack = true }: { preAttack?: boolean } = {}
+  ): { spell: string; area: boolean } | null {
+    const fraction = manaFraction(state);
 
     /*
      * The room spell first, when the fight is crowded enough to earn it —
@@ -1977,16 +2319,41 @@ export class AutoCombat {
       const costly = state.room.occupants.some(
         (who) => who.kind === 'mob' && who.costly === 'always'
       );
+      /*
+       * And never while something the player said to leave alone stands here:
+       * a room spell engages every monster in the room (the player,
+       * 2026-09-23), so it would open the very fight the avoid list, a friend
+       * or a Flee / Hang up row exists to keep this character out of.
+       */
+      const spares = state.room.occupants.some(
+        (who) =>
+          who.kind === 'mob' && (this.spared(who.name) || this.relationOf(who.name) !== 'enemy')
+      );
       const crowd = Math.max(countThreats(state), state.combat.attackers.length);
       const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
       if (
         !costly &&
+        !spares &&
         crowd >= this.spells.areaMinMobs &&
         (floor <= 0 || fraction === null || fraction >= floor)
       ) {
         return { spell: area, area: true };
       }
     }
+
+    /*
+     * What the monster table names for this target — MegaMUD's per-monster
+     * *pre-attack* and *attack* spells. The pre-attack spell goes first, once
+     * unless its row says how many; it is cast on the first round rather than
+     * as the opening command, because the engage verb is what starts the
+     * fight this module tracks. The attack spell then stands in for the
+     * round spell, capped by its row or else by `attackCasts`. A spell the
+     * server said has no effect on this target is passed over, as the round
+     * spell's is.
+     */
+    const target = state.combat.target;
+    const row = target === null ? undefined : this.rowSpell(target, fraction, preAttack);
+    if (row !== undefined) return row;
 
     // *Auto Choose Best Spell*: the round spell is derived, not typed (todo 09).
     if (this.spells.autoChoose) {
@@ -2010,6 +2377,38 @@ export class AutoCombat {
     if (this.spells.minMana <= 0) return { spell, area: false };
     if (fraction === null) return { spell, area: false };
     return fraction < this.spells.minMana ? null : { spell, area: false };
+  }
+
+  /**
+   * The spell the monster table names for `target`: the pre-attack spell until
+   * its casts are spent (unless `preAttack` is false, for the command that
+   * opens a fight, which a pre-attack spell never is), then the attack spell.
+   * Undefined when the row names neither, or neither is still worth casting,
+   * so the round spell decides; null when the row's spell is the answer but
+   * cannot go out now (capped or under the mana floor), which holds the round
+   * spell back too.
+   */
+  private rowSpell(
+    target: string,
+    fraction: number | null,
+    preAttack: boolean
+  ): { spell: string; area: boolean } | null | undefined {
+    const rule = this.ruleOf(target);
+    const pre = rule?.preAttack;
+    if (preAttack && pre !== undefined && this.preAttackOwed(pre)) {
+      return this.aboveFloor(fraction) ? { spell: pre.spell, area: false } : null;
+    }
+    const own = rule?.attack;
+    if (own !== undefined && !this.ineffective.has(own.spell)) {
+      if (this.capped(own.spell, own.max > 0 ? own.max : this.spells.attackCasts)) return null;
+      return this.aboveFloor(fraction) ? { spell: own.spell, area: false } : null;
+    }
+    return undefined;
+  }
+
+  /** Whether the pool is above `minMana`; an unknown maximum always is. */
+  private aboveFloor(fraction: number | null): boolean {
+    return this.spells.minMana <= 0 || fraction === null || fraction >= this.spells.minMana;
   }
 
   /** Whether a per-target cap has been spent on this spell. 0 is no cap. */
@@ -2104,21 +2503,51 @@ export class AutoCombat {
   }
 
   /**
-   * The round spell last proposed, while its intent is still live. The intent
-   * expires at `roundMs × 20` (`roundSpell`), and a sentence arriving after
-   * that is about a cast this module did not make — a hand-typed one, or a
-   * heal, which confirm under frames of their own.
+   * A cast going out, to be answered. A spell proposed again replaces its
+   * own entry rather than queueing behind it: a proposal the queue coalesced
+   * or refused was never sent, and must not wait to claim an answer.
    */
-  private liveCast(): { spell: string; at: number } | null {
-    const cast = this.lastCast;
-    if (cast === null) return null;
-    return Date.now() - cast.at <= tuning().combat.roundMs * 20 ? cast : null;
+  private proposeCast(spell: string, at: number): void {
+    this.proposed = [
+      ...this.proposed.filter((cast) => cast.spell !== spell),
+      { spell, at, confirmedAt: null }
+    ];
+  }
+
+  /**
+   * The proposals still live, oldest first. An intent expires at `roundMs ×
+   * 20` (`roundSpell`), and a sentence arriving after that is about a cast
+   * this module did not make — a hand-typed one, or a heal, which confirm
+   * under frames of their own.
+   */
+  private liveCasts(): CastProposal[] {
+    const window = tuning().combat.roundMs * 20;
+    this.proposed = this.proposed.filter((cast) => Date.now() - cast.at <= window);
+    return this.proposed;
+  }
+
+  /**
+   * The cast `Your spell has no effect` answers. Where the server confirmed
+   * casts (`You cast … on …`), the one it confirmed last, since the refusal
+   * follows its own confirmation; where it confirmed none, the oldest still
+   * waiting, since casts are answered in the order they went out.
+   */
+  private refusedCast(): CastProposal | undefined {
+    const live = this.liveCasts();
+    let latest: CastProposal | undefined;
+    for (const cast of live) {
+      if (cast.confirmedAt !== null && (latest?.confirmedAt ?? -1) <= cast.confirmedAt) {
+        latest = cast;
+      }
+    }
+    return latest ?? live[0];
   }
 
   /**
    * `Your spell has no effect on <name>.` — the server saying the monster is
    * immune to what was just cast. The sentence never names the spell, so it is
-   * about the round spell last proposed, while that proposal is live.
+   * about a cast this module proposed (`refusedCast`), or else the server's
+   * own repeat of the spell the fight is engaged with.
    *
    * Said out loud once per spell per target, because the cost of silence was a
    * caster on a loop paying for the same spell every round of every fight with
@@ -2127,8 +2556,13 @@ export class AutoCombat {
    * with the target in it, is on the Alerts card; this states the consequence.
    */
   private noteIneffective(): void {
-    const cast = this.liveCast();
-    if (cast === null || this.ineffective.has(cast.spell)) return;
+    const proposal = this.refusedCast();
+    this.proposed = this.proposed.filter((entry) => entry !== proposal);
+    // A refusal of the server's own repeat is about what the fight is casting.
+    const doing = this.combatAction;
+    const cast = proposal ?? (typeof doing === 'string' ? { spell: doing } : undefined);
+    if (cast === undefined) return;
+    if (this.ineffective.has(cast.spell)) return;
     this.ineffective.add(cast.spell);
     const fallback = this.spells.attackFallback.trim();
     if (cast.spell === this.spells.areaAttack.trim()) {
@@ -2155,22 +2589,25 @@ export class AutoCombat {
    */
   private noteCast(block: Block): void {
     if (block.groups['caster'] !== 'You' || block.groups['announced'] !== undefined) return;
-    const cast = this.liveCast();
-    if (cast === null) return;
     const said = (block.groups['spell'] ?? '').trim().toLowerCase();
     if (said.length === 0) return;
-    const found = resolveSpell(cast.spell, this.state?.spellbook, this.realmSpell);
-    const spellings = [
-      cast.spell,
-      found.word,
-      found.known?.name,
-      found.known?.short,
-      found.realm?.name
-    ]
-      .filter((name): name is string => typeof name === 'string')
-      .map((name) => name.trim().toLowerCase());
-    if (!spellings.includes(said)) return;
-    this.casts.set(cast.spell, (this.casts.get(cast.spell) ?? 0) + 1);
+    const cast = this.liveCasts().find(
+      (live) => live.confirmedAt === null && this.spellingsOf(live.spell).includes(said)
+    );
+    if (cast !== undefined) {
+      cast.confirmedAt = Date.now();
+      this.casts.set(cast.spell, (this.casts.get(cast.spell) ?? 0) + 1);
+      return;
+    }
+    /*
+     * Or the server's own repeat of the spell the fight is engaged with — a
+     * cast nothing here sent, once a round (`combatAction`), and the whole of
+     * what spends a row's count after the first.
+     */
+    const doing = this.combatAction;
+    if (typeof doing === 'string' && this.spellingsOf(doing).includes(said)) {
+      this.casts.set(doing, (this.casts.get(doing) ?? 0) + 1);
+    }
   }
 
   private armRound(): void {
@@ -2182,7 +2619,8 @@ export class AutoCombat {
     if (
       this.config.refreshRounds <= 0 &&
       this.spells.attack.trim().length === 0 &&
-      this.spells.areaAttack.trim().length === 0
+      this.spells.areaAttack.trim().length === 0 &&
+      !this.config.monsters.some((row) => row.attack !== undefined || row.preAttack !== undefined)
     ) {
       return;
     }
@@ -2219,10 +2657,22 @@ export class AutoCombat {
    */
   private endFight(): void {
     this.openerSpent = false;
-    this.lastCast = null;
+    this.combatAction = undefined;
+    this.switching = null;
+    this.proposed = [];
     this.ineffective.clear();
     this.casts.clear();
     this.clearRound();
+  }
+
+  /** The monster table's row for a name, reaching through the realm's modifiers. */
+  private ruleOf(name: string): MonsterRule | null {
+    const known = this.events.knownMob;
+    return ruleFor(this.config.monsters, name, known && ((key) => known.call(this.events, key)));
+  }
+
+  private relationOf(name: string): Relationship {
+    return this.ruleOf(name)?.relationship ?? 'enemy';
   }
 
   private isPlayer(state: CharacterState, name: string): boolean {

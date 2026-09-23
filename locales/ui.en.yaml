@@ -87,6 +87,8 @@ app:
       That file has no MegaMUD messages in it, so the realm's table was left as it was. Choose
       the Messages.md from a MegaMUD data folder.
     unreadable: The file could not be read.
+  monsters:
+    noRows: There were no monster rows to import, so the realm's table was left as it was.
   servers:
     invalidDraft: A realm needs a name, a host and a port between 1 and 65535.
     noSuchServer: No such realm.
@@ -114,6 +116,9 @@ notices:
     messages:
       lostRows: 'The message table would have saved {wrote} rows and read back {read}, so it was not saved.'
       readError: '{file} could not be read, so this realm answers no messages until it is fixed: {message}'
+    monsters:
+      lostRows: 'The monster table would have saved {wrote} rows and read back {read}, so it was not saved.'
+      readError: '{file} could not be read, so this realm has no monster table until it is fixed: {message}'
     servers:
       noHost: '{file} does not name a host, so it is not a realm'
       readError: '{file} could not be read: {message}'
@@ -160,6 +165,11 @@ notices:
         file with the paragraph that explains it: {fileList}'
       many: 'Walking on while confused is a setting, off by default, and was written into {count}
         files with the paragraph that explains it: {fileList}'
+    monsterRowsStated:
+      one: 'A character''s own monster rows are a setting now, laid over the realm''s monster table,
+        and were written into {count} file with the paragraph that explains them: {fileList}'
+      many: 'A character''s own monster rows are a setting now, laid over the realm''s monster table,
+        and were written into {count} files with the paragraph that explains them: {fileList}'
     regionsStated:
       one: 'Using the vortexes and entering the Negative Power Plane are settings, both off by
         default, and were written into {count} file with the paragraph that explains them: {fileList}'
@@ -2897,6 +2907,12 @@ settings:
     attackWithPlaceholder: a
     avoidHint: Names as the realm spells them, separated by commas.
     avoidLabel: Avoid / Ignore Monsters
+    monsterRowsLegend: Monster Details
+    monsterRowsNone: No monster rows of this character's own. The realm's table applies as it is.
+    monsterRowsNote:
+      What this character does differently about particular monsters, laid over the realm's
+      monster table one field at a time — a spell to fight one with, a band, a relationship. A
+      field left blank keeps what the realm says.
     priorityAdd: Add a monster
     priorityBandAria: 'Priority for monster {number}'
     priorityDefault: Default — follow the game logic
@@ -3291,6 +3307,66 @@ settings:
     switchedOff: Message switched off.
     switchedOn: Message switched on.
     unreadable: That file could not be read.
+  monsters:
+    add: Add a monster
+    attackChip: 'attack: {spell}'
+    attackHint:
+      The spell to fight this monster with instead of the usual attack spell — say a turn-undead
+      spell for something that is not alive. It opens the fight too. Leave blank for the usual one.
+    attackLabel: Attack Spell
+    bands:
+      default: Default
+      first: First
+      high: High
+      last: Last
+      low: Low
+    cancel: Cancel
+    confirmReplace: Replace this realm's {count} monster rows with the ones in {file}? Edits made here are lost.
+    count:
+      many: '{count} monsters'
+      one: '1 monster'
+    duplicate: '{mob} already has a row; edit that one.'
+    flags:
+      noBackstab: Don't backstab
+      notHostile: Not hostile
+      stopToKill: Stop to kill
+    flagsLabel: Options
+    import: Import Monsters.md…
+    imported: 'Imported {count} monsters with something to say, of the {read} the file names.'
+    legend: Monsters
+    loading: Reading this realm's monsters…
+    maxLabel: Max Casts
+    more: 'Showing {shown} of {count}. Search to find the rest.'
+    nameHint: Part of a name matches too — "guardsman" covers "nasty guardsman".
+    nameLabel: Monster
+    namePlaceholder: gigantic black ooze
+    needsName: A row needs a monster.
+    noMatch: No monster matches that search.
+    none: No monsters yet. Import the Monsters.md from a MegaMUD data folder, or add one.
+    note:
+      What to do about particular monsters here — MegaMUD's monster details, used by every
+      character that plays this realm. Friends are never attacked; Avoid is only hit back; Flee
+      runs from it before anything else; Hang up disconnects when it is in the room. A priority
+      sets the order monsters are attacked in, below any row on the realm's Attack Priority list.
+      A character's own monster rows change only what they state. Importing replaces the table.
+    nothingSaid: '{file} names {count} monsters but says nothing particular about any of them, so the realm''s table was left as it was.'
+    notMonsters: '{file} is not a MegaMUD monster database. Choose the Monsters.md from a MegaMUD data folder.'
+    preAttackChip: 'first: {spell}'
+    preAttackHint: Cast on this monster before the fight is opened; it does not open the fight itself. Leave blank for none.
+    preAttackLabel: Pre-attack Spell
+    priorityLabel: Priority
+    relationshipLabel: Relationship
+    removedRow: Monster removed.
+    removeRow: Remove
+    replace: Replace
+    saveFirst: Add the realm first; its monsters are kept with it.
+    savedRow: Monster saved.
+    saveRow: Save monster
+    searchLabel: Search monsters
+    searchPlaceholder: Search monsters…
+    source: 'from {file}, {date}'
+    unreadable: That file could not be read.
+    unset: '—'
   movement:
     provideLight: Auto-Light (Light Dark Rooms)
     provideLightHint:
@@ -3955,6 +4031,8 @@ session:
     whyAttackers: '{count} attackers'
     whyCompany: Player present in room (PvP abort)
     whyPvp: '{attacker} opened on you'
+    whyDreaded: '{mob} is here, and the monster table says to flee it'
+    whyStalker: '{mob} is here, and the monster table says to hang up'
   realm:
     commandUnavailable:
       This realm has no “{command}” command, so it was said out loud in the room rather than
@@ -4097,12 +4175,16 @@ automation:
     reasonLookAfterKill: 'something died: looking for what it dropped'
     reasonRoundAreaSpell: 'auto-combat: the room is crowded enough for the AE spell'
     reasonRoundSpell: 'auto-combat: round spell'
+    reasonOpeningSpell: 'auto-combat: {why}, opening with {spell}'
+    reasonPreAttackSpell: 'auto-combat: {why}, {spell} before the attack'
+    reasonBackToMelee: 'auto-combat: no more {spell} this fight, back to the attack'
     refusedAlreadyFighting: already fighting {target}
     # Something already swung at is still standing here. `aa` switches target,
     # so a second fight opened beside the first is always waste, and the block
     # between `*Combat Off*` and `*Combat Engaged*` is where it used to happen.
     refusedEngagedWith: 'already swinging at {target}, which is still here'
     refusedAvoided: '{target} is on the avoid list'
+    refusedRelationship: '{target} is marked {relationship} in the monster table'
     refusedCostly: Attacking {target} causes an alignment penalty (-10 points).
     refusedEngageNone: engage is set to none, so nothing is opened unasked
     refusedTooTough: '{target} has {hp} health and maxTargetHealth is {cap}'
@@ -4649,6 +4731,13 @@ messages:
 # figures are the same measurement -- how much *further* away the character is
 # now than when the movement stopped -- so a movement stopped and started again
 # from the same room asks nothing, however long it still had to go.
+monsters:
+  relationships:
+    avoid: Avoid
+    enemy: Enemy
+    escape: Flee
+    friend: Friend
+    hangup: Hang up
 movement:
   # The back button, when the previous room is not one step away: a one-way
   # exit, a door that shut, a corridor that only runs the other way.

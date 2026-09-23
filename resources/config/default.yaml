@@ -1648,6 +1648,17 @@ automation:
     # and the realm's rows for every other monster still apply.
     mobPriority: []
 
+    # What this character does differently about particular monsters -- MegaMUD's
+    # Monster Details, laid one field at a time over the realm's own table
+    # (servers/<id>/monsters.yaml, imported from Monsters.md on the realm's page).
+    # A row names a monster and only what differs: relationship (friend, avoid,
+    # enemy, escape, hangup), priority, notHostile, noBackstab, stopToKill, and a
+    # preAttack or attack spell. A field left out keeps what the realm says.
+    #
+    #   monsters:
+    #     - { mob: gigantic black ooze, attack: mmis }
+    monsters: []
+
     # And a refusal from the realm's own column rather than a name: decline
     # anything it says has more health than this. 0 never refuses.
     #

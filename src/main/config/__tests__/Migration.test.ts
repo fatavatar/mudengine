@@ -465,7 +465,9 @@ describe('the round combat macro', () => {
       hideForOpener: false,
       // And by `statedTheMobPriority`, empty, which is what the client already
       // does without the key.
-      mobPriority: []
+      mobPriority: [],
+      // And by `statedTheMonsterRows`, empty for the same reason.
+      monsters: []
     });
   });
 
@@ -4257,6 +4259,47 @@ describe('the regions route planning keeps out of', () => {
     const movement = movementOf();
     expect(movement['useVortexes']).toBe(true);
     expect(movement['enterNegativePlane']).toBe(false);
+  });
+});
+
+describe('a character’s own monster rows', () => {
+  const profile = (): string => home.profile('vaelor').file;
+  const combatOf = (): Record<string, unknown> =>
+    (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
+      'combat'
+    ] as Record<string, unknown>;
+
+  beforeEach(() => {
+    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
+    migrate();
+    fs.mkdirSync(path.dirname(profile()), { recursive: true });
+  });
+
+  it('writes an empty list after mobPriority, with the paragraph, once', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  combat:\n    mobPriority: []\n    maxTargetHealth: 0\n',
+      'utf8'
+    );
+    migrate();
+    const combat = combatOf();
+    expect(combat['monsters']).toEqual([]);
+    const keys = Object.keys(combat);
+    expect(keys.indexOf('monsters')).toBe(keys.indexOf('mobPriority') + 1);
+    expect(fs.readFileSync(profile(), 'utf8')).toContain('Monster Details');
+    expect(said.some((m) => m.includes('monster rows'))).toBe(true);
+    migrate();
+    expect(said.filter((m) => m.includes('monster rows'))).toHaveLength(0);
+  });
+
+  it('leaves rows somebody wrote alone', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  combat:\n    monsters:\n      - { mob: rat, relationship: friend }\n',
+      'utf8'
+    );
+    migrate();
+    expect(combatOf()['monsters']).toEqual([{ mob: 'rat', relationship: 'friend' }]);
   });
 });
 

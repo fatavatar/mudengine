@@ -15,6 +15,7 @@
  * no session, because they belong to the client rather than to a character.
  */
 import type { MessageImport, MessageTable, MessageTrigger } from './messageTriggers';
+import type { MonsterImport, MonsterRule, MonsterTable } from './monsterRules';
 import type { AutomationSnapshot } from './automation';
 import type { Block } from './blocks';
 import type { LocalMap } from './map';
@@ -845,6 +846,18 @@ export const Invoke = {
   importMessages: 'settings:import-messages',
   /** Writes one realm's whole message table, after an edit on its page. */
   saveMessages: 'settings:save-messages',
+  /** One realm's monster table (`servers/<id>/monsters.yaml`), by the realm's name. */
+  loadMonsters: 'settings:monsters',
+  /**
+   * Replaces one realm's monster table with what a MegaMUD `Monsters.md`
+   * says. The window decodes the file (`shared/megamudDb.ts`) and the rows
+   * cross, not the bytes: the file is on the player's own machine, for
+   * `importMessages`' reason, and at 700 KB of binary it is most of the web
+   * socket's message cap where the rows it yields are a few dozen kilobytes.
+   */
+  importMonsters: 'settings:import-monsters',
+  /** Writes one realm's whole monster table, after an edit on its page. */
+  saveMonsters: 'settings:save-monsters',
   /** Where to hunt from here: the lairs within reach, priced for this character. */
   huntingGrounds: 'world:hunt',
   trainers: 'world:trainers',
@@ -1239,6 +1252,12 @@ export interface IpcApi {
   importMessages(realm: string, fileName: string, text: string): Promise<MessageImport>;
   /** Resolves to why it refused, or null. */
   saveMessages(realm: string, triggers: MessageTrigger[]): Promise<string | null>;
+  /** One realm's monster table, by the realm's name. Empty when it has none. */
+  loadMonsters(realm: string): Promise<MonsterTable>;
+  /** Replaces a realm's table with the rows a `Monsters.md` decoded to. */
+  importMonsters(realm: string, fileName: string, monsters: MonsterRule[]): Promise<MonsterImport>;
+  /** Resolves to why it refused, or null. */
+  saveMonsters(realm: string, monsters: MonsterRule[]): Promise<string | null>;
   /*
    * Addressed, like every push: with a realm per character, an unaddressed
    * query would answer from whichever realm happened to be the client's — and a

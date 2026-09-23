@@ -30,6 +30,13 @@ import { LoginAutomator, type StandDown } from '../automation/LoginAutomator';
 import { RuleEngine } from '../automation/RuleEngine';
 import { MessageTriggers } from '../automation/MessageTriggers';
 import type { MessageTrigger } from '../../shared/messageTriggers';
+import {
+  relationshipOf,
+  withRealmMonsters,
+  type KnownMob,
+  type MonsterRule,
+  type Relationship
+} from '../../shared/monsterRules';
 import { HangUpWatch, PVP_WINDOW_MS, playersHere } from '../automation/HangUp';
 import { AutoCombat } from '../automation/AutoCombat';
 import { Recovery } from '../automation/Recovery';
@@ -164,6 +171,7 @@ import { Rewriter } from './Rewriter';
 import {
   DEFAULT_CONFIG,
   type AutomationConfig,
+  type CombatConfig,
   type LocateMethod,
   type LoginConfig,
   type SupplyItem,
@@ -865,6 +873,10 @@ export class SessionManager {
    */
   private secret = '';
   private automationConfig: AutomationConfig;
+  /** The character's own combat settings, before the realm's monster table is laid under them. */
+  private statedCombat: CombatConfig;
+  /** The realm's monster table. See `configureMonsters`. */
+  private realmMonsters: readonly MonsterRule[] = [];
   private readonly login: LoginAutomator;
   private readonly recovery: Recovery;
   private readonly loot: AutoLoot;
@@ -1334,6 +1346,7 @@ export class SessionManager {
      * write to the socket on automation's behalf — docs/legacy-assessment.md §6.
      */
     this.automationConfig = automation;
+    this.statedCombat = automation.combat;
     this.queue = new CommandQueue(automation, {
       send: (command, intent) => {
         /*
@@ -1615,7 +1628,8 @@ export class SessionManager {
          * first, and a Thief carries both. Null while the realm or the class
          * is unread, which never refuses.
          */
-        canHide: () => holdsAbility(this.capabilities(), CLASS_STEALTH_ABILITY)
+        canHide: () => holdsAbility(this.capabilities(), CLASS_STEALTH_ABILITY),
+        ...(this.knownMob === undefined ? {} : { knownMob: this.knownMob })
       },
       automation.spells,
       (name) => this.world?.spellNamed(name) ?? null,
@@ -2104,6 +2118,11 @@ export class SessionManager {
         decided: (decision) => this.noteSafety(decision)
       }
     );
+    // Both read the monster table for who will not open on the character.
+    if (this.knownMob !== undefined) {
+      this.recovery.useKnownMob(this.knownMob);
+      this.restAway.useKnownMob(this.knownMob);
+    }
     /*
      * And the character points, on the one screen the queue stands down for.
      * The driver is handed a write past the queue because the hold refuses
@@ -3608,6 +3627,35 @@ export class SessionManager {
    * because it is the realm's rather than the character's: it arrives from
    * the realm's own file, not from the options this character resolves.
    */
+  /**
+   * The realm's monster table (`servers/<id>/monsters.yaml`), laid under the
+   * character's own `combat.monsters`. Only the two modules handed the combat
+   * settings are told again; everything else reads `automationConfig` when it
+   * decides.
+   */
+  configureMonsters(rows: readonly MonsterRule[]): void {
+    this.realmMonsters = rows;
+    const automation = {
+      ...this.automationConfig,
+      combat: withRealmMonsters(this.statedCombat, rows)
+    };
+    this.automationConfig = automation;
+    this.combat.configure(
+      automation.combat,
+      automation.enabled,
+      automation.spells,
+      automation.party
+    );
+    this.stealth.configure(automation.combat, automation.enabled);
+    this.recovery.configure(
+      automation.health,
+      automation.enabled,
+      automation.party,
+      automation.combat.monsters
+    );
+    this.restAway.configure(automation.health, automation.enabled, automation.combat.monsters);
+  }
+
   configureMessages(triggers: readonly MessageTrigger[]): void {
     this.messages.load(triggers);
   }
@@ -3724,11 +3772,18 @@ export class SessionManager {
   }
 
   configure(
-    automation: AutomationConfig,
+    stated: AutomationConfig,
     login: LoginConfig,
     rewrites: RewritesUiConfig = DEFAULT_CONFIG.ui.rewrites,
     locate: LocateMethod = DEFAULT_CONFIG.connection.locate
   ): void {
+    // The realm's monster table under the character's own rows: every module
+    // below is handed what this character actually does about each monster.
+    this.statedCombat = stated.combat;
+    const automation = {
+      ...stated,
+      combat: withRealmMonsters(stated.combat, this.realmMonsters)
+    };
     this.automationConfig = automation;
     this.locateMethod = locate;
     this.rewriter.configure(rewrites);
@@ -3749,7 +3804,12 @@ export class SessionManager {
       automation.spells,
       automation.party
     );
-    this.recovery.configure(automation.health, automation.enabled, automation.party);
+    this.recovery.configure(
+      automation.health,
+      automation.enabled,
+      automation.party,
+      automation.combat.monsters
+    );
     this.loot.configure(automation.loot, automation.supplies, automation.enabled);
     this.drop.configure(automation.drop, automation.enabled);
     this.search.configure(automation.search, automation.enabled);
@@ -3759,7 +3819,7 @@ export class SessionManager {
     this.recoverGear.configure(automation.movement, automation.enabled);
     this.trainLevel.configure(automation.train, automation.enabled);
     this.hunt.configure(automation.hunting, automation.walk, automation.health, automation.enabled);
-    this.restAway.configure(automation.health, automation.enabled);
+    this.restAway.configure(automation.health, automation.enabled, automation.combat.monsters);
     this.statScreen.configure(automation.train, automation.enabled);
     this.keys.configure(automation.movement, automation.enabled);
     this.supplies.configure(automation.supplies, automation.enabled);
@@ -6314,8 +6374,17 @@ export class SessionManager {
     const safety = this.automationConfig.safety.retreat;
     const fleeGoto = this.automationConfig.safety.fleeGoto;
     if (!this.automationConfig.enabled) return;
-    if (!safety.enabled && !fleeGoto.enabled) return;
     if (state.phase !== 'in-game') return;
+    /*
+     * A monster the table says to flee (MegaMUD's relationship: *if any
+     * monster within the room exists with this type, any other monsters are
+     * ignored and MegaMMUD will attempt to run*). Its own reason, and not
+     * gated on the retreat switch — that switch is about health, and this is
+     * the player naming a monster the character cannot beat. Nor on a fight
+     * having started: the point is to be gone before it does.
+     */
+    const dreaded = this.monsterHere(state, 'escape');
+    if (dreaded === null && !safety.enabled && !fleeGoto.enabled) return;
     /*
      * Nothing to run from. An escape out of combat is a wasted move that puts
      * the character in a room it did not choose.
@@ -6327,7 +6396,7 @@ export class SessionManager {
      * applies the second test — the clock — and keeps the entries still too
      * fresh for the fight they were fled from to be over. See `ranFrom`.
      */
-    if (!state.inCombat && state.combat.attackers.length === 0) {
+    if (dreaded === null && !state.inCombat && state.combat.attackers.length === 0) {
       this.forgetRanFrom(Date.now());
       return;
     }
@@ -6364,6 +6433,12 @@ export class SessionManager {
      * next status line — which is what the answer arrives with — asks again.
      */
     if (this.tracker.pendingMoves > 0) return;
+
+    if (dreaded !== null) {
+      this.lastAskedToEscape = now;
+      this.escape(state, t('session.safety.whyDreaded', { mob: dreaded }), now);
+      return;
+    }
 
     const fraction = this.healthFraction(state);
     /*
@@ -7585,8 +7660,20 @@ export class SessionManager {
    */
   private considerHangingUp(state: CharacterState): void {
     const safety = this.automationConfig.safety.hangUp;
-    if (!safety.enabled || !this.automationConfig.enabled) return;
+    if (!this.automationConfig.enabled) return;
     if (state.phase !== 'in-game' || !this.client.connected) return;
+    /*
+     * A monster the table says to hang up on — MegaMUD's relationship for the
+     * thing that stalks a character. Asked whatever the health switch says,
+     * as a row of the message table is: the player named this monster, which
+     * is its own reason. `onlyWhenClean` still applies (`hangUpBecause`).
+     */
+    const stalker = this.monsterHere(state, 'hangup');
+    if (stalker !== null) {
+      this.hangUpBecause(state, t('session.safety.whyStalker', { mob: stalker }));
+      return;
+    }
+    if (!safety.enabled) return;
 
     const fraction = this.healthFraction(state);
     const hurt = fraction !== null && fraction <= safety.belowHealth;
@@ -7597,6 +7684,27 @@ export class SessionManager {
       ? t('session.safety.whyHealth', { percent: this.percentText(fraction) })
       : t('session.safety.whyCompany');
     this.hangUpBecause(state, why);
+  }
+
+  /**
+   * Whether the realm's monster table names a monster exactly, which is what
+   * keeps a monster-table row for `rogue` off an `orc rogue` (`ruleFor`).
+   * Undefined with no realm data, where the table's rows match on their own.
+   */
+  private get knownMob(): KnownMob | undefined {
+    const world = this.world;
+    return world === undefined ? undefined : (key) => world.mob(key) !== undefined;
+  }
+
+  /** The first monster in the room the monster table gives this relationship, or null. */
+  private monsterHere(state: CharacterState, relationship: Relationship): string | null {
+    const monsters = this.automationConfig.combat.monsters;
+    if (monsters.length === 0) return null;
+    const found = state.room.occupants.find(
+      (who) =>
+        who.kind === 'mob' && relationshipOf(monsters, who.name, this.knownMob) === relationship
+    );
+    return found?.name ?? null;
   }
 
   /**

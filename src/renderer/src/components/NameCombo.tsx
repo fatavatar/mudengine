@@ -28,6 +28,12 @@ export interface NameComboProps {
   describedBy?: string;
   disabled?: boolean;
   placeholder?: string;
+  /**
+   * A list in one field, such as `avoid`'s comma-separated names: suggest for
+   * the name being typed after the last separator, leave out the ones already
+   * written before it, and put a choice in that name's place.
+   */
+  separator?: string;
 }
 
 /**
@@ -63,6 +69,38 @@ function matches(options: readonly string[], value: string): string[] {
     .map((hit) => hit.name);
 }
 
+/**
+ * What to suggest for a field's value, and what choosing one makes it.
+ *
+ * With a separator the field is a list: the name being typed is the text after
+ * the last separator, the names written before it are not offered again, and
+ * a choice replaces only the name being typed. Pure, so the list behaviour is
+ * testable without a document.
+ */
+export function comboFor(
+  options: readonly string[],
+  value: string,
+  separator?: string
+): { suggestions: string[]; choose(chosen: string): string } {
+  const cut = separator === undefined ? -1 : value.lastIndexOf(separator);
+  const head = cut === -1 ? '' : value.slice(0, cut + 1);
+  const typing = cut === -1 ? value : value.slice(cut + 1);
+  let offered = options;
+  if (separator !== undefined && head.length > 0) {
+    const written = new Set(
+      head
+        .split(separator)
+        .map((part) => part.trim().toLowerCase())
+        .filter((part) => part.length > 0)
+    );
+    offered = options.filter((option) => !written.has(option.toLowerCase()));
+  }
+  return {
+    suggestions: matches(offered, typing),
+    choose: (chosen) => (head.length === 0 ? chosen : `${head} ${chosen}`)
+  };
+}
+
 export default function NameCombo({
   name,
   value,
@@ -71,20 +109,25 @@ export default function NameCombo({
   ariaLabel,
   describedBy,
   disabled,
-  placeholder
+  placeholder,
+  separator
 }: NameComboProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const shownOptions = useMemo(() => matches(options, value), [options, value]);
+  const combo = useMemo(() => comboFor(options, value, separator), [options, value, separator]);
+  const shownOptions = combo.suggestions;
   const shown = open && !disabled && shownOptions.length > 0;
+
+  /** The field's value with `chosen` in place of the name being typed. */
+  const choose = (chosen: string): void => {
+    onChange(combo.choose(chosen));
+    setOpen(false);
+  };
 
   const navigation = useListNavigation<string>({
     items: shown ? shownOptions : [],
-    onChoose: (chosen) => {
-      onChange(chosen);
-      setOpen(false);
-    }
+    onChoose: choose
   });
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -140,8 +183,7 @@ export default function NameCombo({
               // from under itself and choose nothing.
               onMouseDown={(event) => {
                 event.preventDefault();
-                onChange(option);
-                setOpen(false);
+                choose(option);
               }}
               onMouseEnter={() => navigation.point(index)}
               role="option"

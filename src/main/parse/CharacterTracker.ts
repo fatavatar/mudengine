@@ -898,6 +898,26 @@ export class CharacterTracker {
     if (named !== null && ATTACK_COMMANDS.has(named) && argument.length > 0 && !atBarrier) {
       this.fight.noteAttack(argument, named, at);
     }
+    /*
+     * An attack spell opens a fight exactly as `a` does (the player, 2026-09-23:
+     * `harm thug` is the first command of a fight whose monster row names
+     * `harm`), so a cast owes the next `*Combat Engaged*` its target too. Only
+     * a cast at a monster standing here: `c heal bob` is owed nothing, and
+     * filing it would bind a fight that opens a moment later to Bob. Inside a
+     * fight too: an attack spell cast into one re-engages it, answered by a
+     * `*Combat Off*` and a `*Combat Engaged*` (captured 2026-09-23), and that
+     * engagement is owed its target exactly as a re-typed `a` is. The spell
+     * is one word (`castWord`); the rest is the target.
+     */
+    if (named === 'Cast' && this.state.phase === 'in-game') {
+      const gap = argument.indexOf(' ');
+      const aimed = gap < 0 ? '' : argument.slice(gap + 1).trim();
+      const occupant = aimed.length === 0 ? null : this.occupantNamed(aimed);
+      const monster = this.state.room.occupants.some(
+        (who) => who.kind === 'mob' && who.name === occupant
+      );
+      if (monster) this.fight.noteAttack(aimed, named, at);
+    }
     return this.expect.observeCommand(command, {
       inGame: this.state.phase === 'in-game',
       atMenu: this.state.phase === 'authenticating',
