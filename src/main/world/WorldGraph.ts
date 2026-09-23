@@ -1498,6 +1498,8 @@ export class WorldGraph {
    * rooms this file refuses everywhere else.
    */
   private stocking: Map<number, WorldRoom[]> | null = null;
+  /** Item ids the realm demands on some exit and names — `namedExitItems`. */
+  private exitItems: number[] | null = null;
   /**
    * Every way *into* each room, with the item it demands — `approachItems`.
    *
@@ -5279,11 +5281,17 @@ export class WorldGraph {
         options.alternatives === true
           ? this.viaItem(from, to, goal, route, traveller, draws)
           : null;
+      // And the way through a door whose key is worth going to get.
+      const keyed =
+        options.alternatives === true
+          ? this.keyedWay(from, to, goal, found.cost, traveller, draws)
+          : null;
       const planned: Route = {
         ...route,
         ...(other === null ? {} : { otherWay: other }),
         ...(equipped === null ? {} : { carrying: equipped }),
-        ...(invoked === null ? {} : { viaItem: invoked })
+        ...(invoked === null ? {} : { viaItem: invoked }),
+        ...(keyed === null ? {} : { unlocks: keyed })
       };
       if (found.cost >= tuning().world.wallCost) {
         /*
@@ -5366,16 +5374,111 @@ export class WorldGraph {
     draws: boolean
   ): Route | null {
     if (blocks.length === 0) return null;
-    const items: number[] = [];
+    const needs = new Map<number, { id: number; name: string }>();
     for (const block of blocks) {
       const item = blockItem(block);
       if (item === null) return null;
-      items.push(item.id);
+      needs.set(item.id, item);
     }
-    const held = items.reduce((who, item) => this.holding(who, item), traveller);
+    const held = [...needs.keys()].reduce((who, item) => this.holding(who, item), traveller);
     const found = this.search(from, to, goal, held, false, draws, true).found;
     if (found === null) return null;
-    return this.buildRoute(found.cameFrom, to, found.cost, held, draws);
+    return {
+      ...this.buildRoute(found.cameFrom, to, found.cost, held, draws),
+      needs: [...needs.values()]
+    };
+  }
+
+  /**
+   * The way through a door this character has no key for, where fetching the
+   * key and walking through is materially easier than the way round — the
+   * walkable half of `Route.unlocks`.
+   *
+   * Reported 2026-09-23: a locked door the character could not pick is a
+   * wall, and a wall loses to any way round, however long or however many
+   * lairs deep; the key that opens it was never weighed. So the journey is
+   * planned again as though every item the realm names on an exit were in
+   * the pack, and what that way actually uses is what it needs.
+   *
+   * **Fetching is priced, roughly and never for free**: twice the walk to the
+   * nearest room that sells or spawns a dropper of each thing needed — there
+   * and back. A drop is a fight and a chance, so this is a floor under the
+   * errand rather than its cost; it is enough to stop the offer sending
+   * anybody further for a key than the way round would have taken. An item
+   * the realm names no reachable source for is not offered at all.
+   *
+   * Only for a plan somebody reads (`RouteOptions.alternatives`): a loop's
+   * leg does not go on errands.
+   */
+  private keyedWay(
+    from: RoomId,
+    to: RoomId,
+    goal: WorldRoom,
+    planned: number,
+    traveller: Traveller,
+    draws: boolean
+  ): Route | null {
+    const named = this.namedExitItems();
+    const carried = traveller.keys ?? [];
+    const extra = named.filter((id) => !carried.includes(id));
+    if (extra.length === 0) return null;
+    const equipped: Traveller = { ...traveller, keys: [...carried, ...extra] };
+    const found = this.search(from, to, goal, equipped, false, draws).found;
+    if (found === null || found.cost >= planned) return null;
+    const route = this.buildRoute(found.cameFrom, to, found.cost, equipped, draws);
+    const needs = new Map<number, { id: number; name: string }>();
+    for (const step of route.steps) {
+      const id = itemDemanded(step.requirement);
+      if (id === null || carried.includes(id)) continue;
+      const name = this.item(id)?.name;
+      if (name === undefined || name.length === 0) return null;
+      needs.set(id, { id, name });
+    }
+    if (needs.size === 0) return null;
+    let fetching = 0;
+    for (const id of needs.keys()) {
+      const nearest = this.nearestSource(id, from, traveller);
+      if (nearest === null) return null;
+      fetching += 2 * nearest;
+    }
+    if (found.cost + fetching + tuning().world.alternativeMinSteps > planned) return null;
+    return { ...route, needs: [...needs.values()] };
+  }
+
+  /** Every item id the realm demands on an exit and names — built once. */
+  private namedExitItems(): number[] {
+    if (this.exitItems !== null) return this.exitItems;
+    const ids = new Set<number>();
+    for (const room of this.rooms.values()) {
+      for (const exit of room.exits) {
+        const id = itemDemanded(exit.requirement ?? null);
+        if (id !== null && (this.item(id)?.name ?? '').length > 0) ids.add(id);
+      }
+    }
+    this.exitItems = [...ids];
+    return this.exitItems;
+  }
+
+  /**
+   * What it costs to reach the nearest room where this item can be had: a
+   * counter that stocks it, or a room that spawns a monster that drops it.
+   * Null where the realm names none, or none this traveller can reach.
+   */
+  private nearestSource(item: number, from: RoomId, traveller: Traveller): number | null {
+    const rooms = new Set<RoomId>(this.stockRooms(item).map((room) => roomId(room.map, room.room)));
+    for (const name of this.sourcesOf({ id: item }).mobs) {
+      const mob = this.mob(name);
+      const places = mob === undefined ? undefined : this.mobPlaces(mob, 64, 64);
+      for (const spawn of places?.spawns ?? []) {
+        for (const room of spawn.rooms) rooms.add(roomId(room.map, room.room));
+      }
+    }
+    if (rooms.size === 0) return null;
+    let best: number | null = null;
+    for (const { cost } of this.sweepTo(from, rooms, traveller).values()) {
+      if (best === null || cost < best) best = cost;
+    }
+    return best;
   }
 
   /**

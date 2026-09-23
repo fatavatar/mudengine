@@ -3060,6 +3060,12 @@ export interface Route {
    * where the realm names a lock by number only, which nobody can go and get.
    */
   unlocks?: Route;
+  /**
+   * What this way assumes is in the pack and is not — set on an `unlocks`
+   * route, which is planned as though the keys it names were carried. The
+   * errand fetches these before the way is walked (`itemWanted`).
+   */
+  needs?: Array<{ id: number; name: string }>;
 }
 
 /**
@@ -3115,18 +3121,15 @@ export function demandsOf(route: Route): Map<string, string> {
  */
 export function itemWanted(route: Route): { id: number; name: string } | null {
   /*
-   * A refused way asks for what refused it — but only where the router found
-   * that the items alone open it (`unlocks`). A key named on a way that is
-   * also level-gated is not an errand: fetching it ends at the next gate.
+   * A way planned as though the pack held something names it outright
+   * (`needs`), and a refused way asks for what its `unlocks` needs — which
+   * the router sets only where the items alone open it: a key on a way that
+   * is also level-gated is not an errand, because fetching it ends at the
+   * next gate.
    */
-  if (route.blocked) {
-    if (route.unlocks === undefined) return null;
-    for (const block of route.blocks ?? []) {
-      const item = blockItem(block);
-      if (item !== null) return item;
-    }
-    return null;
-  }
+  const needed = route.needs?.[0];
+  if (needed !== undefined) return needed;
+  if (route.blocked) return route.unlocks?.needs?.[0] ?? null;
   for (const wall of route.walls ?? []) {
     const item = blockItem(wall);
     if (item !== null) return item;

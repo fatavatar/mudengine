@@ -3413,6 +3413,79 @@ describe('a way only a key opens', () => {
     expect(itemWanted(route)).toBeNull();
   });
 
+  /*
+   * Reported 2026-09-23: with a walkable way round, however long or however
+   * many lairs deep, the key was never weighed at all — `Key: 172 [or 100
+   * picklocks]` against 0 picklocks is a wall, and a wall loses to anything.
+   * The way through the door plus fetching the key is the comparison a
+   * player makes, so it is the one made here.
+   */
+  describe('against a long way round', () => {
+    const detour = (guardDistance: number): WorldGraph => {
+      const rooms: Array<Record<string, unknown>> = [
+        {
+          m: 1,
+          r: 1,
+          n: 'Start',
+          x: {
+            e: { m: 1, r: 2, i: 'Key: 1124 [or 100 picklocks]' },
+            s: { m: 1, r: 100 },
+            w: { m: 1, r: 200 }
+          }
+        },
+        { m: 1, r: 2, n: 'Vault', x: { w: { m: 1, r: 1 } } }
+      ];
+      // Forty rooms south and round to the Vault's back door.
+      for (let i = 0; i < 40; i += 1) {
+        const next = i === 39 ? { n: { m: 1, r: 2 } } : { s: { m: 1, r: 101 + i } };
+        rooms.push({ m: 1, r: 100 + i, n: 'Long Road', x: next });
+      }
+      // The guard that drops the key, `guardDistance` rooms west.
+      for (let i = 0; i < guardDistance; i += 1) {
+        const last = i === guardDistance - 1;
+        rooms.push({
+          m: 1,
+          r: 200 + i,
+          n: last ? 'Guard Post' : 'West Lane',
+          x: {
+            e: { m: 1, r: i === 0 ? 1 : 200 + i - 1 },
+            ...(last ? {} : { w: { m: 1, r: 201 + i } })
+          },
+          ...(last ? { lair: '(Max 1): 7,' } : {})
+        });
+      }
+      return makeWorld(rooms, {
+        mobs: [{ n: 'gate guard', hp: 10, i: [7], d: 'h' }],
+        items: [{ id: 1124, n: 'angular key', mobs: ['gate guard'] }]
+      });
+    };
+    const planned = (graph: WorldGraph, who: Traveller = lacking): Route =>
+      graph.route('1/1', '1/2', who, { alternatives: true });
+
+    it('offers the key when fetching it and walking through is the easier way', () => {
+      const route = planned(detour(2));
+      expect(route.blocked).toBe(false);
+      expect(route.steps).toHaveLength(41);
+      expect(route.unlocks?.steps.map((step) => step.command)).toEqual(['e']);
+      expect(route.unlocks?.needs).toEqual([{ id: 1124, name: 'angular key' }]);
+      expect(itemWanted(route.unlocks!)).toEqual({ id: 1124, name: 'angular key' });
+    });
+
+    it('does not send anybody further for the key than the way round', () => {
+      expect(planned(detour(60)).unlocks).toBeUndefined();
+    });
+
+    it('offers nothing when the key is already in the pack', () => {
+      const route = planned(detour(2), { ...lacking, keys: [1124] });
+      expect(route.steps.map((step) => step.command)).toEqual(['e']);
+      expect(route.unlocks).toBeUndefined();
+    });
+
+    it('is not weighed for a walk nobody is reading', () => {
+      expect(detour(2).route('1/1', '1/2', lacking).unlocks).toBeUndefined();
+    });
+  });
+
   it('offers nothing for a key the realm cannot name', () => {
     // A number is not something anybody can fetch: the errand looks the
     // source up by id and counts the pack by name.

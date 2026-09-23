@@ -27,6 +27,9 @@ import { keepFocus } from '../lib/focus';
 import { tuning } from '../lib/tuning';
 import type { Replanned, WalkStart } from '@shared/movement';
 
+/** Which of the plan's routes is on screen — see `chosen`. */
+type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'keyed';
+
 /**
  * Whether an alternative steps over none of the walls the plan crosses — the
  * test for *there is no other way*, which is said only when every route main
@@ -255,7 +258,7 @@ export default function RoutePanel({
    * (`Route.viaItem`). A choice among routes main already planned, never a
    * re-plan: the panel is a reader, and *Show it* swaps what is read.
    */
-  const [chosen, setChosen] = useState<'plan' | 'round' | 'carrying' | 'viaItem'>('plan');
+  const [chosen, setChosen] = useState<Way>('plan');
   /**
    * Whether to go and get what the way needs before walking it (todo 07).
    *
@@ -306,9 +309,11 @@ export default function RoutePanel({
         ? (route.otherWay ?? route)
         : chosen === 'carrying'
           ? (route.carrying ?? route)
-          : chosen === 'viaItem'
-            ? (route.viaItem ?? route)
-            : route;
+          : chosen === 'keyed'
+            ? (route.unlocks ?? route)
+            : chosen === 'viaItem'
+              ? (route.viaItem ?? route)
+              : route;
   /**
    * How large a room is drawn in the picture of where the route ends.
    *
@@ -408,7 +413,13 @@ export default function RoutePanel({
    */
   useEffect(() => {
     setPicked(null);
-    setChosen('plan');
+    /*
+     * The way through a door whose key is worth fetching is **shown first**
+     * where the router offers one (2026-09-23): the long way round is what a
+     * player picks when they would rather not go and get the key, and it is
+     * one press away in the list below.
+     */
+    setChosen(route !== null && !route.blocked && route.unlocks !== undefined ? 'keyed' : 'plan');
     setOffering(false);
     setUnfolded(new Set());
     setCollectFirst(true);
@@ -886,9 +897,11 @@ export default function RoutePanel({
                       <span className="chip off">
                         {chosen === 'round'
                           ? t('cards.route.showing.round')
-                          : chosen === 'viaItem'
-                            ? t('cards.route.showing.viaItem')
-                            : t('cards.route.showing.carrying')}
+                          : chosen === 'keyed'
+                            ? t('cards.route.showing.keyed')
+                            : chosen === 'viaItem'
+                              ? t('cards.route.showing.viaItem')
+                              : t('cards.route.showing.carrying')}
                       </span>
                     )}
                     {/* The traps, counted at the head of the list where the
@@ -969,7 +982,7 @@ export default function RoutePanel({
                       const deadly = lairs.deadly;
                       const avoided =
                         deadly !== null &&
-                        [route.otherWay, route.carrying, route.viaItem].some(
+                        [route.otherWay, route.carrying, route.viaItem, route.unlocks].some(
                           (other) =>
                             other !== undefined &&
                             other !== shown &&
@@ -1131,7 +1144,7 @@ export default function RoutePanel({
                         ))}
                       </ul>
                       {shown === route &&
-                        ![route.otherWay, route.carrying, route.viaItem].some(
+                        ![route.otherWay, route.carrying, route.viaItem, route.unlocks].some(
                           (other) => other !== undefined && avoidsWalls(other, route.walls!)
                         ) && <span>{t('cards.route.noOtherWay')}</span>}
                     </div>
@@ -1186,7 +1199,7 @@ export default function RoutePanel({
                   is on screen, so there is always a way back. */}
                   {(() => {
                     const items: Array<{
-                      key: 'plan' | 'round' | 'carrying' | 'viaItem';
+                      key: Way;
                       sentence: string;
                     }> = [];
                     if (chosen !== 'plan') {
@@ -1215,6 +1228,16 @@ export default function RoutePanel({
                         sentence: t('cards.route.alternative.carrying', {
                           itemList: [...named.values()].join(', '),
                           stepCount: route.carrying.steps.length
+                        })
+                      });
+                    }
+                    // And through the door, once its key has been fetched.
+                    if (!route.blocked && route.unlocks !== undefined && chosen !== 'keyed') {
+                      items.push({
+                        key: 'keyed',
+                        sentence: t('cards.route.alternative.keyed', {
+                          itemList: (route.unlocks.needs ?? []).map((item) => item.name).join(', '),
+                          stepCount: route.unlocks.steps.length
                         })
                       });
                     }
