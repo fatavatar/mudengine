@@ -215,6 +215,7 @@ export function migrateHome(options: MigrationOptions): void {
   statedTheConfusionWait(home, note);
   statedTheFreedomCure(home, note);
   statedTheRegions(home, note);
+  statedTheMonsterRows(home, note);
 }
 
 /**
@@ -4232,6 +4233,17 @@ const REGIONS_COMMENT = ` The dangerous regions, kept out of route planning unle
  Plane, far more dangerous than the ordinary ways between the places
  they join. A route that starts or ends on the Plane may still cross it.`;
 
+/** The template's own words for the monster rows, so the files read alike. */
+const MONSTER_ROWS_COMMENT = ` What this character does differently about particular monsters -- MegaMUD's
+ Monster Details, laid one field at a time over the realm's own table
+ (servers/<id>/monsters.yaml, imported from Monsters.md on the realm's page).
+ A row names a monster and only what differs: relationship (friend, avoid,
+ enemy, escape, hangup), priority, notHostile, noBackstab, stopToKill, and a
+ preAttack or attack spell. A field left out keeps what the realm says.
+
+   monsters:
+     - { mob: gigantic black ooze, attack: mmis }`;
+
 /** The template's own words for it, so the two files read alike. */
 const KEY_PICKUP_COMMENT = ` The key to the door in front of you.
 
@@ -5368,6 +5380,41 @@ function statedTheRegions(home: Home, note: (message: string) => void): void {
     stated.length === 1
       ? t('notices.migration.regionsStated.one', params)
       : t('notices.migration.regionsStated.many', params)
+  );
+}
+
+/**
+ * `automation.combat.monsters` (roadmap step 3, 2026-09-23): a character's own
+ * monster rows, laid over the realm's imported table. Written as an empty list
+ * after `mobPriority`, with the paragraph, into every file that states a
+ * combat block — so the setting is found where the priority list already is.
+ */
+function statedTheMonsterRows(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const combat = document.getIn(['automation', 'combat'], true);
+      if (!isMap(combat) || combat.has('monsters')) return false;
+      const pair = document.createPair('monsters', []) as Pair;
+      if (isScalar(pair.key)) pair.key.commentBefore = MONSTER_ROWS_COMMENT;
+      const after = combat.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'mobPriority'
+      );
+      if (after === -1) combat.items.push(pair);
+      else combat.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.monsterRowsStated.one', params)
+      : t('notices.migration.monsterRowsStated.many', params)
   );
 }
 

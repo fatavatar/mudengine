@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { MessageImport, MessageTable, MessageTrigger } from '@shared/messageTriggers';
+import type { MonsterImport, MonsterRule, MonsterTable } from '@shared/monsterRules';
 import { asShippedWorld } from '@shared/worlds';
 import type { StatlineFigures } from '@shared/statline';
 import type { TerminalPalette } from '@shared/themes';
@@ -8,6 +9,9 @@ import type { PotionRule, PotionWhen } from '@shared/config';
 import type { AlertRule } from '@shared/notifications';
 import AlertList from './AlertList';
 import RealmMessages from './RealmMessages';
+import RealmMonsters from './RealmMonsters';
+import { MonsterRuleList } from './MonsterRules';
+import NameCombo from './NameCombo';
 import MobPriorityList from './MobPriorityList';
 import SettingsNav, { type NavFieldset } from './SettingsNav';
 import PotionList from './PotionList';
@@ -299,6 +303,10 @@ export interface SettingsScreenProps {
   loadMessages(realm: string): Promise<MessageTable>;
   importMessages(realm: string, fileName: string, text: string): Promise<MessageImport>;
   saveMessages(realm: string, triggers: MessageTrigger[]): Promise<string | null>;
+  /** A realm's monster table, by name. See `RealmMonsters`. */
+  loadMonsters(realm: string): Promise<MonsterTable>;
+  importMonsters(realm: string, fileName: string, monsters: MonsterRule[]): Promise<MonsterImport>;
+  saveMonsters(realm: string, monsters: MonsterRule[]): Promise<string | null>;
   /**
    * The loops the client ships, for the Movement tab to offer.
    *
@@ -461,7 +469,8 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'combat-attack', label: t('settings.combat.attackLegend') },
     { id: 'combat-attacks', label: t('settings.combat.attacksLegend') },
     { id: 'combat-monsters', label: t('settings.combat.monstersLegend') },
-    { id: 'combat-priority', label: t('settings.combat.priorityLegend') }
+    { id: 'combat-priority', label: t('settings.combat.priorityLegend') },
+    { id: 'combat-monster-rows', label: t('settings.combat.monsterRowsLegend') }
   ],
   health: [
     { id: 'health-recover', label: t('settings.health.recoverLegend') },
@@ -568,6 +577,8 @@ interface CharacterForm {
   combatAvoid: string;
   /** The player's own ranking of the realm's monsters. See `MobPriorityList`. */
   combatPriorities: MobPriority[];
+  /** This character's own monster rows (`combat.monsters`). */
+  combatMonsters: MonsterRule[];
   combatMaxTargetHealth: string;
   combatMinMobs: string;
   combatMaxMonsterExp: string;
@@ -759,6 +770,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     combatRefresh: String(entry.combat.refreshRounds),
     combatAvoid: joinNames(entry.combat.avoid),
     combatPriorities: entry.combat.mobPriority.map((row) => ({ ...row })),
+    combatMonsters: entry.combat.monsters.map((row) => ({ ...row })),
     combatMaxTargetHealth: String(entry.combat.maxTargetHealth),
     combatMinMobs: String(entry.combat.minMobs),
     combatMaxMonsterExp: String(entry.combat.maxMonsterExperience),
@@ -937,6 +949,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
       refreshRounds: Number.parseInt(form.combatRefresh, 10) || 0,
       avoid: splitNames(form.combatAvoid),
       mobPriority: form.combatPriorities,
+      monsters: form.combatMonsters,
       maxTargetHealth: Math.max(0, Number.parseInt(form.combatMaxTargetHealth, 10) || 0),
       minMobs: Math.max(0, Number.parseInt(form.combatMinMobs, 10) || 0),
       maxMonsterExperience: Math.max(0, Number.parseInt(form.combatMaxMonsterExp, 10) || 0)
@@ -1255,6 +1268,7 @@ function emptyForm(
     combatRefresh: String(combat.refreshRounds),
     combatAvoid: joinNames(combat.avoid),
     combatPriorities: combat.mobPriority.map((row) => ({ ...row })),
+    combatMonsters: combat.monsters.map((row) => ({ ...row })),
     combatMaxTargetHealth: String(combat.maxTargetHealth),
     combatMinMobs: String(combat.minMobs),
     combatMaxMonsterExp: String(combat.maxMonsterExperience),
@@ -1402,6 +1416,9 @@ export default function SettingsScreen({
   loadMessages,
   importMessages,
   saveMessages,
+  loadMonsters,
+  importMonsters,
+  saveMonsters,
   loadLoops,
   loadTrainers,
   loadBanks,
@@ -1954,6 +1971,40 @@ export default function SettingsScreen({
    * field typable — the same rule the potion picker follows.
    */
   const [mobs, setMobs] = useState<string[]>([]);
+  /*
+   * And the monsters this character's realm table names (`monsters.yaml`,
+   * imported from MegaMUD) — a table may name one the realm data spells
+   * differently, or only part of a name, and a row about it is still one to
+   * offer. Asked by the realm the form names, so a changed realm re-asks.
+   */
+  const [tabled, setTabled] = useState<string[]>([]);
+  const realmName = form?.serverName ?? null;
+  useEffect(() => {
+    if (!open || tab !== 'characters' || section !== 'combat' || realmName === null) {
+      setTabled([]);
+      return;
+    }
+    let stale = false;
+    void loadMonsters(realmName).then(
+      (table) => void (stale || setTabled(table.monsters.map((row) => row.mob))),
+      () => void (stale || setTabled([]))
+    );
+    return () => {
+      stale = true;
+    };
+  }, [open, tab, section, realmName, loadMonsters]);
+  /** Every monster name worth suggesting: the realm data's and its table's, once each. */
+  const monsterNames = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const name of [...mobs, ...tabled]) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+    }
+    return out;
+  }, [mobs, tabled]);
   /*
    * The counters this character's realm places. `null` is *not asked yet*,
    * which draws no picker at all — a control offering only *any counter*
@@ -2817,16 +2868,26 @@ export default function SettingsScreen({
 
                           <fieldset className="settings-menus" data-fieldset="combat-monsters">
                             <legend>{t('settings.combat.monstersLegend')}</legend>
-                            <TextField
+                            {/* Names, comma-separated, suggested from the
+                                realm's monsters one name at a time. */}
+                            <FormField
                               hint={t('settings.combat.avoidHint')}
                               label={t('settings.combat.avoidLabel')}
                               name="avoid"
-                              onChange={(value) => patch({ combatAvoid: value })}
-                              placeholder={t('settings.combat.avoidPlaceholder')}
-                              spellCheck={false}
-                              value={form.combatAvoid}
                               wide
-                            />
+                            >
+                              {({ describedBy }) => (
+                                <NameCombo
+                                  describedBy={describedBy}
+                                  name="avoid"
+                                  onChange={(value) => patch({ combatAvoid: value })}
+                                  options={monsterNames}
+                                  placeholder={t('settings.combat.avoidPlaceholder')}
+                                  separator=","
+                                  value={form.combatAvoid}
+                                />
+                              )}
+                            </FormField>
                             <NumberField
                               hint={t('settings.combat.maxTargetHealthHint')}
                               label={t('settings.combat.maxTargetHealthLabel')}
@@ -2851,11 +2912,35 @@ export default function SettingsScreen({
                                 wrong for a whole evening. */}
                             <p className="settings-note">{t('settings.combat.priorityNote')}</p>
                             <MobPriorityList
-                              known={mobs}
+                              known={monsterNames}
                               namePrefix="mob-priority"
                               onChange={(rows) => patch({ combatPriorities: rows })}
                               rows={form.combatPriorities}
                             />
+                          </fieldset>
+
+                          {/*
+                            This character's own monster rows, laid over the
+                            realm's table field by field -- a shaman's spell
+                            for a monster the realm marks Flee keeps the Flee.
+                            Part of the form's draft, so it saves with it.
+                          */}
+                          <fieldset className="settings-menus" data-fieldset="combat-monster-rows">
+                            <legend>{t('settings.combat.monsterRowsLegend')}</legend>
+                            <p className="settings-note">{t('settings.combat.monsterRowsNote')}</p>
+                            <div className="realm-messages">
+                              <MonsterRuleList
+                                addLabel={t('settings.monsters.add')}
+                                emptyText={t('settings.combat.monsterRowsNone')}
+                                known={monsterNames}
+                                namePrefix="character-monster"
+                                onChange={(rows) => {
+                                  patch({ combatMonsters: rows });
+                                  return Promise.resolve(null);
+                                }}
+                                rows={form.combatMonsters}
+                              />
+                            </div>
                           </fieldset>
                         </>
                       )}
@@ -4334,6 +4419,22 @@ export default function SettingsScreen({
                       load={loadMessages}
                       realm={serverPick === NEW_SERVER ? null : serverPick}
                       save={saveMessages}
+                    />
+                  </fieldset>
+
+                  {/*
+                    And what to do about particular monsters: the realm's
+                    table from MegaMUD's Monsters.md. Each character's own
+                    rows are laid over it, field by field.
+                  */}
+                  <fieldset className="settings-menus" data-fieldset="realm-monsters">
+                    <legend>{t('settings.monsters.legend')}</legend>
+                    <p className="settings-note">{t('settings.monsters.note')}</p>
+                    <RealmMonsters
+                      importRows={importMonsters}
+                      load={loadMonsters}
+                      realm={serverPick === NEW_SERVER ? null : serverPick}
+                      save={saveMonsters}
                     />
                   </fieldset>
 

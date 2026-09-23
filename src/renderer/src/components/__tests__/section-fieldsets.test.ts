@@ -31,7 +31,7 @@ function drawn(source: string): string[] {
 }
 
 describe.each([
-  ['SettingsScreen.tsx', ['realm-priority', 'realm-messages']],
+  ['SettingsScreen.tsx', ['realm-priority', 'realm-messages', 'realm-monsters']],
   ['GlobalSettings.tsx', [] as string[]]
 ])('%s', (file, notNavigable) => {
   const source = read(file);

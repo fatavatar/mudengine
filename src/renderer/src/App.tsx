@@ -89,6 +89,7 @@ import {
 import type { CardChrome } from './components/BentoCard';
 import type { AppConfig } from '@shared/config';
 import type { MessageTrigger } from '@shared/messageTriggers';
+import type { MonsterRule } from '@shared/monsterRules';
 import type { IpcApi } from '@shared/ipc';
 import { CONSOLE_PALETTES, TERMINAL_THEMES, THEME_PREFERENCES, THEMES } from '@shared/themes';
 import { usePaneWidths } from './hooks/usePaneWidths';
@@ -2873,6 +2874,10 @@ export default function App() {
         api.importMessages(realm, fileName, text),
       saveMessages: (realm: string, triggers: MessageTrigger[]) =>
         api.saveMessages(realm, triggers),
+      loadMonsters: (realm: string) => api.loadMonsters(realm),
+      importMonsters: (realm: string, fileName: string, monsters: MonsterRule[]) =>
+        api.importMonsters(realm, fileName, monsters),
+      saveMonsters: (realm: string, monsters: MonsterRule[]) => api.saveMonsters(realm, monsters),
       // The shelf of shipped loops, for the Movement tab. Asked for when
       // that picker opens rather than with the snapshot: four hundred
       // loops, and most visits to that screen are about a password.
@@ -5900,6 +5905,9 @@ export default function App() {
         loadMessages={settingsApi.loadMessages}
         importMessages={settingsApi.importMessages}
         saveMessages={settingsApi.saveMessages}
+        loadMonsters={settingsApi.loadMonsters}
+        importMonsters={settingsApi.importMonsters}
+        saveMonsters={settingsApi.saveMonsters}
         loadLoops={settingsApi.loadLoops}
         loadTrainers={settingsApi.loadTrainers}
         loadBanks={settingsApi.loadBanks}

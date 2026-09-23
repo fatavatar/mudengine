@@ -23,6 +23,7 @@ import { setTuning, tuning } from './app/tuning';
 import { ProfileStore, type ProfileSnapshot } from './config/ProfileStore';
 import { ServerStore } from './config/ServerStore';
 import { RealmMessageStore } from './config/RealmMessageStore';
+import { RealmMonsterStore } from './config/RealmMonsterStore';
 import { LoopStore } from './config/LoopStore';
 import { SettingsEditor, type SettingsEditorOptions } from './config/SettingsEditor';
 import { LoopCatalogue } from './config/LoopCatalogue';
@@ -108,6 +109,13 @@ import {
   type MessageImport,
   type MessageTrigger
 } from '../shared/messageTriggers';
+import {
+  asMonsterRules,
+  EMPTY_MONSTER_TABLE,
+  saysAnything,
+  type MonsterImport,
+  type MonsterRule
+} from '../shared/monsterRules';
 import type { SessionSummary } from '../shared/ipc';
 import { EMPTY_CHARACTER } from '../shared/character';
 import { IDLE_WALK } from '../shared/walk';
@@ -204,6 +212,8 @@ let servers: ServerStore | null = null;
 let loops: LoopStore | null = null;
 /** Each realm's message table: `servers/<id>/messages.yaml`. See `RealmMessageStore`. */
 let realmMessages: RealmMessageStore | null = null;
+/** Each realm's monster table: `servers/<id>/monsters.yaml`. See `RealmMonsterStore`. */
+let realmMonsters: RealmMonsterStore | null = null;
 /**
  * Every realm the client has been asked for.
  *
@@ -1187,6 +1197,23 @@ function messagesFor(id: SessionId): readonly MessageTrigger[] {
   return realmMessages?.forServer(serverId).triggers ?? [];
 }
 
+function createRealmMonsters(): RealmMonsterStore {
+  const store = new RealmMonsterStore(home, (message) => announce('monsters', message));
+  // As the message table: a change reaches the characters already playing.
+  store.on('change', () => host?.reconfigure());
+  store.watch();
+  return store;
+}
+
+/** The monster table of the realm a character plays, by its file's realm, as `messagesFor`. */
+function monstersFor(id: SessionId): readonly MonsterRule[] {
+  const profile = profileFor(id);
+  if (profile === undefined) return [];
+  const serverId = servers?.idFor(profile.serverName);
+  if (serverId === undefined) return [];
+  return realmMonsters?.forServer(serverId).monsters ?? [];
+}
+
 function createLoops(): LoopStore {
   const store = new LoopStore(home, (message) => announce('loops', message));
   store.on('change', () => {
@@ -1307,6 +1334,7 @@ function createHost(): SessionHost {
     // the values it started with.
     configFor,
     messagesFor,
+    monstersFor,
     /*
      * Whether a lost connection is dialled back, per character, read through
      * for the reason `configFor` is: profiles are watched, so switching it off
@@ -2670,6 +2698,49 @@ function registerIpc(): void {
     return result.ok ? null : result.error;
   });
 
+  /*
+   * A realm's monster table, addressed by the realm's name as the message
+   * table is. The window decodes `Monsters.md` and hands over rows, which are
+   * parsed here like any other payload.
+   */
+  handle(Invoke.loadMonsters, (_caller, realm: unknown) => {
+    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+    if (serverId === undefined || realmMonsters === null) return EMPTY_MONSTER_TABLE;
+    return realmMonsters.forServer(serverId);
+  });
+
+  handle(Invoke.importMonsters, (_caller, realm: unknown, fileName: unknown, rows: unknown) => {
+    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+    if (serverId === undefined || realmMonsters === null) {
+      return { ok: false, error: t('app.servers.noSuchServer') } satisfies MonsterImport;
+    }
+    const monsters = asMonsterRules(rows).filter(saysAnything);
+    // Refused rather than written, for `importMessages`' reason: an empty
+    // table replacing a realm's is the one outcome nobody wants.
+    if (monsters.length === 0) {
+      return { ok: false, error: t('app.monsters.noRows') } satisfies MonsterImport;
+    }
+    const result = realmMonsters.write(serverId, {
+      source: {
+        file: typeof fileName === 'string' && fileName.length > 0 ? fileName : 'Monsters.md',
+        importedAt: new Date().toISOString()
+      },
+      monsters
+    });
+    if (!result.ok) return { ok: false, error: result.error } satisfies MonsterImport;
+    return { ok: true, count: monsters.length } satisfies MonsterImport;
+  });
+
+  handle(Invoke.saveMonsters, (_caller, realm: unknown, rows: unknown) => {
+    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+    if (serverId === undefined || realmMonsters === null) return t('app.servers.noSuchServer');
+    const result = realmMonsters.write(serverId, {
+      source: realmMonsters.forServer(serverId).source,
+      monsters: asMonsterRules(rows)
+    });
+    return result.ok ? null : result.error;
+  });
+
   handle(Invoke.saveProfile, (_caller, rawId: unknown, rawDraft: unknown) => {
     const id = asProfileId(rawId);
     if (id === null) return t('app.profiles.invalidId');
@@ -3022,6 +3093,7 @@ function build(): void {
   servers = createServers();
   loops = createLoops();
   realmMessages = createRealmMessages();
+  realmMonsters = createRealmMonsters();
   publishTree();
   internal = createInternal();
   lore = createLore();
@@ -3154,6 +3226,8 @@ function teardown(): void {
   settle('messages', () => {
     realmMessages?.dispose();
     realmMessages = null;
+    realmMonsters?.dispose();
+    realmMonsters = null;
   });
   settle('options', () => {
     config?.dispose();

@@ -312,6 +312,25 @@ ui:
   });
 });
 
+/*
+ * A character's own monster rows (roadmap step 3): saved with the combat
+ * block and read back as the rows they were, so the realm's table is laid
+ * under exactly what the character stated.
+ */
+describe('a character’s monster rows', () => {
+  it('saves them in the combat block and reads them back', () => {
+    const monsters = [
+      { mob: 'gigantic black ooze', attack: { spell: 'mmis', max: 2 } },
+      { mob: 'shopkeeper', relationship: 'enemy' as const }
+    ];
+    const combat = { ...DEFAULT_CONFIG.automation.combat, monsters };
+    expect(editor.saveProfile('vaelor', draft({ combat }))).toEqual({ ok: true });
+    const result = resolveProfile('vaelor', read('vaelor'), parse(OPTIONS));
+    if (result.error !== undefined) throw new Error(result.error);
+    expect(result.profile.config.automation.combat.monsters).toEqual(monsters);
+  });
+});
+
 describe('removing a character', () => {
   it('removes the file and keeps a copy of it', () => {
     editor.saveProfile('vaelor', draft());

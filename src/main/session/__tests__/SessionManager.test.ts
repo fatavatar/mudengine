@@ -5937,3 +5937,90 @@ describe('the fight of 2026-09-22', () => {
     await until(() => attacks(seen()).length > before);
   });
 });
+
+/*
+ * The monster table acting (roadmap step 3, 2026-09-23): MegaMUD's Flee and
+ * Hangup relationships, from the realm's table laid under the character's own
+ * rows. Neither waits on a fight or on the health switches.
+ */
+describe('monsters the table says to run from or hang up on', () => {
+  const OOZE_ROOM =
+    'Rat Cellar\r\nAlso here: gigantic black ooze.\r\nObvious exits: north, south\r\n[HP=100]:\r\n';
+
+  const automation = (over: Partial<(typeof DEFAULT_CONFIG)['automation']> = {}) => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+    onEnterRealm: [],
+    rules: [],
+    ...over
+  });
+
+  const wire = (socket: net.Socket): (() => string) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1');
+  };
+
+  it('runs from a monster the realm marks Flee, before any fight and with retreat off', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(
+      sink,
+      undefined,
+      automation({
+        // The character's own row names only a spell; the realm's Flee holds.
+        combat: {
+          ...DEFAULT_CONFIG.automation.combat,
+          monsters: [{ mob: 'gigantic black ooze', attack: { spell: 'mmis', max: 0 } }]
+        }
+      })
+    );
+    manager.configureMonsters([{ mob: 'gigantic black ooze', relationship: 'escape' }]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write(OOZE_ROOM);
+
+    await until(() => notices.some((notice) => /Running n:/.test(notice)));
+    expect(notices.find((notice) => /Running n:/.test(notice))).toMatch(/gigantic black ooze/);
+    await until(() => /\bn\r\n/.test(seen()));
+  });
+
+  it('does nothing about a monster the table does not name', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink, undefined, automation());
+    manager.configureMonsters([{ mob: 'giant rat', relationship: 'escape' }]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write(OOZE_ROOM);
+    await settled(100);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(notices.some((notice) => /Running/.test(notice))).toBe(false);
+  });
+
+  it('hangs up on a monster the table says to, with the health switch off', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(
+      sink,
+      undefined,
+      automation({
+        safety: {
+          ...DEFAULT_CONFIG.automation.safety,
+          hangUp: {
+            ...DEFAULT_CONFIG.automation.safety.hangUp,
+            enabled: false,
+            onlyWhenClean: false
+          }
+        }
+      })
+    );
+    manager.configureMonsters([{ mob: 'gigantic black ooze', relationship: 'hangup' }]);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write(OOZE_ROOM);
+
+    await until(() => notices.some((notice) => /Hanging up/.test(notice)));
+    expect(notices.find((notice) => /Hanging up/.test(notice))).toMatch(/gigantic black ooze/);
+    await until(() => manager?.state.phase === 'closing' || manager?.state.phase === 'closed');
+  });
+});

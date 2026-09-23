@@ -1749,6 +1749,35 @@ describe('the fight this character is in', () => {
     expect(tracker.current.combat.target).toBe('giant rat');
   });
 
+  /* An attack spell opens a fight as `a` does (the player, 2026-09-23). */
+  it('binds the target from an attack spell the engagement answers', () => {
+    const tracker = play(
+      [
+        '[HP=98]:',
+        'Also here: giant rat.',
+        'Obvious exits: north',
+        { send: 'c harm giant rat' },
+        '*Combat Engaged*'
+      ],
+      combatWorld()
+    );
+    expect(tracker.current.combat.target).toBe('giant rat');
+  });
+
+  it('binds nothing from a spell cast at somebody who is not a monster here', () => {
+    const tracker = play(
+      [
+        '[HP=98]:',
+        'Also here: giant rat.',
+        'Obvious exits: north',
+        { send: 'c heal bob' },
+        '*Combat Engaged*'
+      ],
+      combatWorld()
+    );
+    expect(tracker.current.combat.target).toBeNull();
+  });
+
   it('resolves a typed base name to the modified occupant, as the server does', () => {
     // Measured live: `pu giant rat` engages a room's `small giant rat` — the
     // server's name-modifier system answers to the base name. Binding the
@@ -7077,6 +7106,22 @@ describe('lives, and the word for the load', () => {
       'You gain 2 additional lives.'
     ]);
     expect(tracker.current.progress.lives).toBe(5);
+  });
+
+  /*
+   * healbot's sheet from 2026-09-23: a `*` before the mana figures. Unread,
+   * the maximum stayed unknown and every heal behind a mana floor stood down.
+   */
+  it('reads the mana maximum when the sheet marks the figures with a star', () => {
+    const tracker = play([
+      'Name:   Healbot             Lives/CP: 9/140',
+      'Race:   Dwarf      Exp:      1500   Perception:  20',
+      'Class:  Priest     Level:    4      Stealth:     10',
+      'Hits:   240/240    Armour Class: 12/3   Thievery:    5',
+      'Mana: * 321/321   Spellcasting: 222    Traps:           0',
+      '[HP=240/MA=321]:'
+    ]);
+    expect(tracker.current.vitals.manaMax).toBe(321);
   });
 
   /* An unknown plus two is not two. */

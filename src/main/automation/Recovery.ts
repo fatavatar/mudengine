@@ -96,6 +96,7 @@
  */
 import type { CommandQueue } from './CommandQueue';
 import { countThreats } from './RuleEngine';
+import { willNotOpen, type KnownMob, type MonsterRule } from '../../shared/monsterRules';
 import { t } from '../app/i18n';
 import type { CharacterState } from '../../shared/character';
 import { DEFAULT_CONFIG, type HealthConfig, type PartyConfig } from '../../shared/config';
@@ -143,10 +144,11 @@ import { tuning } from '../app/tuning';
  * way was wrong for three cases a review caught before this shipped:
  *
  * - **A fight opened with a spell, or with a bare `a`.** `noteCommand` binds a
- *   target only for `ATTACK_COMMANDS` *with an argument*, and `Cast` is in
- *   neither set — so a caster's whole opening round has the flag up, no
- *   target and no attacker. That is this realm's mystics, which is to say the
- *   character the delay was reported from.
+ *   target only for `ATTACK_COMMANDS` *with an argument*, or a cast at a
+ *   monster standing in the room — so a bare `a`, or a cast typed at a name
+ *   the room listing has not placed, has the flag up for the whole opening
+ *   round with no target and no attacker. That is this realm's mystics,
+ *   which is to say the character the delay was reported from.
  * - **A kill in a room holding two.** `FightTracker.died` drops the dead
  *   name from both fields and no `*Combat Off*` comes while the survivor is
  *   still engaged.
@@ -274,10 +276,26 @@ export class Recovery {
     } = {}
   ) {}
 
-  configure(config: HealthConfig, enabled: boolean, party?: PartyConfig): void {
+  configure(
+    config: HealthConfig,
+    enabled: boolean,
+    party?: PartyConfig,
+    monsters?: readonly MonsterRule[]
+  ): void {
     this.config = config;
     this.enabled = enabled;
     if (party) this.party = party;
+    if (monsters) this.monsters = monsters;
+  }
+
+  /** The monster table, for *who here will not open on me* (`willNotOpen`). */
+  private monsters: readonly MonsterRule[] = [];
+  /** The realm's monster names, so a row reaches through a modifier only (`ruleFor`). */
+  private known: KnownMob | undefined = undefined;
+
+  /** Where the realm's monster names are asked for. See `ruleFor`. */
+  useKnownMob(known: KnownMob): void {
+    this.known = known;
   }
 
   reset(): void {
@@ -409,7 +427,7 @@ export class Recovery {
      * road above the arena, where the monsters wander up — rest, attacked,
      * fight, rest, all evening. A rest about to be broken is a command spent.
      */
-    if (countThreats(state) > 0) return;
+    if (countThreats(state, (name) => willNotOpen(this.monsters, name, this.known)) > 0) return;
 
     /*
      * A row of the realm's message table said to rest until full — MegaMUD's

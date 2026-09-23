@@ -632,6 +632,43 @@ describe('with a threat in the room', () => {
     drain();
     expect(sent).toEqual(['rest']);
   });
+
+  /*
+   * MegaMUD's Not hostile (roadmap step 3): the realm may rate it hostile, but
+   * the player says it will not open unprovoked, which is what the flag is for
+   * — resting in its room before attacking it. A friend is the same.
+   */
+  it('sits down beside a monster the table marks not hostile, or a friend', () => {
+    const threat = {
+      name: 'giant rat',
+      kind: 'mob' as const,
+      disposition: 'hostile' as const,
+      uncertain: false,
+      costly: 'never' as const,
+      charmed: false,
+      hidden: false,
+      free: false
+    };
+    const hurt = state({ hp: 10, hpMax: 100 });
+    const beside = { ...hurt, room: { ...hurt.room, occupants: [threat] } };
+
+    const calm = make(health({ restBelow: 0.5 }));
+    calm.configure(health({ restBelow: 0.5 }), true, undefined, [
+      { mob: 'giant rat', notHostile: true }
+    ]);
+    calm.onCharacter(beside);
+    drain();
+    expect(sent).toEqual(['rest']);
+
+    sent.length = 0;
+    const friendly = make(health({ restBelow: 0.5 }));
+    friendly.configure(health({ restBelow: 0.5 }), true, undefined, [
+      { mob: 'giant rat', relationship: 'friend' }
+    ]);
+    friendly.onCharacter(beside);
+    drain();
+    expect(sent).toEqual(['rest']);
+  });
 });
 
 /* Sitting down because the leader has: out of combat, and `med` only with mana. */

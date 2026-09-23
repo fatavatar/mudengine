@@ -2679,8 +2679,14 @@ export const BATCH_RULES: BatchRule[] = [
        * against `Mana:` is the sheet saying which listing this character owns
        * (`pow` against `sp`), the same fact the status line's `KAI=`/`MA=`
        * states — and the sheet says it even on a realm whose prompt omits it.
+       *
+       * The figures may follow a `*`: `Mana: * 321/321   Spellcasting: 222`,
+       * on healbot's sheet from 2026-09-23 07:21 onwards, where the day before
+       * read `Mana:   306/306`. Without it the whole line failed, the maximum
+       * stayed unknown, and every heal behind a mana floor stood down for the
+       * rest of the day — unknown is not enough to cast on.
        */
-      /^(?:(?<resourceWord>Mana|Kai):\s+(?<mana>\d+)\/(?<manaMax>\d+))?\s*(?:Spellcasting:\s+(?<spellcasting>\d+)\s+)?Traps:\s+(?<traps>\d+)/,
+      /^(?:(?<resourceWord>Mana|Kai):\s+(?:\*\s*)?(?<mana>\d+)\/(?<manaMax>\d+))?\s*(?:Spellcasting:\s+(?<spellcasting>\d+)\s+)?Traps:\s+(?<traps>\d+)/,
       /^\s*Picklocks:\s+(?<picklocks>\d+)/,
       /^Strength:\s+(?<strength>\d+)\s+Agility:\s+(?<agility>\d+)\s+Tracking:\s+(?<tracking>\d+)/,
       // Captured from the live server; the ported qualifiers did not have these.
