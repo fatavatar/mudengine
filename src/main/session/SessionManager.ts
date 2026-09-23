@@ -5092,6 +5092,12 @@ export class SessionManager {
       level: state.progress.level ?? null,
       strength: state.progress.strength ?? null,
       pickSkill: state.progress.picklocks ?? undefined,
+      // And which of the two the walker will actually spend: a door planned on
+      // a skill whose switch is off is a door the walk stops at.
+      forcing: {
+        pick: this.automationConfig.movement.pickLocks,
+        bash: this.automationConfig.movement.bashDoors
+      },
       wealth: state.inventory.wealth,
       /*
        * The join between the sheet's word and the realm's row id, made here

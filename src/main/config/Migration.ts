@@ -4268,7 +4268,7 @@ const SUPPLIES_COMMENT = ` Keeping the pack stocked -- MegaMUD's Must Have Minim
      - { name: torch, min: 3, max: 7, shop: General Store, at: { map: 1, room: 2147 } }`;
 
 const DOOR_FORCING_DEFAULTS: ReadonlyArray<readonly [string, boolean | number]> = [
-  ['pickLocks', false],
+  ['pickLocks', true],
   ['pickTries', 3],
   ['bashDoors', false],
   ['bashTries', 3]
@@ -4288,8 +4288,8 @@ const DOOR_FORCING_COMMENT = ` Forcing a barrier \`open\` cannot get past.
  game prints the damage in the room. A picked door is unlocked and still
  shut, so the client opens it afterwards; a bashed one is open already.
 
- Both off by default. A door somebody locked is a door somebody locked,
- and a route that forces its way through one is a decision, not a detail.`;
+ Each is tried only where the character's own figure -- picklocks or
+ strength, off the stat sheet -- meets what the realm records for the lock.`;
 
 /** The keys under `connection:` that only the anonymous session ever read. */
 const ANONYMOUS_CONNECTION_KEYS = ['autoConnect'] as const;

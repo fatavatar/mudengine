@@ -725,13 +725,14 @@ automation:
     # game prints the damage in the room. A picked door is unlocked and still
     # shut, so the client opens it afterwards; a bashed one is open already.
     #
-    # Bashing is ON by default and picking is off, which is not an accident.
-    # Bashing is gated on the realm's own strength number, so it is never even
-    # attempted against a barrier this character cannot beat, and bashTries caps
-    # it at three; the alternative is a route that stops dead at a lock the
-    # character was strong enough to walk through. Picking is the same decision
-    # made with a skill the client cannot check the character has.
-    pickLocks: false
+    # Both are ON by default. Each is gated on the realm's own number against
+    # the character's own -- strength and picklocks off the stat sheet -- so
+    # neither is attempted against a barrier this character cannot beat, and
+    # the tries cap each at three; the alternative is a route that stops dead
+    # at a lock the character could have opened. The route planner reads these
+    # two switches as well: a door only a switched-off skill opens is planned
+    # round, or named as the wall it is.
+    pickLocks: true
     pickTries: 3
     bashDoors: true
     bashTries: 3

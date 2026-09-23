@@ -4989,6 +4989,25 @@ describe('what this character costs to move', () => {
      */
     expect(traveller.packKnown).toBe(false);
   });
+
+  /*
+   * And which of the two door skills the walker will spend. The walker picks
+   * only with Auto-Pick Locks on and bashes only with Auto-Bash Doors on, so a
+   * route planned on a switched-off skill walks up to a door and stops there.
+   */
+  it('tells the router which door skills the walker may use', () => {
+    const world = tabled();
+    const { sink } = collect();
+    const movement = { ...DEFAULT_CONFIG.automation.movement, pickLocks: false, bashDoors: true };
+    manager = new SessionManager(sink, world, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: false,
+      onEnterRealm: [],
+      rules: [],
+      movement
+    });
+    expect(manager.travellerNow(manager.character).forcing).toEqual({ pick: false, bash: true });
+  });
 });
 
 /**

@@ -36,6 +36,7 @@ import {
   asRoomReference,
   DIRECTIONS,
   DIRECTION_COMMAND,
+  blockItem,
   describeBlock,
   mobKey,
   roomId,
@@ -212,6 +213,17 @@ export interface Traveller {
   pickSkill?: number | null;
   /** Strength, for the same doors — the realm accepts either. */
   strength?: number | null;
+  /**
+   * Which of the two the walker is allowed to spend — *Auto-Pick Locks* and
+   * *Auto-Bash Doors* (`movement.pickLocks`, `movement.bashDoors`).
+   *
+   * A skill the walker will not use is no way through a door, however high it
+   * is: planned on it, the route walks up to the lock and the walk stops there
+   * saying *requires 30; this character has 150 strength*. Absent is both,
+   * which is every caller that is not a session — the builder's drafts, the
+   * tests, a realm read without a character.
+   */
+  forcing?: { pick: boolean; bash: boolean };
   /**
    * This character's `Classes` row id, for a class-gated exit.
    *
@@ -503,11 +515,32 @@ function forcedDoorCost(requirement: Requirement, traveller: Traveller, base: nu
   // plain one costs. That is what `Door` with no bracket has always meant.
   if (pickDifficulty === undefined && bashDifficulty === undefined) return base;
   const costs: number[] = [];
+  // A channel the walker is not allowed to use is graded as no skill at all —
+  // the wall, still walkable when nothing else leads there, and never a price
+  // the plan pays on the strength of a command nobody will send.
+  const { pick, bash } = traveller.forcing ?? { pick: true, bash: true };
   if (pickDifficulty !== undefined)
-    costs.push(gradedCost(traveller.pickSkill, pickDifficulty, base));
+    costs.push(gradedCost(pick ? traveller.pickSkill : null, pickDifficulty, base));
   if (bashDifficulty !== undefined)
-    costs.push(gradedCost(traveller.strength, bashDifficulty, base));
+    costs.push(gradedCost(bash ? traveller.strength : null, bashDifficulty, base));
   return Math.min(...costs);
+}
+
+/**
+ * The skills a door names that the walker is switched off from using, for the
+ * block that says so — *bashing doors is switched off* is a setting somebody
+ * can change, where *you have 150 strength* against a 30 door reads as the
+ * client contradicting itself.
+ */
+function switchedOff(
+  requirement: Requirement,
+  traveller: Traveller
+): Array<'picklocks' | 'strength'> {
+  const { pick, bash } = traveller.forcing ?? { pick: true, bash: true };
+  const off: Array<'picklocks' | 'strength'> = [];
+  if (!pick && requirement.pickDifficulty !== undefined) off.push('picklocks');
+  if (!bash && requirement.bashDifficulty !== undefined) off.push('strength');
+  return off;
 }
 
 /**
@@ -5299,6 +5332,7 @@ export class WorldGraph {
     const ignoring = this.search(from, to, goal, traveller, true, walkable.drawsAhead, true).found;
     const blocks = ignoring ? this.blocksAlong(ignoring.cameFrom, to, traveller) : [];
     const reasons = blocks.length > 0 ? blocks : ([{ kind: 'unreachable' }] as RouteBlock[]);
+    const unlocks = this.unlocked(from, to, goal, traveller, blocks, walkable.drawsAhead);
     return {
       steps: [],
       cost: 0,
@@ -5306,8 +5340,42 @@ export class WorldGraph {
       // Still a sentence, because everything that already reads `reason` goes
       // on working; the facts are beside it for anything that wants more.
       reason: reasons.map(describeBlock).join('; '),
-      blocks: reasons
+      blocks: reasons,
+      ...(unlocks === null ? {} : { unlocks })
     };
+  }
+
+  /**
+   * The way a refused route would take once the pack holds what refused it —
+   * `Route.unlocks`.
+   *
+   * Only where **every** block is an item the realm names: a key and a level
+   * gate on one way is a key that ends the errand at the gate. Planned for the
+   * traveller holding all of them, through the same `holding` join the shop
+   * errand prices its way on with, so the door the key opens is the door the
+   * plan walks — and planned for real rather than assumed, because the gates-
+   * open path that named the key is not proof that holding it is enough (a
+   * second lock nobody reached can stand behind the first).
+   */
+  private unlocked(
+    from: RoomId,
+    to: RoomId,
+    goal: WorldRoom,
+    traveller: Traveller,
+    blocks: readonly RouteBlock[],
+    draws: boolean
+  ): Route | null {
+    if (blocks.length === 0) return null;
+    const items: number[] = [];
+    for (const block of blocks) {
+      const item = blockItem(block);
+      if (item === null) return null;
+      items.push(item.id);
+    }
+    const held = items.reduce((who, item) => this.holding(who, item), traveller);
+    const found = this.search(from, to, goal, held, false, draws, true).found;
+    if (found === null) return null;
+    return this.buildRoute(found.cameFrom, to, found.cost, held, draws);
   }
 
   /**
@@ -6376,6 +6444,7 @@ export class WorldGraph {
         // `stepCost` priced it by. `Walker.pullLevers` sends the phrase.
         if (wall !== null && this.leverPrice(prev, exit.direction, traveller) === null) {
           const item = wall.keyId === undefined ? undefined : this.item(wall.keyId);
+          const off = switchedOff(wall, traveller);
           blocks.unshift({
             kind: 'door',
             at: prev,
@@ -6385,6 +6454,7 @@ export class WorldGraph {
             ...(wall.bashDifficulty === undefined ? {} : { bashDifficulty: wall.bashDifficulty }),
             picklocks: traveller.pickSkill ?? null,
             strength: traveller.strength ?? null,
+            ...(off.length === 0 ? {} : { switchedOff: off }),
             ...(wall.keyId === undefined ? {} : { keyId: wall.keyId }),
             ...(item === undefined ? {} : { itemName: item.name }),
             ...this.leverSaying(prev, exit.direction)

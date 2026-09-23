@@ -1641,8 +1641,6 @@ export interface MovementConfig {
    * number, so this is never attempted against a barrier the character cannot
    * beat, `bashTries` caps it at three, and the alternative is a route that
    * stops dead at a lock the character was strong enough to walk through.
-   * `pickLocks` stays **off**: it is the same decision made with a skill this
-   * client cannot check the character has.
    */
   bashDoors: boolean;
   /** How many bashes, before the route gives up on the barrier. */
@@ -1659,6 +1657,12 @@ export interface MovementConfig {
    * Gated on the realm's picklocks number within `PICK_MARGIN`. Tried before
    * bashing when both are available, because a failed pick costs a command and
    * a failed bash costs a command and some health.
+   *
+   * **On by default** (2026-09-22). It was off because the client could not
+   * check the character had the skill; it now reads `Picklocks:` off the stat
+   * sheet (`progress.picklocks`), so it is the same decision `bashDoors` makes
+   * with strength. The router reads this switch too (`Traveller.forcing`), so a
+   * lock only a switched-off skill opens is planned round rather than into.
    */
   pickLocks: boolean;
   /** How many picks, before the route gives up on the barrier. */
@@ -2630,7 +2634,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       openTries: 1,
       bashDoors: true,
       bashTries: 3,
-      pickLocks: false,
+      pickLocks: true,
       pickTries: 3,
       sneak: false,
       provideLight: true,

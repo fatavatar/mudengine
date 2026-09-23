@@ -2330,6 +2330,7 @@ cards:
     spendsUses: '{useCount} uses'
     spendsForever: unlimited uses
     collectFirst: Collect {itemName} first
+    fetchThenWalk: Get {itemName}, then walk
     stopShort: Stop before entering {roomName}
     stopShortTooltip: Walk as far as {roomName} and stop there
     stepSkipped: not walked

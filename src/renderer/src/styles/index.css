@@ -6857,6 +6857,13 @@ button.lookup.quest-where svg {
   padding: 8px 0;
 }
 
+/* The errand a refused way offers when a key alone would open it: the one
+   action under the refusal, so it is the filled control, as Walk is above. */
+.route-fetch {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /*
  * What the shorter way needed, on a walkable route that crosses a wall. The
  * same list the refusal draws, under one sentence saying which way it is

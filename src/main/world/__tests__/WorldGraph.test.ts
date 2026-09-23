@@ -3329,6 +3329,100 @@ describe('what a door costs to force', () => {
     // these as ordinary, and the walker forces them for the same reason.
     expect(edgePenalty({ kind: 'door', raw: 'Door' }, {})).toBe(12);
   });
+
+  /*
+   * The walker picks only with *Auto-Pick Locks* on and bashes only with
+   * *Auto-Bash Doors* on, so a skill it will not spend is no way through — a
+   * route planned on it walks up to a door and stops there. Both switches
+   * absent is both on, which is every caller that is not a session.
+   */
+  it('credits only the skills the walker is allowed to use', () => {
+    const bashOnly = { pick: false, bash: true };
+    const pickOnly = { pick: true, bash: false };
+    expect(edgePenalty(door(30), { strength: 150, forcing: pickOnly })!).toBeGreaterThan(100_000);
+    expect(edgePenalty(door(30), { strength: 150, forcing: bashOnly })).toBe(12);
+    expect(edgePenalty(door(30), { pickSkill: 150, forcing: bashOnly })!).toBeGreaterThan(100_000);
+    expect(edgePenalty(door(30), { pickSkill: 150, forcing: pickOnly })).toBe(12);
+    // A keyed lock a picklock may open, with picking switched off, is a wall
+    // and not a hole: the key still opens it.
+    const keyed: Requirement = {
+      kind: 'key',
+      raw: 'Key: 7 [or 30 picklocks]',
+      keyId: 7,
+      pickDifficulty: 30
+    };
+    expect(edgePenalty(keyed, { pickSkill: 150, forcing: bashOnly })!).toBeGreaterThan(100_000);
+    expect(edgePenalty(keyed, { pickSkill: 150, keys: [7], forcing: bashOnly })).toBe(4);
+  });
+
+  it('says which skill is switched off rather than that it is lacking', () => {
+    const graph = makeWorld([
+      { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: 'Door [30 picklocks/strength]' } } },
+      { m: 1, r: 2, n: 'Vault', x: { w: { m: 1, r: 1 } } }
+    ]);
+    const route = graph.route('1/1', '1/2', {
+      strength: 150,
+      pickSkill: 0,
+      forcing: { pick: true, bash: false }
+    });
+    expect(route.walls?.[0]).toMatchObject({ kind: 'door', switchedOff: ['strength'] });
+    expect(describeBlock(route.walls![0]!)).toContain('bashing doors is switched off');
+  });
+});
+
+/*
+ * A door only a key opens, and the character without it.
+ *
+ * The refusal already named the key. What it did not do was say where the way
+ * goes once the key is in the pack — which is the route the errand walks after
+ * fetching it, and the whole of whether fetching it is worth offering.
+ */
+describe('a way only a key opens', () => {
+  const vault = (instruction: string): WorldGraph =>
+    makeWorld(
+      [
+        { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: instruction } } },
+        { m: 1, r: 2, n: 'Hall', x: { w: { m: 1, r: 1 }, e: { m: 1, r: 3 } } },
+        { m: 1, r: 3, n: 'Vault', x: { w: { m: 1, r: 2 } } }
+      ],
+      { items: [{ id: 1124, n: 'angular key' }] }
+    );
+  const lacking: Traveller = { keys: [], packKnown: true, level: 9 };
+
+  it('carries the way the key opens beside the refusal', () => {
+    const route = vault('Key: 1124').route('1/1', '1/3', lacking);
+    expect(route.blocked).toBe(true);
+    expect(route.unlocks?.blocked).toBe(false);
+    expect(route.unlocks?.steps.map((step) => step.command)).toEqual(['e', 'e']);
+    // So the one question every surface asks — what to go and get — answers.
+    expect(itemWanted(route)).toEqual({ id: 1124, name: 'angular key' });
+  });
+
+  it('offers nothing when the key would not be enough', () => {
+    const graph = makeWorld(
+      [
+        { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: 'Key: 1124' } } },
+        { m: 1, r: 2, n: 'Hall', x: { e: { m: 1, r: 3, i: 'Level: 20 to 999' } } },
+        { m: 1, r: 3, n: 'Vault', x: {} }
+      ],
+      { items: [{ id: 1124, n: 'angular key' }] }
+    );
+    const route = graph.route('1/1', '1/3', lacking);
+    expect(route.blocked).toBe(true);
+    expect(route.unlocks).toBeUndefined();
+    expect(itemWanted(route)).toBeNull();
+  });
+
+  it('offers nothing for a key the realm cannot name', () => {
+    // A number is not something anybody can fetch: the errand looks the
+    // source up by id and counts the pack by name.
+    const graph = makeWorld([
+      { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: 'Key: 55' } } },
+      { m: 1, r: 2, n: 'Vault', x: {} }
+    ]);
+    const route = graph.route('1/1', '1/2', lacking);
+    expect(route.unlocks).toBeUndefined();
+  });
 });
 
 describe('an edge the live server refused', () => {

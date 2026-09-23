@@ -271,8 +271,12 @@ export default function RoutePanel({
    * route it was made on and comparing by identity, which left the box drawn
    * ticked over a fresh plan while quietly deciding nothing — a control
    * stating the opposite of what it would do.
+   *
+   * **Ticked by default** (2026-09-22): a way that needs a key the pack lacks
+   * stops dead at that door, so walking it without the key is the exception
+   * somebody opts into by unticking — never the thing a press does unasked.
    */
-  const [collectFirst, setCollectFirst] = useState(false);
+  const [collectFirst, setCollectFirst] = useState(true);
   /**
    * Whether to stop in the room before the destination rather than enter it.
    *
@@ -407,7 +411,7 @@ export default function RoutePanel({
     setChosen('plan');
     setOffering(false);
     setUnfolded(new Set());
-    setCollectFirst(false);
+    setCollectFirst(true);
   }, [route]);
   // A pick belongs to the list it was made on, and so does an opened run — and
   // a tick belongs to the door the way on screen goes through, which another
@@ -415,7 +419,7 @@ export default function RoutePanel({
   useEffect(() => {
     setPicked(null);
     setUnfolded(new Set());
-    setCollectFirst(false);
+    setCollectFirst(true);
   }, [chosen]);
   /*
    * And the tick that says *do not enter the room at the end* belongs to that
@@ -824,15 +828,46 @@ export default function RoutePanel({
                  * `reason` is the same answer as a sentence and is what older
                  * surfaces read; this uses the facts because it has room to.
                  */
-                <ul className="route-blocked">
-                  {(route.blocks ?? []).length > 0 ? (
-                    route.blocks!.map((block, index) => (
-                      <li key={`${block.kind}-${index}`}>{describeBlock(block)}</li>
-                    ))
-                  ) : (
-                    <li>{route.reason ?? t('cards.route.noRouteFallback')}</li>
-                  )}
-                </ul>
+                <>
+                  <ul className="route-blocked">
+                    {(route.blocks ?? []).length > 0 ? (
+                      route.blocks!.map((block, index) => (
+                        <li key={`${block.kind}-${index}`}>{describeBlock(block)}</li>
+                      ))
+                    ) : (
+                      <li>{route.reason ?? t('cards.route.noRouteFallback')}</li>
+                    )}
+                  </ul>
+                  {/* A way only a key opens is an errand, not a dead end: main
+                  planned where it goes once the pack holds the key
+                  (`Route.unlocks`), and this sends the character to get it and
+                  then walks that. Offered only when the key alone is enough —
+                  `itemWanted` answers null for a way that is gated as well. */}
+                  {(() => {
+                    const wanted = itemWanted(route);
+                    const unlocks = route.unlocks;
+                    if (wanted === null || unlocks === undefined) return null;
+                    return (
+                      <div className="route-fetch">
+                        <button
+                          className="primary"
+                          onClick={() => {
+                            void onCollectThenWalk(wanted, unlocks)
+                              .then((reason) => {
+                                setRefused(reason);
+                                if (reason === null) onClose();
+                              })
+                              .catch((error) => setRefused(errorMessage(error)));
+                          }}
+                          onMouseDown={keepFocus}
+                          type="button"
+                        >
+                          {t('cards.route.fetchThenWalk', { itemName: wanted.name })}
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </>
               ) : route.steps.length === 0 ? (
                 <div className="empty">{t('cards.route.alreadyHere')}</div>
               ) : (
