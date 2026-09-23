@@ -4792,6 +4792,103 @@ describe('the locate setting', () => {
   });
 });
 
+/*
+ * A locked door the pack holds the key for, in bbs.thelucks.org's own words
+ * (2026-09-23). The refusal was not read, so the walk resent `e` at the door
+ * for as long as it was left, with the key in the pack. The unlock and the
+ * open are the player's own paste of the same door.
+ */
+describe('a locked door the pack has the key for', () => {
+  /** Standing at the door with the key listed, and a reader of whole command lines. */
+  const standing = async (exits: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-keyed-'));
+    const file = path.join(dir, 'rooms.jsonl.gz');
+    fs.writeFileSync(
+      file,
+      zlib.gzipSync(
+        [
+          JSON.stringify({
+            v: 23,
+            source: 'test',
+            rooms: 2,
+            generatedAt: 'x',
+            items: [{ id: 172, n: 'black star key' }]
+          }),
+          JSON.stringify({
+            m: 1,
+            r: 1,
+            n: 'Slum Street',
+            x: { e: { m: 1, r: 2, i: 'Key: 172 [or 100 picklocks]' } }
+          }),
+          JSON.stringify({ m: 1, r: 2, n: 'Cult Hall', x: { w: { m: 1, r: 1 } } })
+        ].join('\n') + '\n'
+      )
+    );
+    const world = WorldGraph.load(file);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const { sink } = collect();
+    manager = new SessionManager(sink, world, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm: [],
+      rules: []
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    // Whole command lines, in order: a substring would read `open e` as `e`.
+    let wire = '';
+    socket.on('data', (chunk) => (wire += chunk.toString('latin1')));
+    let read = 0;
+    const lines = (): string[] => wire.split('\r\n').slice(0, -1);
+    const answered = async (command: string, reply: string): Promise<void> => {
+      await until(() => lines().slice(read).includes(command));
+      read = read + lines().slice(read).indexOf(command) + 1;
+      socket.write(reply);
+    };
+    const sent = async (command: string): Promise<void> =>
+      until(() => lines().slice(read).includes(command));
+
+    socket.write(`Location:            1,1\r\nSlum Street\r\n${exits}\r\n`);
+    socket.write(
+      'You are carrying nothing.\r\nYou have the following keys: black star key.\r\n' +
+        'Wealth: 0 copper farthings\r\n[HP=240/MA=306]:'
+    );
+    await until(
+      () => manager!.character.room.number === 1 && manager!.character.inventory.listedAt !== null
+    );
+    const route = world.route('1/1', '1/2', manager.travellerNow(manager.character));
+    expect(manager.walker.start(route, manager.character)).toBeNull();
+    return { answered, sent };
+  };
+
+  it('opens it with the key and walks through', async () => {
+    // The room says the door is shut, so the walk opens it before stepping.
+    const { answered, sent } = await standing('Obvious exits: closed door east');
+    await answered('open e', 'The door is locked.\r\n[HP=240/MA=306]:');
+    await answered(
+      'use black star key e',
+      'You successfully unlocked the door.\r\n[HP=240/MA=306]:'
+    );
+    await answered('open e', 'The door is now open.\r\n[HP=240/MA=306]:');
+    await sent('e');
+  });
+
+  it('reads the refusal where the room did not say, glued to the prompt', async () => {
+    const { answered } = await standing('Obvious exits: east');
+    await answered(
+      'e',
+      '[HP=240/MA=306]:There is a closed door in that direction!\r\n[HP=240/MA=306]:'
+    );
+    await answered('open e', 'The door is locked.\r\n[HP=240/MA=306]:');
+    await answered(
+      'use black star key e',
+      'You successfully unlocked the door.\r\n[HP=240/MA=306]:'
+    );
+  });
+});
+
 describe('a corridor the server refused', () => {
   const shut = (): WorldGraph => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-shut-'));
@@ -4829,12 +4926,19 @@ describe('a corridor the server refused', () => {
     socket.write('Health: 100/100 [100%]\r\n');
     socket.write('Location:            1,1\r\nStone Hallway\r\nObvious exits: south\r\n');
     await until(() => manager!.character.room.number === 1);
+    let wire = '';
+    socket.on('data', (chunk) => (wire += chunk.toString('latin1')));
 
     const route = world.route('1/1', '1/2');
     expect(route.steps).toHaveLength(1);
     expect(manager!.walker.start(route, manager!.character)).toBeNull();
+    await until(() => wire.includes('n\r\n'));
 
-    socket.write('There is no exit in that direction!\r\n');
+    socket.write('There is no exit in that direction!\r\n[HP=100]:');
+    // The walker looks at the room before blaming anything — one bare Enter —
+    // and the reprint places the character where the step began.
+    await until(() => wire.endsWith('n\r\n\r\n'));
+    socket.write('Stone Hallway\r\nObvious exits: south\r\n');
     /*
      * **Shut, not invented.** The realm data records this exit as hidden, so
      * the refusal is the data being right; the other sentence would accuse it
@@ -4988,6 +5092,25 @@ describe('what this character costs to move', () => {
      * 157 exits gated on a rope shut against everybody who has never typed `i`.
      */
     expect(traveller.packKnown).toBe(false);
+  });
+
+  /*
+   * And which of the two door skills the walker will spend. The walker picks
+   * only with Auto-Pick Locks on and bashes only with Auto-Bash Doors on, so a
+   * route planned on a switched-off skill walks up to a door and stops there.
+   */
+  it('tells the router which door skills the walker may use', () => {
+    const world = tabled();
+    const { sink } = collect();
+    const movement = { ...DEFAULT_CONFIG.automation.movement, pickLocks: false, bashDoors: true };
+    manager = new SessionManager(sink, world, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: false,
+      onEnterRealm: [],
+      rules: [],
+      movement
+    });
+    expect(manager.travellerNow(manager.character).forcing).toEqual({ pick: false, bash: true });
   });
 });
 

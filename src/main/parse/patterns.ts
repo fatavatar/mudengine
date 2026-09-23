@@ -1365,6 +1365,15 @@ export const RULES: Rule[] = [
     pattern: /^The (?<barrier>door|gate|portcullis) is closed(?: in that direction)?!/
   },
   /*
+   * The same refusal in bbs.thelucks.org's words (2026-09-23). Unread, the
+   * walk never learned its step was refused: it stood at a door it held the
+   * key for, nudging and resending the direction, and never opened it.
+   */
+  {
+    type: 'direction-failed',
+    pattern: /^There is a closed (?<barrier>door|gate|portcullis) in that direction!/
+  },
+  /*
    * `You may not go through this exit!` — a gate on alignment or level, not a
    * wall and not a door. It consumes the pending move like the other two, and
    * carries no barrier because nothing the client can send opens it.

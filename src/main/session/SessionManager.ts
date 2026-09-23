@@ -70,7 +70,6 @@ import {
   OPPOSITE,
   asDirection,
   hazardAvoided,
-  mobKey,
   nameAnswersTo,
   newDemands,
   parseLair,
@@ -1932,6 +1931,34 @@ export class SessionManager {
     this.itemErrand = new ItemErrand(
       {
         here: () => roomAddress(this.tracker.current.room),
+        /*
+         * To the room where the item is asked for, through the one door that
+         * keeps *one movement at a time* — the same lap handling as `walk`
+         * below. Already standing there is not a refusal: there is simply
+         * nothing to walk.
+         */
+        walkTo: (room) => {
+          if (roomAddress(this.tracker.current.room) === room) return null;
+          if (this.loops.progress.status === 'running') {
+            this.loops.stop(t('session.loop.stoppedForRoute'));
+            this.walker.stop(t('session.loop.stoppedForRoute'));
+          }
+          const plan = this.planFromHere(room);
+          if (typeof plan === 'string') return plan;
+          if (plan.blocked) return plan.reason ?? t('automation.walk.refusalNoRoute');
+          if (plan.steps.length === 0) return null;
+          return this.walker.start(plan, this.tracker.current);
+        },
+        walking: () => this.walker.walking,
+        // The realm's own phrase, sent as a movement-band command: it is the
+        // errand's next step, and nothing in a fight should wait behind it.
+        say: (command) => {
+          this.queue.enqueue({
+            command,
+            priority: 'movement',
+            reason: t('automation.collect.sayReason', { command })
+          });
+        },
         sourcesOf: (item, to) => this.itemSources(item, to),
         buy: (row) => this.supplies.fetch(row, this.tracker.current),
         buying: () => this.supplies.current !== null,
@@ -5092,6 +5119,15 @@ export class SessionManager {
       level: state.progress.level ?? null,
       strength: state.progress.strength ?? null,
       pickSkill: state.progress.picklocks ?? undefined,
+      // And which of the two the walker will actually spend: a door planned on
+      // a skill whose switch is off is a door the walk stops at.
+      forcing: {
+        pick: this.automationConfig.movement.pickLocks,
+        bash: this.automationConfig.movement.bashDoors
+      },
+      // And the regions the settings keep out of planning.
+      vortexes: this.automationConfig.movement.useVortexes,
+      negativePlane: this.automationConfig.movement.enterNegativePlane,
       wealth: state.inventory.wealth,
       /*
        * The join between the sheet's word and the realm's row id, made here
@@ -5376,26 +5412,32 @@ export class SessionManager {
   private itemSources(item: { id: number; name: string }, to: RoomId | null): ItemSources {
     const world = this.world;
     const here = roomAddress(this.tracker.current.room);
-    if (world === undefined || here === null) return { shops: [], lairs: [] };
+    if (world === undefined || here === null) return { shops: [], lairs: [], asks: [] };
     const traveller = this.travellerNow(this.tracker.current);
     const ordered = world.buyingPlaces(item.id, here, to, traveller);
-    const { mobs } = world.sourcesOf(item);
-    if (mobs.length === 0) return { shops: ordered, lairs: [] };
-    const reach = world.withinSteps(here, tuning().hunting.betterSpotRadius, traveller);
-    const wanted = new Set(mobs.map((name) => mobKey(name)));
-    const lairs: Array<{ id: RoomId; name: string; mob: string; steps: number }> = [];
-    for (const [id, steps] of reach) {
-      const room = world.byId(id);
-      if (!room) continue;
-      const entities = room.lair ? world.lairEntities(room) : world.residentEntities(room);
-      const found = entities.find((entity) => wanted.has(mobKey(entity.name)));
-      if (found === undefined) continue;
-      lairs.push({ id, name: room.name, mob: found.name, steps });
-    }
-    lairs.sort((a, b) => a.steps - b.steps);
-    // A loop, not a march: the nearest few rooms that hold it, as the Hunting
-    // card's own ring is the nearest few rooms of one lair.
-    return { shops: ordered, lairs: lairs.slice(0, tuning().hunting.maxLoopRooms) };
+    /*
+     * Where saying something gets it — a handover or a summoning script
+     * (`WorldGraph.itemAsks`) — nearest first, and only where the character
+     * can walk: a place nobody can reach is not a source. One plan each, and
+     * the realm names one or two.
+     */
+    const asks = world
+      .itemAsks(item.id)
+      .map((ask) => ({ ask, plan: world.route(here, ask.room, traveller) }))
+      .filter(({ plan }) => !plan.blocked)
+      .sort((a, b) => a.plan.steps.length - b.plan.steps.length)
+      .map(({ ask }) => ({ room: ask.room, roomName: ask.roomName, say: ask.say }));
+    /*
+     * Where to hunt for it: the realm's own placements of every monster that
+     * drops it, and of whatever summons one placed nowhere — the same list the
+     * router priced the fetch by, so the errand cannot refuse a way the panel
+     * has just offered (`WorldGraph.dropperRooms`, 2026-09-23). A loop, not a
+     * march: the nearest few, as the Hunting card's ring is.
+     */
+    const lairs = world
+      .dropperRooms(item.id, here, traveller)
+      .slice(0, tuning().hunting.maxLoopRooms);
+    return { shops: ordered, lairs, asks };
   }
 
   /**
@@ -6942,12 +6984,13 @@ export class SessionManager {
    * Collect what the way needs, then walk it (todo 07).
    *
    * The one door for *collect it first* — the route panel's tick beside its
-   * *Walk it*, offered on whichever way is on screen where that way names an
-   * item (`itemWanted`). The errand reports its own refusal back to the window
-   * that pressed, because a person is looking at the answer.
+   * *Walk it*, offered on whichever way is on screen where that way names
+   * items (`itemsWanted`) — every one of them, fetched in turn. The errand
+   * reports its own refusal back to the window that pressed, because a person
+   * is looking at the answer.
    */
-  collectThenWalk(item: { id: number; name: string }, route: Route): string | null {
-    return this.itemErrand.collect(item, route, this.tracker.current);
+  collectThenWalk(items: Array<{ id: number; name: string }>, route: Route): string | null {
+    return this.itemErrand.collect(items, route, this.tracker.current);
   }
 
   /**

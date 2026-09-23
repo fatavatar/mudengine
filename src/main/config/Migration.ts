@@ -214,6 +214,7 @@ export function migrateHome(options: MigrationOptions): void {
   quietedTheLocateProbe(home, note);
   statedTheConfusionWait(home, note);
   statedTheFreedomCure(home, note);
+  statedTheRegions(home, note);
 }
 
 /**
@@ -4224,6 +4225,13 @@ const CONFUSION_WAIT_COMMENT = ` And confusion -- MegaMUD's Ignore Confusion, of
  Messages.md on the realm's settings page), and while it says so a route
  or a loop stands still. A confused character's commands misfire.`;
 
+/** The template's own words for the two, so the files read alike. */
+const REGIONS_COMMENT = ` The dangerous regions, kept out of route planning unless you say so --
+ as MegaMUD's own paths keep out of them. The swirling vortexes (\`go
+ vortex\`) lead into the Black Wasteland and on to the Negative Power
+ Plane, far more dangerous than the ordinary ways between the places
+ they join. A route that starts or ends on the Plane may still cross it.`;
+
 /** The template's own words for it, so the two files read alike. */
 const KEY_PICKUP_COMMENT = ` The key to the door in front of you.
 
@@ -4268,7 +4276,7 @@ const SUPPLIES_COMMENT = ` Keeping the pack stocked -- MegaMUD's Must Have Minim
      - { name: torch, min: 3, max: 7, shop: General Store, at: { map: 1, room: 2147 } }`;
 
 const DOOR_FORCING_DEFAULTS: ReadonlyArray<readonly [string, boolean | number]> = [
-  ['pickLocks', false],
+  ['pickLocks', true],
   ['pickTries', 3],
   ['bashDoors', false],
   ['bashTries', 3]
@@ -4288,8 +4296,8 @@ const DOOR_FORCING_COMMENT = ` Forcing a barrier \`open\` cannot get past.
  game prints the damage in the room. A picked door is unlocked and still
  shut, so the client opens it afterwards; a bashed one is open already.
 
- Both off by default. A door somebody locked is a door somebody locked,
- and a route that forces its way through one is a decision, not a detail.`;
+ Each is tried only where the character's own figure -- picklocks or
+ strength, off the stat sheet -- meets what the realm records for the lock.`;
 
 /** The keys under `connection:` that only the anonymous session ever read. */
 const ANONYMOUS_CONNECTION_KEYS = ['autoConnect'] as const;
@@ -5322,6 +5330,47 @@ function statedTheConditionWaits(home: Home, note: (message: string) => void): v
  * Idempotent against somebody who has since set it — a key stays added
  * whatever its value — and nothing stated is overwritten.
  */
+/**
+ * The vortexes and the Negative Power Plane, 2026-09-23 — two switches, both
+ * off, that keep route planning out of them unless the player says so.
+ *
+ * Stated into every file that has a `movement:` block, for the reason
+ * `statedTheConfusionWait` gives: a default nothing in the file names is a
+ * setting nobody can find. Placed after `walkWhileConfused` where that key is
+ * stated, at the end of the block otherwise; idempotent against somebody who
+ * has since set either, and nothing stated is overwritten.
+ */
+function statedTheRegions(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const movement = document.getIn(['automation', 'movement'], true);
+      if (!isMap(movement)) return false;
+      const missing = ['useVortexes', 'enterNegativePlane'].filter((key) => !movement.has(key));
+      if (missing.length === 0) return false;
+      const pairs = missing.map((key) => document.createPair(key, false) as Pair);
+      if (isScalar(pairs[0]!.key)) pairs[0]!.key.commentBefore = REGIONS_COMMENT;
+      const after = movement.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'walkWhileConfused'
+      );
+      if (after === -1) movement.items.push(...pairs);
+      else movement.items.splice(after + 1, 0, ...pairs);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.regionsStated.one', params)
+      : t('notices.migration.regionsStated.many', params)
+  );
+}
+
 function statedTheConfusionWait(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
   const stated: string[] = [];

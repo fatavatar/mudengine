@@ -22,6 +22,7 @@ import {
   describeBlock,
   hazardAvoided,
   itemWanted,
+  itemsWanted,
   lairsAlong,
   landingRooms
 } from '../../../shared/world';
@@ -3329,6 +3330,311 @@ describe('what a door costs to force', () => {
     // these as ordinary, and the walker forces them for the same reason.
     expect(edgePenalty({ kind: 'door', raw: 'Door' }, {})).toBe(12);
   });
+
+  /*
+   * The walker picks only with *Auto-Pick Locks* on and bashes only with
+   * *Auto-Bash Doors* on, so a skill it will not spend is no way through — a
+   * route planned on it walks up to a door and stops there. Both switches
+   * absent is both on, which is every caller that is not a session.
+   */
+  it('credits only the skills the walker is allowed to use', () => {
+    const bashOnly = { pick: false, bash: true };
+    const pickOnly = { pick: true, bash: false };
+    expect(edgePenalty(door(30), { strength: 150, forcing: pickOnly })!).toBeGreaterThan(100_000);
+    expect(edgePenalty(door(30), { strength: 150, forcing: bashOnly })).toBe(12);
+    expect(edgePenalty(door(30), { pickSkill: 150, forcing: bashOnly })!).toBeGreaterThan(100_000);
+    expect(edgePenalty(door(30), { pickSkill: 150, forcing: pickOnly })).toBe(12);
+    // A keyed lock a picklock may open, with picking switched off, is a wall
+    // and not a hole: the key still opens it.
+    const keyed: Requirement = {
+      kind: 'key',
+      raw: 'Key: 7 [or 30 picklocks]',
+      keyId: 7,
+      pickDifficulty: 30
+    };
+    expect(edgePenalty(keyed, { pickSkill: 150, forcing: bashOnly })!).toBeGreaterThan(100_000);
+    expect(edgePenalty(keyed, { pickSkill: 150, keys: [7], forcing: bashOnly })).toBe(4);
+  });
+
+  it('says which skill is switched off rather than that it is lacking', () => {
+    const graph = makeWorld([
+      { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: 'Door [30 picklocks/strength]' } } },
+      { m: 1, r: 2, n: 'Vault', x: { w: { m: 1, r: 1 } } }
+    ]);
+    const route = graph.route('1/1', '1/2', {
+      strength: 150,
+      pickSkill: 0,
+      forcing: { pick: true, bash: false }
+    });
+    expect(route.walls?.[0]).toMatchObject({ kind: 'door', switchedOff: ['strength'] });
+    expect(describeBlock(route.walls![0]!)).toContain('bashing doors is switched off');
+  });
+});
+
+/*
+ * A door only a key opens, and the character without it.
+ *
+ * The refusal already named the key. What it did not do was say where the way
+ * goes once the key is in the pack — which is the route the errand walks after
+ * fetching it, and the whole of whether fetching it is worth offering.
+ */
+describe('a way only a key opens', () => {
+  const vault = (instruction: string): WorldGraph =>
+    makeWorld(
+      [
+        { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: instruction } } },
+        { m: 1, r: 2, n: 'Hall', x: { w: { m: 1, r: 1 }, e: { m: 1, r: 3 } } },
+        { m: 1, r: 3, n: 'Vault', x: { w: { m: 1, r: 2 } } }
+      ],
+      { items: [{ id: 1124, n: 'angular key' }] }
+    );
+  const lacking: Traveller = { keys: [], packKnown: true, level: 9 };
+
+  it('carries the way the key opens beside the refusal', () => {
+    const route = vault('Key: 1124').route('1/1', '1/3', lacking);
+    expect(route.blocked).toBe(true);
+    expect(route.unlocks?.blocked).toBe(false);
+    expect(route.unlocks?.steps.map((step) => step.command)).toEqual(['e', 'e']);
+    // So the one question every surface asks — what to go and get — answers.
+    expect(itemWanted(route)).toEqual({ id: 1124, name: 'angular key' });
+  });
+
+  it('offers nothing when the key would not be enough', () => {
+    const graph = makeWorld(
+      [
+        { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: 'Key: 1124' } } },
+        { m: 1, r: 2, n: 'Hall', x: { e: { m: 1, r: 3, i: 'Level: 20 to 999' } } },
+        { m: 1, r: 3, n: 'Vault', x: {} }
+      ],
+      { items: [{ id: 1124, n: 'angular key' }] }
+    );
+    const route = graph.route('1/1', '1/3', lacking);
+    expect(route.blocked).toBe(true);
+    expect(route.unlocks).toBeUndefined();
+    expect(itemWanted(route)).toBeNull();
+  });
+
+  /*
+   * Reported 2026-09-23: with a walkable way round, however long or however
+   * many lairs deep, the key was never weighed at all — `Key: 172 [or 100
+   * picklocks]` against 0 picklocks is a wall, and a wall loses to anything.
+   * The way through the door plus fetching the key is the comparison a
+   * player makes, so it is the one made here.
+   */
+  describe('against a long way round', () => {
+    const detour = (guardDistance: number): WorldGraph => {
+      const rooms: Array<Record<string, unknown>> = [
+        {
+          m: 1,
+          r: 1,
+          n: 'Start',
+          x: {
+            e: { m: 1, r: 2, i: 'Key: 1124 [or 100 picklocks]' },
+            s: { m: 1, r: 100 },
+            w: { m: 1, r: 200 }
+          }
+        },
+        { m: 1, r: 2, n: 'Vault', x: { w: { m: 1, r: 1 } } }
+      ];
+      // Forty rooms south and round to the Vault's back door.
+      for (let i = 0; i < 40; i += 1) {
+        const next = i === 39 ? { n: { m: 1, r: 2 } } : { s: { m: 1, r: 101 + i } };
+        rooms.push({ m: 1, r: 100 + i, n: 'Long Road', x: next });
+      }
+      // The guard that drops the key, `guardDistance` rooms west.
+      for (let i = 0; i < guardDistance; i += 1) {
+        const last = i === guardDistance - 1;
+        rooms.push({
+          m: 1,
+          r: 200 + i,
+          n: last ? 'Guard Post' : 'West Lane',
+          x: {
+            e: { m: 1, r: i === 0 ? 1 : 200 + i - 1 },
+            ...(last ? {} : { w: { m: 1, r: 201 + i } })
+          },
+          ...(last ? { lair: '(Max 1): 7,' } : {})
+        });
+      }
+      return makeWorld(rooms, {
+        mobs: [{ n: 'gate guard', hp: 10, i: [7], d: 'h' }],
+        items: [{ id: 1124, n: 'angular key', mobs: ['gate guard'] }]
+      });
+    };
+    const planned = (graph: WorldGraph, who: Traveller = lacking): Route =>
+      graph.route('1/1', '1/2', who, { alternatives: true });
+
+    it('offers the key when fetching it and walking through is the easier way', () => {
+      const route = planned(detour(2));
+      expect(route.blocked).toBe(false);
+      expect(route.steps).toHaveLength(41);
+      expect(route.unlocks?.steps.map((step) => step.command)).toEqual(['e']);
+      expect(route.unlocks?.needs).toEqual([{ id: 1124, name: 'angular key' }]);
+      expect(itemWanted(route.unlocks!)).toEqual({ id: 1124, name: 'angular key' });
+    });
+
+    it('does not send anybody further for the key than the way round', () => {
+      expect(planned(detour(60)).unlocks).toBeUndefined();
+    });
+
+    it('offers nothing when the key is already in the pack', () => {
+      const route = planned(detour(2), { ...lacking, keys: [1124] });
+      expect(route.steps.map((step) => step.command)).toEqual(['e']);
+      expect(route.unlocks).toBeUndefined();
+    });
+
+    it('is not weighed for a walk nobody is reading', () => {
+      expect(detour(2).route('1/1', '1/2', lacking).unlocks).toBeUndefined();
+    });
+  });
+
+  /*
+   * A dropper placed in no room (2026-09-23): the amber talisman drops from
+   * the *dying* slaver leader, which no room spawns — the slaver leader's
+   * death spell (444, `summon slaver leader`) summons it. Read as "no source",
+   * every way needing the talisman was dropped, the Dark-Elf Castle's among
+   * them.
+   */
+  describe('a key whose dropper is summoned on another monster’s death', () => {
+    // The door east, or forty rooms round by the moat; the camp is next door.
+    const castle = (): WorldGraph =>
+      makeWorld(
+        [
+          {
+            m: 1,
+            r: 1,
+            n: 'Start',
+            x: { e: { m: 1, r: 2, i: 'Key: 815' }, w: { m: 1, r: 5 }, s: { m: 1, r: 100 } }
+          },
+          { m: 1, r: 2, n: 'Gatehouse', x: { w: { m: 1, r: 1 } } },
+          { m: 1, r: 5, n: 'Slaver Camp', x: { e: { m: 1, r: 1 } }, lair: '(Max 1): 353,' },
+          ...Array.from({ length: 40 }, (_, i) => ({
+            m: 1,
+            r: 100 + i,
+            n: 'Moat Road',
+            x: i === 39 ? { n: { m: 1, r: 2 } } : { s: { m: 1, r: 101 + i } }
+          }))
+        ],
+        {
+          mobs: [
+            { n: 'slaver leader', hp: 250, i: [353], d: 'h', ds: 444 },
+            { n: 'dying slaver leader', hp: 50, i: [365], d: 'h', drops: ['amber talisman'] }
+          ],
+          spells: [{ id: 444, n: 'summon slaver leader', ab: [[12, 365]] }],
+          items: [{ id: 815, n: 'amber talisman' }]
+        }
+      );
+
+    it('knows who summons it', () => {
+      const graph = castle();
+      const dying = graph.mob('dying slaver leader')!;
+      expect(graph.summonersOf(dying).map((mob) => mob.name)).toEqual(['slaver leader']);
+      expect(graph.summonersOf(graph.mob('slaver leader')!)).toEqual([]);
+    });
+
+    /*
+     * The errand's own list, and the router's: the same rooms. The errand used
+     * to sweep outward to a radius for a lair whose name matched, and from
+     * the Temple the orc warleader's bedroom — an NPC, 53 steps off — never
+     * turned up: *the realm names nowhere this comes from* (2026-09-23).
+     */
+    it('lists where to hunt it, the summoner included, nearest first', () => {
+      const graph = castle();
+      expect(graph.dropperRooms(815, '1/1', lacking)).toEqual([
+        { id: '1/5', name: 'Slaver Camp', mob: 'slaver leader', steps: 1 }
+      ]);
+    });
+
+    it('offers the key, fetched from where the summoner lives', () => {
+      const route = castle().route('1/1', '1/2', lacking, { alternatives: true });
+      expect(route.steps).toHaveLength(41);
+      expect(route.unlocks?.needs).toEqual([{ id: 815, name: 'amber talisman' }]);
+    });
+  });
+
+  /*
+   * The other two ways the realm hands an item over (2026-09-23), both on the
+   * four-key way into the Dark-Elf Castle: the gate key drops from an
+   * obsidian statue no room spawns — saying `touch statue` at the Black Steel
+   * Gate summons it — and the moldy key is handed over by the sleazy
+   * shopkeeper when asked for it. Neither is a shop or a lair, and both read
+   * as *no source*.
+   */
+  describe('an item had by saying something', () => {
+    const gate = (): WorldGraph =>
+      makeWorld(
+        [
+          {
+            m: 1,
+            r: 1,
+            n: 'Start',
+            x: {
+              e: { m: 1, r: 2, i: 'Key: 806 [or 101 picklocks]' },
+              w: { m: 1, r: 5 },
+              n: { m: 1, r: 6 },
+              s: { m: 1, r: 100 }
+            }
+          },
+          { m: 1, r: 2, n: 'Gatehouse', x: { w: { m: 1, r: 1 } } },
+          {
+            m: 1,
+            r: 5,
+            n: 'Black Steel Gate',
+            x: { e: { m: 1, r: 1 } },
+            cmd: [{ say: ['touch statue', 'move statue'], need: ['summon 347'] }]
+          },
+          { m: 1, r: 6, n: 'Sleazy Shop', x: { s: { m: 1, r: 1 } } },
+          ...Array.from({ length: 40 }, (_, i) => ({
+            m: 1,
+            r: 100 + i,
+            n: 'Moat Road',
+            x: i === 39 ? { n: { m: 1, r: 2 } } : { s: { m: 1, r: 101 + i } }
+          }))
+        ],
+        {
+          mobs: [{ n: 'obsidian statue', hp: 300, i: [347], d: 'h', drops: ['gate key'] }],
+          items: [
+            { id: 806, n: 'gate key', mobs: ['obsidian statue'] },
+            {
+              id: 820,
+              n: 'moldy key',
+              from: [{ k: 'npc', w: 'sleazy shopkeeper', at: '1/6', say: ['orb'] }]
+            }
+          ]
+        }
+      );
+
+    it('knows where to say what', () => {
+      const graph = gate();
+      expect(graph.itemAsks(806)).toEqual([
+        { room: '1/5', roomName: 'Black Steel Gate', say: 'touch statue', who: 'obsidian statue' }
+      ]);
+      expect(graph.itemAsks(820)).toEqual([
+        {
+          room: '1/6',
+          roomName: 'Sleazy Shop',
+          say: 'ask sleazy shopkeeper orb',
+          who: 'sleazy shopkeeper'
+        }
+      ]);
+    });
+
+    it('offers the key the statue drops', () => {
+      const route = gate().route('1/1', '1/2', lacking, { alternatives: true });
+      expect(route.steps).toHaveLength(41);
+      expect(route.unlocks?.needs).toEqual([{ id: 806, name: 'gate key' }]);
+    });
+  });
+
+  it('offers nothing for a key the realm cannot name', () => {
+    // A number is not something anybody can fetch: the errand looks the
+    // source up by id and counts the pack by name.
+    const graph = makeWorld([
+      { m: 1, r: 1, n: 'Start', x: { e: { m: 1, r: 2, i: 'Key: 55' } } },
+      { m: 1, r: 2, n: 'Vault', x: {} }
+    ]);
+    const route = graph.route('1/1', '1/2', lacking);
+    expect(route.unlocks).toBeUndefined();
+  });
 });
 
 describe('an edge the live server refused', () => {
@@ -3768,6 +4074,30 @@ describe('itemWanted', () => {
     // offered as `carrying` where there is one.
     expect(itemWanted(route({ blocks: [door] }))).toBeNull();
   });
+
+  /*
+   * Every one, not the first (2026-09-23): the long way to the Dark-Elf Castle
+   * wanted three things, the tick named one, and the errand fetched one.
+   */
+  it('lists everything the way wants, each once, doors before spells', () => {
+    const gate: RouteBlock = { ...door, at: '1/5', to: '1/6', keyId: 170, itemName: 'iron key' };
+    expect(itemsWanted(route({ walls: [door, gate, door], hazards: [raft] }))).toEqual([
+      { id: 593, name: 'black serpent key' },
+      { id: 170, name: 'iron key' },
+      { id: 41, name: 'log raft' }
+    ]);
+    expect(
+      itemsWanted(
+        route({
+          needs: [
+            { id: 593, name: 'black serpent key' },
+            { id: 170, name: 'iron key' }
+          ]
+        })
+      ).map((item) => item.name)
+    ).toEqual(['black serpent key', 'iron key']);
+    expect(itemsWanted(route({}))).toEqual([]);
+  });
 });
 
 /*
@@ -3778,6 +4108,63 @@ describe('itemWanted', () => {
  * condition the client cannot read is how a character is walked somewhere it
  * cannot get back from (mme.md §6).
  */
+/*
+ * The vortexes and the Negative Power Plane (2026-09-23): the planned way to
+ * the Dark-Elf Castle gatehouse went through `go vortex` twice and a portal
+ * room of the Plane, where the one players take is four keys long and stays
+ * out of both. MegaMUD keeps them out of planning, and so does this unless
+ * the character's settings say otherwise.
+ */
+describe('the vortexes and the Negative Power Plane', () => {
+  /** A vortex straight to the Plane and on, or a long road round. */
+  const planes = (): WorldGraph =>
+    makeWorld([
+      {
+        m: 1,
+        r: 1,
+        n: 'Darkwood Forest',
+        x: { s: { m: 1, r: 100 } },
+        cmd: [{ say: ['go vortex', 'enter vortex'], to: '3/1' }]
+      },
+      { m: 3, r: 1, n: 'Black Wasteland', x: { e: { m: 8, r: 1 } } },
+      { m: 8, r: 1, n: 'Negative Power Plane', x: { e: { m: 8, r: 2 } } },
+      { m: 8, r: 2, n: 'Castle Gatehouse', x: {} },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        m: 1,
+        r: 100 + i,
+        n: 'Long Road',
+        x: i === 29 ? { e: { m: 8, r: 2 } } : { s: { m: 1, r: 101 + i } }
+      }))
+    ]);
+  const commands = (route: Route): string[] => route.steps.map((step) => step.command);
+
+  it('takes neither where the settings leave them off', () => {
+    const route = planes().route('1/1', '8/2', { vortexes: false, negativePlane: false });
+    expect(route.steps).toHaveLength(31);
+    expect(commands(route)).not.toContain('go vortex');
+  });
+
+  it('takes the vortex only where it is on, and the Plane only where that is', () => {
+    // The vortex lands in the Wasteland, whose one way on is the Plane.
+    expect(
+      planes().route('1/1', '8/2', { vortexes: true, negativePlane: false }).steps
+    ).toHaveLength(31);
+    expect(commands(planes().route('1/1', '8/2', { vortexes: true, negativePlane: true }))).toEqual(
+      ['go vortex', 'e', 'e']
+    );
+  });
+
+  it('goes into the Plane when that is where the character asked to go', () => {
+    const route = planes().route('1/1', '8/1', { vortexes: true, negativePlane: false });
+    expect(route.blocked).toBe(false);
+    expect(commands(route)).toEqual(['go vortex', 'e']);
+  });
+
+  it('leaves both alone for a caller that says nothing', () => {
+    expect(planes().route('1/1', '8/2').steps).toHaveLength(3);
+  });
+});
+
 describe('routing through room-script teleports', () => {
   /** Two islands joined only by the script on Pool Edge. */
   const portalWorld = (cmd: Record<string, unknown>): WorldGraph =>

@@ -2735,6 +2735,12 @@ export type RouteBlock =
       /** Null while the sheet is unread; never zero standing in for unknown. */
       picklocks: number | null;
       strength: number | null;
+      /**
+       * The skills this door names that the walker is switched off from
+       * using (*Auto-Pick Locks*, *Auto-Bash Doors*) — said as a setting,
+       * because a figure well over the door's reads as a contradiction.
+       */
+      switchedOff?: Array<'picklocks' | 'strength'>;
       keyId?: number;
       itemName?: string;
       /**
@@ -2914,10 +2920,16 @@ export function describeBlock(block: RouteBlock): string {
         if (block.strength === null) unread.push('strength');
         else have.push(`${block.strength} strength`);
       }
+      const off = (block.switchedOff ?? []).map((skill) =>
+        skill === 'picklocks' ? 'picking locks' : 'bashing doors'
+      );
       const mine = [
         have.length > 0 ? `you have ${have.join(' and ')}` : null,
         unread.length > 0
           ? `your ${unread.join(' and ')} ${unread.length === 1 ? 'is' : 'are'} not known yet`
+          : null,
+        off.length > 0
+          ? `${off.join(' and ')} ${off.length === 1 ? 'is' : 'are'} switched off`
           : null
       ]
         .filter((part) => part !== null)
@@ -3035,6 +3047,25 @@ export interface Route {
    * already uses one, and on any route not planned for a reader.
    */
   viaItem?: Route;
+  /**
+   * On a refused route, the way this character would take **once the pack
+   * holds what `blocks` names** — where every block on the way is an item and
+   * every item has a name.
+   *
+   * The refusal already said *needs angular key*; this is the half that makes
+   * it an errand rather than a dead end, because it is the route the errand
+   * walks after fetching the key (`ItemErrand.collect`), and its existence is
+   * the whole of whether fetching is worth offering. Absent where getting the
+   * items would not be enough — a level gate or a toll on the same way — or
+   * where the realm names a lock by number only, which nobody can go and get.
+   */
+  unlocks?: Route;
+  /**
+   * What this way assumes is in the pack and is not — set on an `unlocks`
+   * route, which is planned as though the keys it names were carried. The
+   * errand fetches these before the way is walked (`itemsWanted`).
+   */
+  needs?: Array<{ id: number; name: string }>;
 }
 
 /**
@@ -3075,29 +3106,49 @@ export function demandsOf(route: Route): Map<string, string> {
   return demands;
 }
 
-/**
- * The first item this way asks for, to go and fetch before walking it.
- *
- * **What this plan crosses before what its rooms cast**: a door the walker
- * will stop dead at outranks a spell that only hurts on the way past. `walls`
- * and never `blocks`, by `demandsOf`'s own rule — `blocks` on a walkable plan
- * is what a *cheaper* way needed, which is a different route and so a
- * different errand, and that way is offered as `carrying` where there is one.
- *
- * One rather than all of them: the errand collects one thing at a time, and a
- * second door is a second press. The panel's own sentences name every item, so
- * what is being fetched is never a surprise.
- */
+/** The first thing this way asks for — see `itemsWanted`, which lists them all. */
 export function itemWanted(route: Route): { id: number; name: string } | null {
-  for (const wall of route.walls ?? []) {
-    const item = blockItem(wall);
-    if (item !== null) return item;
+  return itemsWanted(route)[0] ?? null;
+}
+
+/**
+ * Everything this way asks for, to go and fetch before walking it — each item
+ * once, doors before spells.
+ *
+ * All of them, not the first (2026-09-23): the long way from Slum Street,
+ * Crossroads to the Dark-Elf Castle gatehouse wanted three things the pack
+ * lacked, the panel's tick named one, and the errand fetched that one and
+ * walked into the second door.
+ *
+ * - A way planned as though the pack held something names it outright
+ *   (`needs`), and a refused way asks for what its `unlocks` needs — which the
+ *   router sets only where the items alone open it: a key on a way that is
+ *   also level-gated is not an errand, because fetching it ends at the gate.
+ * - Otherwise **what this plan crosses before what its rooms cast**: a door
+ *   the walker will stop dead at outranks a spell that only hurts on the way
+ *   past. `walls` and never `blocks`, by `demandsOf`'s own rule — `blocks` on
+ *   a walkable plan is what a *cheaper* way needed, which is a different route
+ *   and so a different errand.
+ */
+export function itemsWanted(route: Route): Array<{ id: number; name: string }> {
+  const wanted = new Map<number, { id: number; name: string }>();
+  const add = (item: { id: number; name: string } | null): void => {
+    if (item !== null && !wanted.has(item.id))
+      wanted.set(item.id, { id: item.id, name: item.name });
+  };
+  if (route.needs !== undefined && route.needs.length > 0) {
+    for (const item of route.needs) add(item);
+    return [...wanted.values()];
   }
+  if (route.blocked) {
+    for (const item of route.unlocks?.needs ?? []) add(item);
+    return [...wanted.values()];
+  }
+  for (const wall of route.walls ?? []) add(blockItem(wall));
   for (const hazard of route.hazards ?? []) {
-    const item = hazard.needs[0];
-    if (item !== undefined) return { id: item.id, name: item.name };
+    for (const item of hazard.needs) add(item);
   }
-  return null;
+  return [...wanted.values()];
 }
 
 /**

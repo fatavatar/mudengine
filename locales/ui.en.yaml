@@ -160,6 +160,12 @@ notices:
         file with the paragraph that explains it: {fileList}'
       many: 'Walking on while confused is a setting, off by default, and was written into {count}
         files with the paragraph that explains it: {fileList}'
+    regionsStated:
+      one: 'Using the vortexes and entering the Negative Power Plane are settings, both off by
+        default, and were written into {count} file with the paragraph that explains them: {fileList}'
+      many: 'Using the vortexes and entering the Negative Power Plane are settings, both off by
+        default, and were written into {count} files with the paragraph that explains them:
+        {fileList}'
     freedomCureStated:
       one: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
         default, and was written into the cures of {count} file: {fileList}'
@@ -2321,15 +2327,18 @@ cards:
       round: 'A way round the worst of it, {stepCount} steps'
       carrying: 'Carrying {itemList}, {stepCount} steps'
       viaItem: 'Using {itemList}, {stepCount} steps — saves {savedCount}'
+      keyed: 'Fetching {itemList} first, then {stepCount} steps'
     showing:
       round: the way round
       carrying: the way with the items
       viaItem: the way using an item
+      keyed: the way through, key fetched first
     usedHere: 'here, in {roomName}'
     spendsOnce: single use
     spendsUses: '{useCount} uses'
     spendsForever: unlimited uses
     collectFirst: Collect {itemName} first
+    fetchThenWalk: Get {itemName}, then walk
     stopShort: Stop before entering {roomName}
     stopShortTooltip: Walk as far as {roomName} and stop there
     stepSkipped: not walked
@@ -3296,6 +3305,14 @@ settings:
     walkWhileBlindHint:
       Off, a route or a loop stands still until sight returns — MegaMUD's IgnoreBlind default. A blind
       character cannot read the room it walks into.
+    regionsLegend: Route Planning
+    useVortexes: Use Vortexes
+    useVortexesHint:
+      Off, routes never take a swirling vortex (go vortex). They lead into the Black Wasteland and on
+      to the Negative Power Plane — far more dangerous than the ordinary ways round.
+    enterNegativePlane: Enter the Negative Power Plane
+    enterNegativePlaneHint:
+      Off, routes never cross the Negative Power Plane. A route that starts or ends there still may.
     walkWhileConfused: Walk While Confused
     walkWhileConfusedHint:
       Off, a route or a loop stands still while this realm's messages say the character is
@@ -4018,6 +4035,11 @@ automation:
     buyingOnTheWay: 'Going to buy {item} at {shop} in {room} first; the way there goes past it.'
     gotAndKept: '{item} is in the pack, and it is on the keep list, so it stays.'
     gotForTheDoor: '{item} is in the pack — collected for this door, not kept.'
+    several: 'This way needs {items}; collecting each in turn before walking it.'
+    asking: 'Going to {room} to say "{say}" for {item}.'
+    sayReason: 'collecting: {command}'
+    refusalNotReached: 'Not collecting: the walk to {room} ended somewhere else.'
+    refusalAskedNothing: 'Said "{say}", and no {item} came of it; not walking the way that needed it.'
     hunting: 'Looking for {item}: {mob} drops it, starting at {room}.'
     loopName: 'Collect: {item}'
     refusalBusy: Something is already being collected.
@@ -4516,6 +4538,8 @@ automation:
       '{spellName} dropped you somewhere the room name and its exits cannot tell apart; asking the
       realm where that is.'
     healthResumed: Health is back; walking on.
+    askingWhere: '{roomName} could be one of several rooms; asking the realm where this is.'
+    landedElsewhere: '{command} put you in {roomName}, not where the route said; planning again from here.'
     trapHolding:
       'The way into {stepName} is a trap of up to {damage} damage; resting here to {needed} HP
       (now {hp}) before taking it.'
@@ -4545,6 +4569,7 @@ automation:
       The way to {stepName} needs levers in {roomCount} different rooms and the realm does not say
       in which order. Pull them by hand and the way opens.
     reasonAmbiguous: I can no longer tell which room you are in
+    checkedElsewhere: "The game refused {command} because you are in {roomName}, not where the route thought — planning again from here."
     reasonBarrier: '{barrier} blocked {command}. {detail}'
     reasonBashing: bashing the {barrier} to {stepName}
     reasonCombat: a fight started
@@ -4556,6 +4581,7 @@ automation:
     reasonNotQueued: the client refused to send {command}
     reasonNotSent: '{command} never left the client'
     reasonNudge: forcing an answer after {command}
+    reasonCheckingRoom: "reading the room again: the game refused {command}, and that may mean you are not where the route thinks"
     reasonOpening: opening the {barrier} to {stepName}
     reasonPicking: picking the {barrier} to {stepName}
     reasonPlayerTookOver: you moved the character yourself

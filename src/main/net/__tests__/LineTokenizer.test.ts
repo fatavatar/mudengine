@@ -132,6 +132,24 @@ describe('stripAnsi', () => {
   it('leaves CP437-derived text alone', () => {
     expect(stripAnsi('░█▒ Obvious exits: north')).toBe('░█▒ Obvious exits: north');
   });
+
+  /*
+   * bbs.thelucks.org scrambles words with a junk letter and a backspace, which
+   * a terminal overstrikes and a parser reading the bytes does not: every exits
+   * line of every session since 2026-09-21 read as `["nE"]`, so no arrival
+   * could be checked against the room it was supposed to be (2026-09-23, the
+   * walk that kept sending `se` into a Darkwood Forest wall).
+   */
+  it('applies backspaces the way the terminal shows them', () => {
+    expect(
+      stripAnsi('\x1b[0;32mObvious exits: nE\x08orthwest, sT\x08outhwest\r\n\x1b[79D\x1b[K')
+    ).toBe('Obvious exits: northwest, southwest\r\n');
+    expect(stripAnsi('You hear movement to the eY\x08ast.')).toBe('You hear movement to the east.');
+    // Two in a row take two back, and one with nothing before it is dropped —
+    // the server's own `Auto-sensing` probe backs over its escape that way.
+    expect(stripAnsi('abc\x08\x08d')).toBe('ad');
+    expect(stripAnsi('\x08\x08\r    ')).toBe('\r    ');
+  });
 });
 
 describe('plainText', () => {

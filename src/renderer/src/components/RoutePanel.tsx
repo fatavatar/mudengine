@@ -12,7 +12,7 @@ import {
   asRoomReference,
   describeBlock,
   DIRECTION_NAME,
-  itemWanted,
+  itemsWanted,
   lairsAlong,
   roomId,
   trapsAlong,
@@ -26,6 +26,14 @@ import {
 import { keepFocus } from '../lib/focus';
 import { tuning } from '../lib/tuning';
 import type { Replanned, WalkStart } from '@shared/movement';
+
+/** Every item's name, for the one sentence that offers to fetch them all. */
+function named(items: ReadonlyArray<{ name: string }>): string {
+  return items.map((item) => item.name).join(', ');
+}
+
+/** Which of the plan's routes is on screen — see `chosen`. */
+type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'keyed';
 
 /**
  * Whether an alternative steps over none of the walls the plan crosses — the
@@ -57,9 +65,13 @@ export interface RoutePanelProps {
    * Collects what the way needs first, then walks it (todo 07).
    *
    * Offered on whichever way is on screen, where it names an item to go and
-   * get — a door it crosses, or a spell its rooms cast (`itemWanted`).
+   * get — the doors it crosses, the spells its rooms cast (`itemsWanted`) —
+   * every one of them, fetched in turn.
    */
-  onCollectThenWalk(item: { id: number; name: string }, route: Route): Promise<string | null>;
+  onCollectThenWalk(
+    items: Array<{ id: number; name: string }>,
+    route: Route
+  ): Promise<string | null>;
   /**
    * A destination chosen elsewhere — clicking the map — to plan on opening.
    *
@@ -255,7 +267,7 @@ export default function RoutePanel({
    * (`Route.viaItem`). A choice among routes main already planned, never a
    * re-plan: the panel is a reader, and *Show it* swaps what is read.
    */
-  const [chosen, setChosen] = useState<'plan' | 'round' | 'carrying' | 'viaItem'>('plan');
+  const [chosen, setChosen] = useState<Way>('plan');
   /**
    * Whether to go and get what the way needs before walking it (todo 07).
    *
@@ -271,8 +283,12 @@ export default function RoutePanel({
    * route it was made on and comparing by identity, which left the box drawn
    * ticked over a fresh plan while quietly deciding nothing — a control
    * stating the opposite of what it would do.
+   *
+   * **Ticked by default** (2026-09-22): a way that needs a key the pack lacks
+   * stops dead at that door, so walking it without the key is the exception
+   * somebody opts into by unticking — never the thing a press does unasked.
    */
-  const [collectFirst, setCollectFirst] = useState(false);
+  const [collectFirst, setCollectFirst] = useState(true);
   /**
    * Whether to stop in the room before the destination rather than enter it.
    *
@@ -302,9 +318,11 @@ export default function RoutePanel({
         ? (route.otherWay ?? route)
         : chosen === 'carrying'
           ? (route.carrying ?? route)
-          : chosen === 'viaItem'
-            ? (route.viaItem ?? route)
-            : route;
+          : chosen === 'keyed'
+            ? (route.unlocks ?? route)
+            : chosen === 'viaItem'
+              ? (route.viaItem ?? route)
+              : route;
   /**
    * How large a room is drawn in the picture of where the route ends.
    *
@@ -404,10 +422,16 @@ export default function RoutePanel({
    */
   useEffect(() => {
     setPicked(null);
-    setChosen('plan');
+    /*
+     * The way through a door whose key is worth fetching is **shown first**
+     * where the router offers one (2026-09-23): the long way round is what a
+     * player picks when they would rather not go and get the key, and it is
+     * one press away in the list below.
+     */
+    setChosen(route !== null && !route.blocked && route.unlocks !== undefined ? 'keyed' : 'plan');
     setOffering(false);
     setUnfolded(new Set());
-    setCollectFirst(false);
+    setCollectFirst(true);
   }, [route]);
   // A pick belongs to the list it was made on, and so does an opened run — and
   // a tick belongs to the door the way on screen goes through, which another
@@ -415,7 +439,7 @@ export default function RoutePanel({
   useEffect(() => {
     setPicked(null);
     setUnfolded(new Set());
-    setCollectFirst(false);
+    setCollectFirst(true);
   }, [chosen]);
   /*
    * And the tick that says *do not enter the room at the end* belongs to that
@@ -510,10 +534,9 @@ export default function RoutePanel({
   const walk = useCallback(
     (plan: Route): void => {
       /*
-       * *Collect it first* is a different press: main goes and gets the item
-       * and walks the way that wanted it when the pack holds it. The item is
-       * the first that way asks for — the panel names them all in the sentence
-       * above, and the errand refuses out loud if it cannot reach that one.
+       * *Collect it first* is a different press: main goes and gets every
+       * item the way asks for, one after another, and walks it once the pack
+       * holds them all. The errand refuses out loud if it cannot reach one.
        *
        * **Only about the whole way on screen**, which is what the tick was
        * drawn from. A prefix is built by slicing the steps (`peek`, and a
@@ -521,7 +544,7 @@ export default function RoutePanel({
        * `hazards` onto a walk that stops three rooms along — so *Walk here*
        * would leave to go shopping for a key for a door it never reaches.
        */
-      const needed = collectFirst && plan === shown ? itemWanted(plan) : null;
+      const needed = collectFirst && plan === shown ? itemsWanted(plan) : [];
       /*
        * *Stop before entering* drops the last step, by the same rule: about
        * the whole way on screen, never a prefix, because *Walk here* has
@@ -551,7 +574,7 @@ export default function RoutePanel({
        * there is nothing for it to redraw.
        */
       const started: Promise<WalkStart> =
-        needed === null
+        needed.length === 0
           ? onWalk(walked)
           : onCollectThenWalk(needed, walked).then((reason) =>
               reason === null ? { started: true } : { refused: reason }
@@ -824,15 +847,46 @@ export default function RoutePanel({
                  * `reason` is the same answer as a sentence and is what older
                  * surfaces read; this uses the facts because it has room to.
                  */
-                <ul className="route-blocked">
-                  {(route.blocks ?? []).length > 0 ? (
-                    route.blocks!.map((block, index) => (
-                      <li key={`${block.kind}-${index}`}>{describeBlock(block)}</li>
-                    ))
-                  ) : (
-                    <li>{route.reason ?? t('cards.route.noRouteFallback')}</li>
-                  )}
-                </ul>
+                <>
+                  <ul className="route-blocked">
+                    {(route.blocks ?? []).length > 0 ? (
+                      route.blocks!.map((block, index) => (
+                        <li key={`${block.kind}-${index}`}>{describeBlock(block)}</li>
+                      ))
+                    ) : (
+                      <li>{route.reason ?? t('cards.route.noRouteFallback')}</li>
+                    )}
+                  </ul>
+                  {/* A way only a key opens is an errand, not a dead end: main
+                  planned where it goes once the pack holds the key
+                  (`Route.unlocks`), and this sends the character to get it and
+                  then walks that. Offered only when the keys alone are enough —
+                  `itemsWanted` answers nothing for a way that is gated as well. */}
+                  {(() => {
+                    const wanted = itemsWanted(route);
+                    const unlocks = route.unlocks;
+                    if (wanted.length === 0 || unlocks === undefined) return null;
+                    return (
+                      <div className="route-fetch">
+                        <button
+                          className="primary"
+                          onClick={() => {
+                            void onCollectThenWalk(wanted, unlocks)
+                              .then((reason) => {
+                                setRefused(reason);
+                                if (reason === null) onClose();
+                              })
+                              .catch((error) => setRefused(errorMessage(error)));
+                          }}
+                          onMouseDown={keepFocus}
+                          type="button"
+                        >
+                          {t('cards.route.fetchThenWalk', { itemName: named(wanted) })}
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </>
               ) : route.steps.length === 0 ? (
                 <div className="empty">{t('cards.route.alreadyHere')}</div>
               ) : (
@@ -851,9 +905,11 @@ export default function RoutePanel({
                       <span className="chip off">
                         {chosen === 'round'
                           ? t('cards.route.showing.round')
-                          : chosen === 'viaItem'
-                            ? t('cards.route.showing.viaItem')
-                            : t('cards.route.showing.carrying')}
+                          : chosen === 'keyed'
+                            ? t('cards.route.showing.keyed')
+                            : chosen === 'viaItem'
+                              ? t('cards.route.showing.viaItem')
+                              : t('cards.route.showing.carrying')}
                       </span>
                     )}
                     {/* The traps, counted at the head of the list where the
@@ -934,7 +990,7 @@ export default function RoutePanel({
                       const deadly = lairs.deadly;
                       const avoided =
                         deadly !== null &&
-                        [route.otherWay, route.carrying, route.viaItem].some(
+                        [route.otherWay, route.carrying, route.viaItem, route.unlocks].some(
                           (other) =>
                             other !== undefined &&
                             other !== shown &&
@@ -1023,8 +1079,8 @@ export default function RoutePanel({
                     below this row, and a tick that says only *it* is a tick
                     about something the reader has to go and look for. */}
                     {(() => {
-                      const wanted = itemWanted(shown);
-                      if (wanted === null) return null;
+                      const wanted = itemsWanted(shown);
+                      if (wanted.length === 0) return null;
                       return (
                         <label className="route-collect">
                           <input
@@ -1033,7 +1089,7 @@ export default function RoutePanel({
                             onMouseDown={keepFocus}
                             type="checkbox"
                           />
-                          {t('cards.route.collectFirst', { itemName: wanted.name })}
+                          {t('cards.route.collectFirst', { itemName: named(wanted) })}
                         </label>
                       );
                     })()}
@@ -1096,7 +1152,7 @@ export default function RoutePanel({
                         ))}
                       </ul>
                       {shown === route &&
-                        ![route.otherWay, route.carrying, route.viaItem].some(
+                        ![route.otherWay, route.carrying, route.viaItem, route.unlocks].some(
                           (other) => other !== undefined && avoidsWalls(other, route.walls!)
                         ) && <span>{t('cards.route.noOtherWay')}</span>}
                     </div>
@@ -1151,7 +1207,7 @@ export default function RoutePanel({
                   is on screen, so there is always a way back. */}
                   {(() => {
                     const items: Array<{
-                      key: 'plan' | 'round' | 'carrying' | 'viaItem';
+                      key: Way;
                       sentence: string;
                     }> = [];
                     if (chosen !== 'plan') {
@@ -1180,6 +1236,16 @@ export default function RoutePanel({
                         sentence: t('cards.route.alternative.carrying', {
                           itemList: [...named.values()].join(', '),
                           stepCount: route.carrying.steps.length
+                        })
+                      });
+                    }
+                    // And through the door, once its key has been fetched.
+                    if (!route.blocked && route.unlocks !== undefined && chosen !== 'keyed') {
+                      items.push({
+                        key: 'keyed',
+                        sentence: t('cards.route.alternative.keyed', {
+                          itemList: (route.unlocks.needs ?? []).map((item) => item.name).join(', '),
+                          stepCount: route.unlocks.steps.length
                         })
                       });
                     }
