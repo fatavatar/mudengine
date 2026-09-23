@@ -412,6 +412,9 @@ tuning:
     # How long a room re-read owed after a monster came, went or died holds
     # walking and resting still, when its answer never comes.
     roomOwedMs: 3000
+    # How long a room-spell fight waits, after the death that took it under the
+    # room spell's crowd, before switching to the single-target spell.
+    areaSettleMs: 800
 
     # How long a typed `break` stands auto-combat down. The stand-down ends
     # early when the player attacks or the room changes; this is the backstop

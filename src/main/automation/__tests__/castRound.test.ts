@@ -28,6 +28,23 @@ describe('the one cast a round allows', () => {
   });
 
   /*
+   * The send is not when the server reads it (2026-09-23): the dogs' round
+   * printed 72ms after `c hesh` went out, before the server had read it, and
+   * a heal let through on those blows was refused.
+   */
+  it('does not open on a round that began before the server read the cast', () => {
+    const round = new CastRound();
+    vi.advanceTimersByTime(10_000);
+    round.noteCast();
+    vi.advanceTimersByTime(72);
+    round.noteBlow();
+    expect(round.mayCast()).toBe(false);
+    vi.advanceTimersByTime(5_000);
+    round.noteBlow();
+    expect(round.mayCast()).toBe(true);
+  });
+
+  /*
    * Out of a fight as well: a heal in the round a fight ended and a blessing
    * a second and a half later were refused the same way (2026-09-23). With no
    * blows to mark the round, the gate lets go once longer than one has passed.

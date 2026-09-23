@@ -400,6 +400,42 @@ export class AutoCombat {
   /** Whether a step is outstanding, as of the last line. See `movePending`. */
   private movePendingNow = false;
   /**
+   * The fight was last engaged with the room spell, and nothing has replaced
+   * or broken it since — with when a round of it was last seen.
+   *
+   * **The server repeats a room spell every round and does not stop it when
+   * the room is empty.** It prints `*Combat Off*` for each monster that dies
+   * and goes on casting, into whatever room the character walks to: skinny
+   * was told `Your spell has no effect in this room!` three rooms on, eight
+   * seconds after the last cast (2026-09-23). So while it is engaged every
+   * death is a decision, the way MegaMUD makes it (the player's transcript,
+   * 2026-09-23) — see `areaDecision`: nothing left is `break`; fewer than the
+   * room spell earns is the single-target spell at one of them; enough is
+   * nothing at all, because the server is already casting. The Enter the
+   * session sends after each death (`SessionManager.rereadRoom`) is what
+   * corrects the count when it was wrong.
+   *
+   * Kept across `endFight` for the same reason: the per-kill `*Combat Off*`
+   * is not the spell stopping. A cast of this character's own does stop it
+   * (`openAgain`) — MegaMUD sends the room spell again after `aund` switched
+   * the fight off.
+   */
+  private areaEngaged = false;
+  private areaSeenAt = 0;
+  /**
+   * A switch off the room spell waiting for its burst to finish — see
+   * `areaDecision`. The room spell's kills print one after another, and a
+   * decision taken halfway through them aimed `c fury giant war dog` at a
+   * dog the rest of the burst killed: `You do not see giant war dog here!`
+   * (2026-09-23).
+   */
+  private areaTimer: NodeJS.Timeout | null = null;
+  /**
+   * A cast of this character's own went out mid-fight, and the `*Combat Off*`
+   * it is answered with should release the engage cooldown. See `openAgain`.
+   */
+  private reopen = false;
+  /**
    * The last decision written down, so the same one is not written again.
    *
    * Cleared on `reset()` with everything else: a new session's first refusal is
@@ -577,12 +613,16 @@ export class AutoCombat {
     this.declined = false;
     this.standDownUntil = 0;
     this.movePendingNow = false;
+    this.areaEngaged = false;
+    this.reopen = false;
+    this.clearAreaTimer();
     this.lastDecision = null;
     this.clearRound();
   }
 
   dispose(): void {
     this.clearRound();
+    this.clearAreaTimer();
   }
 
   /** Whether a route is being walked, which decides whether to start anything. */
@@ -751,6 +791,11 @@ export class AutoCombat {
     const words = command.trim().split(/\s+/);
     if (name !== null && ATTACK_COMMANDS.has(name) && words.length > 1) this.combatAction = null;
     if (name === 'Cast' && words.length > 2) this.combatAction = words[1] ?? null;
+    // What the player typed replaces the room spell the fight was repeating.
+    if (name === 'Cast' || (name !== null && ATTACK_COMMANDS.has(name))) {
+      this.areaEngaged = this.isArea(name === 'Cast' ? (words[1] ?? null) : null);
+      if (this.areaEngaged) this.areaSeenAt = Date.now();
+    }
   }
 
   /**
@@ -777,10 +822,23 @@ export class AutoCombat {
       case 'user-misses':
       case 'mob-hits':
       case 'mob-misses':
+        // A round of the room spell is a round like any: it is still going.
+        if (this.areaEngaged) this.areaSeenAt = Date.now();
         this.armRound();
         return;
 
       case 'spell-ineffective':
+        /*
+         * `in this room` is the room spell with nothing to hit — the room is
+         * empty, or the server is still repeating it after the last kill —
+         * and not the spell failing. Read as a failure it marked the room
+         * spell ineffective after the fight had ended, and the next room of
+         * fifteen dogs was fought with the single-target spell (2026-09-23).
+         */
+        if (block.groups['room'] !== undefined) {
+          if (this.state !== null) this.breakOffEmptyRoom(this.state);
+          return;
+        }
         this.noteIneffective();
         return;
       case 'spell-cast':
@@ -898,7 +956,22 @@ export class AutoCombat {
      */
     if (switching) return;
     // A fight that has ended takes its opener and its round cycle with it.
-    if (was?.inCombat && !state.inCombat) this.endFight();
+    if (was?.inCombat && !state.inCombat) {
+      this.endFight();
+      // Switched off by a cast of this character's own: engage again at once.
+      if (this.reopen) {
+        this.reopen = false;
+        this.opened.clear();
+      }
+    }
+    if (this.areaDecision(state)) return;
+    /*
+     * A cast of this character's own went out mid-fight and has not been
+     * answered: the `*Combat Off*` it brings is what the next swing waits for.
+     * A room-spell fight has no target, so without this the swing back went
+     * out four milliseconds after the heal, into the fight still running.
+     */
+    if (this.reopen && state.inCombat) return;
 
     if (was) {
       // Moving on ends a break's stand-down: a fresh room is back under the
@@ -1284,6 +1357,8 @@ export class AutoCombat {
    */
   quarry(state: CharacterState): boolean {
     if (!this.acting) return false;
+    // The room spell is still working on what is here: not a room to leave.
+    if (this.areaEngaged && state.room.occupants.some((who) => who.kind === 'mob')) return true;
     if (
       this.config.engage === 'none' &&
       this.assistTarget(state) === null &&
@@ -1717,7 +1792,105 @@ export class AutoCombat {
    * because every dog in the room shares the name.
    */
   openAgain(): void {
-    this.opened.clear();
+    /*
+     * On the `*Combat Off*` that answers it, not at the send: cleared at the
+     * send, the next state change swung again while the fight was still on,
+     * and three `c spir` went into a room the round had already emptied.
+     */
+    if (this.state?.inCombat === true) this.reopen = true;
+    else this.opened.clear();
+    // The cast replaced the room spell the fight was repeating.
+    this.dropArea();
+  }
+
+  /**
+   * Each death while the room spell is engaged, decided — see `areaEngaged`.
+   * True when it has answered the line and nothing else here should.
+   *
+   * - **Nothing left**: `break`, since the server would go on casting into
+   *   the empty room and every room after it.
+   * - **Still worth the room spell** (the crowd, the mana, nothing here to
+   *   spare — `castable`'s own test): nothing, because the server is already
+   *   repeating it, and a cast now only re-engages the fight with itself.
+   *   That re-cast is what put three `c spir` into a room the round had
+   *   already emptied (2026-09-23).
+   * - **Not any more**: let go, and the ordinary decision opens on one of
+   *   what is left with the single-target spell, which re-engages the fight
+   *   with it — below `areaMinMobs`, or under its mana floor.
+   *
+   * A room spell no round has been seen of for two rounds is taken to have
+   * stopped — out of mana, or broken some way nothing here read.
+   */
+  private areaDecision(state: CharacterState): boolean {
+    if (!this.areaEngaged || !this.acting || this.movePending) return false;
+    if (Date.now() - this.areaSeenAt > tuning().spells.castRoundMs * 2) {
+      this.dropArea();
+      return false;
+    }
+    // Nothing left is nothing left, however the burst ends: break at once.
+    if (this.breakOffEmptyRoom(state)) return true;
+    if (this.castable(state, { preAttack: false })?.area === true) {
+      this.clearAreaTimer();
+      return true;
+    }
+    /*
+     * Too few for the room spell — but only once the burst is over and the
+     * room has been read again (`SessionManager.rereadRoom`), because the
+     * count halfway through a burst is not the count at its end. Held until
+     * then; decided again on whatever the room says by then.
+     */
+    if (this.areaTimer === null) {
+      this.areaTimer = setTimeout(() => {
+        this.areaTimer = null;
+        const now = this.state;
+        if (now === null || !this.areaEngaged) return;
+        if (this.breakOffEmptyRoom(now)) return;
+        if (this.castable(now, { preAttack: false })?.area === true) return;
+        this.dropArea();
+        // The room spell's opening holds the name it was aimed at; the switch
+        // is a new decision, not a second ask about that one.
+        this.opened.clear();
+        this.onCharacter(now);
+      }, tuning().combat.areaSettleMs);
+      this.areaTimer.unref?.();
+    }
+    return true;
+  }
+
+  private dropArea(): void {
+    this.areaEngaged = false;
+    this.clearAreaTimer();
+  }
+
+  private clearAreaTimer(): void {
+    if (this.areaTimer === null) return;
+    clearTimeout(this.areaTimer);
+    this.areaTimer = null;
+  }
+
+  /**
+   * `break`, when the room holds no monster — MegaMUD's own command at this
+   * point (the player's transcript, 2026-09-23). Reached from `areaDecision`,
+   * and from the server saying so outright (`Your spell has no effect in this
+   * room!`), which breaks it off whatever this module believed was engaged.
+   * True when it went out.
+   */
+  private breakOffEmptyRoom(state: CharacterState): boolean {
+    if (!this.acting || this.movePending) return false;
+    if (state.room.occupants.some((who) => who.kind !== 'player')) return false;
+    this.dropArea();
+    return this.queue.enqueue({
+      command: 'break',
+      priority: 'combat',
+      coalesceKey: 'break-area',
+      expiresAt: Date.now() + tuning().combat.roundMs * 20,
+      reason: t('automation.combat.reasonBreakArea')
+    });
+  }
+
+  private isArea(spell: string | null): boolean {
+    const area = this.spells.areaAttack.trim();
+    return spell !== null && area.length > 0 && this.sameSpell(spell, area);
   }
 
   /**
@@ -1788,6 +1961,8 @@ export class AutoCombat {
     }
     if (cast !== null) this.proposeCast(cast.spell, now);
     this.combatAction = cast?.spell ?? null;
+    this.areaEngaged = this.isArea(this.combatAction);
+    if (this.areaEngaged) this.areaSeenAt = now;
     /*
      * Not announced, unlike an escape.
      *
@@ -2121,6 +2296,8 @@ export class AutoCombat {
   /** The fight's action changed by a command this module just sent. */
   private switchTo(spell: string | null, target: string, now: number): void {
     this.combatAction = spell;
+    this.areaEngaged = this.isArea(spell);
+    if (this.areaEngaged) this.areaSeenAt = now;
     this.switching = {
       until: now + tuning().combat.roundMs * 20,
       key: mobKey(target),
