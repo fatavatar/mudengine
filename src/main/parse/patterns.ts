@@ -1685,8 +1685,15 @@ export const RULES: Rule[] = [
     // `for nothing` is the free purchase's own spelling, captured live beside
     // `for 0 copper farthings` (2026-09-01, a scroll of minor healing): both
     // are on the wire and the second was read while the first was not.
+    //
+    // And any other price as `cost`, unconverted: a realm can quote a purchase
+    // in several denominations and a currency of its own — `for 6 Krabby
+    // Patties, 44 platinum pieces, 80 gold crowns.` (live, 2026-09-23). That
+    // line matched nothing, so the amber talisman bought for a route never
+    // read as carried and the route was never walked. The purse is left for
+    // the next listing to restate.
     pattern:
-      /^You just bought (?:(?<quantity>\d+) )?(?<item>[\w ]+) for (?:(?<price>\d+) copper farthings|nothing)\.$/
+      /^You just bought (?:(?<quantity>\d+) )?(?<item>[\w ]+) for (?:(?<price>\d+) copper farthings|nothing|(?<cost>.+?))\.$/
   },
   /*
    * Selling, captured beside the buying line it mirrors:

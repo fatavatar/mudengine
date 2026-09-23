@@ -3461,6 +3461,16 @@ describe('what is carried, between listings', () => {
     expect(gloves(tracker)).toHaveLength(3);
   });
 
+  // Priced in the realm's own currency and several coins (live, 2026-09-23):
+  // still carried, and the purse left for the next listing to restate.
+  it('carries what was bought for a price in several denominations', () => {
+    const { tracker, feed } = twoPairs();
+    const wealth = tracker.current.inventory.wealth;
+    feed('You just bought padded gloves for 6 Krabby Patties, 44 platinum pieces, 80 gold crowns.');
+    expect(gloves(tracker)).toHaveLength(3);
+    expect(tracker.current.inventory.wealth).toBe(wealth);
+  });
+
   /* The replay across a listing counts too: a listing that predates a
      counted drop must lose that many. */
   it('replays a counted change that landed inside a listing', () => {

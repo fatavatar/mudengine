@@ -1256,6 +1256,25 @@ describe('buying and selling', () => {
     expect(g).toMatchObject({ item: 'quarterstaff', price: '0' });
   });
 
+  // Live, 2026-09-23: a price in several denominations and the realm's own
+  // currency. Read as bought, the cost kept unconverted.
+  it('reads a purchase priced in several denominations', () => {
+    const g = expectType(
+      'You just bought amber talisman for 6 Krabby Patties, 44 platinum pieces, 80 gold crowns.',
+      'user-buys'
+    );
+    expect(g).toMatchObject({
+      item: 'amber talisman',
+      cost: '6 Krabby Patties, 44 platinum pieces, 80 gold crowns'
+    });
+    expect(g['price']).toBeUndefined();
+  });
+
+  it('reads a free purchase', () => {
+    const g = expectType('You just bought black star key for nothing.', 'user-buys');
+    expect(g).toMatchObject({ item: 'black star key' });
+  });
+
   it('reads what was sold, which mirrors it', () => {
     const g = expectType('You sold quarterstaff for 0 copper farthings.', 'user-sells');
     expect(g).toMatchObject({ item: 'quarterstaff', price: '0' });
