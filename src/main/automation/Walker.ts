@@ -74,7 +74,7 @@ import {
 import type { Block } from '../../shared/blocks';
 import { REREAD_ROOM } from '../../shared/commands';
 import { isBlinding, type CharacterState } from '../../shared/character';
-import { resumeAtHealth, type AutomationConfig } from '../../shared/config';
+import { manaHolding, resumeAtHealth, type AutomationConfig } from '../../shared/config';
 import { splitSpells } from '../../shared/spell-messages';
 import { t } from '../app/i18n';
 import type { CommandQueue } from './CommandQueue';
@@ -279,6 +279,8 @@ export interface WalkerEvents {
    * before it existed.
    */
   restInFlight?(): boolean;
+  /** A room re-read owed after a monster came, went or died. See `holdForRoom`. */
+  roomUnsettled?(): boolean;
   /**
    * A fresh route from where the character is *now* to where it was going.
    *
@@ -3379,8 +3381,12 @@ export class Walker {
      * because a rest is only ever asked for with nothing swinging.
      */
     if (this.holdForRest(state)) return true;
+    // A room being read again after a monster came, went or died.
+    if (this.holdForRoom(state)) return true;
     // Health, and outside the beat's budget — see `holdForHealth`.
     if (this.holdForHealth(state)) return true;
+    // Mana, on the same terms — see `holdForMana`.
+    if (this.holdForMana(state)) return true;
     // Then a condition the server has stated, on the same terms.
     if (this.holdForAffliction(state)) return true;
     // Then the trap the step ahead fires, on the same terms again.
@@ -4079,6 +4085,77 @@ export class Walker {
       if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
       this.sendCurrent();
     }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  /**
+   * Mana, on the health hold's own terms: under `meditateBelow` the walk
+   * stands still, and it walks on at `resumeAtMana` — hysteresis, unbounded
+   * by `maxHolds`, and unknown never holds. `Recovery` meditates while it
+   * stands; a step would stand the character straight back up, which is what
+   * skinny's lap did from 46% all the way round (2026-09-23).
+   */
+  private holdForMana(state: CharacterState): boolean {
+    const { mana, manaMax } = state.vitals;
+    const low =
+      this.holdWhenHurt &&
+      manaHolding(
+        this.config.health,
+        mana,
+        manaMax,
+        this.hold === 'mana',
+        tuning().loop.resumeMarginWhenUncapped
+      );
+    if (!low) {
+      if (this.hold === 'mana') {
+        this.hold = null;
+        if (!this.quiet) this.events.notice?.(t('automation.walk.manaResumed'));
+        this.publish();
+      }
+      return false;
+    }
+    if (this.hold === null) {
+      this.hold = 'mana';
+      if (!this.quiet) this.events.notice?.(t('automation.walk.manaHolding'));
+      this.publish();
+    }
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  /**
+   * A beat while the room is being read again: a monster came, went or died,
+   * and the Enter that says who is left has not been answered
+   * (`SessionManager.rereadRoom`). Stepping out first is walking away from
+   * whatever that answer names. Bounded by the owed window, so it cannot
+   * pin a walk; said nowhere, because it is a second at most.
+   */
+  private holdForRoom(state: CharacterState): boolean {
+    if (this.events.roomUnsettled?.() !== true) {
+      if (this.hold === 'room') {
+        this.hold = null;
+        this.publish();
+      }
+      return false;
+    }
+    if (this.hold === null) {
+      this.hold = 'room';
+      this.publish();
+    }
+    // Asked again on the re-read's own beat: its answer is half a second away.
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().combat.lookAfterKillMs);
     this.holdTimer.unref?.();
     return true;
   }

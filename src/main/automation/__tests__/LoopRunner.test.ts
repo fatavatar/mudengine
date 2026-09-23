@@ -1233,6 +1233,27 @@ describe('losing the connection', () => {
     expect(walked).toEqual(['Arena', 'Road']);
   });
 
+  /* Mana, on the health hold's terms (skinny, 2026-09-23). */
+  it('holds the lap under meditateBelow and walks on a margin above it', () => {
+    const { planner: p } = planner();
+    const notices: string[] = [];
+    const runner = new LoopRunner(p, { notice: (m) => notices.push(m) });
+    runner.configure({ ...DEFAULT_CONFIG.automation.health, restBelow: 0, meditateBelow: 0.5 });
+    runner.start(loop, state());
+    const mana = (figure: number): CharacterState =>
+      state({
+        vitals: { ...EMPTY_CHARACTER.vitals, hp: 100, hpMax: 100, mana: figure, manaMax: 100 }
+      });
+    runner.onCharacter(mana(42));
+    expect(runner.progress.hold).toBe('mana');
+    expect(notices).toContain(t('automation.loops.lowMana'));
+    runner.onCharacter(mana(55));
+    expect(runner.progress.hold).toBe('mana');
+    runner.onCharacter(mana(61));
+    expect(notices).toContain(t('automation.loops.manaBack'));
+    expect(runner.progress.hold).toBeNull();
+  });
+
   it('does not claim to walk on while the health floor still holds it', () => {
     const { planner: p, walked } = planner();
     const notices: string[] = [];

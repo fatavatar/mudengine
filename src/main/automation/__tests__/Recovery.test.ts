@@ -601,6 +601,25 @@ describe('meditating', () => {
     expect(sent).toEqual([]);
   });
 
+  /*
+   * The mana half of `restTo`: a cast that broke the meditation above
+   * `meditateBelow` must not leave the character standing while the walk
+   * holds on for the margin (skinny, 2026-09-23).
+   */
+  it('meditates again after a break until the figure a held walk resumes at', () => {
+    vi.advanceTimersByTime(10_000);
+    const auto = make(health({ meditateBelow: 0.5 }));
+    auto.onCharacter(state({ mana: 45, manaMax: 100, meditating: true }));
+    auto.onCharacter(state({ mana: 55, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual(['med']);
+    sent.length = 0;
+    vi.advanceTimersByTime(10_000);
+    auto.onCharacter(state({ mana: 61, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual([]);
+  });
+
   /* Health first: the one that decides whether the character is alive. */
   it('rests rather than meditating when both are low', () => {
     make(health({ restBelow: 0.5, meditateBelow: 0.5 })).onCharacter(

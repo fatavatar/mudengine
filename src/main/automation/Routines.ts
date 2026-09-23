@@ -118,6 +118,8 @@ export class Routines {
   private askedAbilities = false;
   /** When the stat sheet was last asked for to settle a buff ending; null is never. */
   private sheetAskedAt: number | null = null;
+  /** A sheet asked for inside `sheetAskMs` of the last, sent when that has passed. */
+  private sheetTimer: NodeJS.Timeout | null = null;
   /** The wrong-book correction has run, so it can only run once. */
   private bookCorrected = false;
 
@@ -135,6 +137,7 @@ export class Routines {
   /** New connection: forget that we ever probed, and who we looked at. */
   reset(): void {
     this.sheetAskedAt = null;
+    this.stopSheetTimer();
     this.probed = false;
     this.toLookAt = [];
     this.lookedAt.clear();
@@ -556,7 +559,25 @@ export class Routines {
    */
   askSheet(now: number = Date.now()): void {
     if (!this.config.enabled) return;
-    if (this.sheetAskedAt !== null && now - this.sheetAskedAt < tuning().spells.sheetAskMs) return;
+    const floor = tuning().spells.sheetAskMs;
+    if (this.sheetAskedAt !== null && now - this.sheetAskedAt < floor) {
+      /*
+       * Deferred, not dropped: a cast whose start is being learned, or a
+       * watchdog checking a shield, still wants its answer once the floor
+       * has passed, and nothing else will ask again (2026-09-23).
+       */
+      if (this.sheetTimer === null) {
+        this.sheetTimer = setTimeout(
+          () => {
+            this.sheetTimer = null;
+            this.askSheet();
+          },
+          floor - (now - this.sheetAskedAt)
+        );
+        this.sheetTimer.unref?.();
+      }
+      return;
+    }
     this.sheetAskedAt = now;
     this.queue.enqueue({
       command: 'st',
@@ -679,6 +700,13 @@ export class Routines {
 
   dispose(): void {
     this.stopIdle();
+    this.stopSheetTimer();
+  }
+
+  private stopSheetTimer(): void {
+    if (this.sheetTimer === null) return;
+    clearTimeout(this.sheetTimer);
+    this.sheetTimer = null;
   }
 
   private armIdle(): void {

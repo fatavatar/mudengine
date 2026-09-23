@@ -216,7 +216,10 @@ function attention(
    */
   if (
     view.loop.status === 'running' &&
-    (view.loop.hold === 'retreated' || view.loop.hold === 'health' || view.loop.hold === 'resting')
+    (view.loop.hold === 'retreated' ||
+      view.loop.hold === 'health' ||
+      view.loop.hold === 'mana' ||
+      view.loop.hold === 'resting')
   ) {
     return { level: 'info', label: t('tabs.tab.markRecovering') };
   }
@@ -259,7 +262,10 @@ function attention(
     // `resting` is the beat a step waits for a rest this client has just asked
     // for (todo 14). Short, but a tab reading `walking` for a character that is
     // sitting down is the thing these branches exist to prevent.
-    (view.walk.hold === 'health' || view.walk.hold === 'trap' || view.walk.hold === 'resting')
+    (view.walk.hold === 'health' ||
+      view.walk.hold === 'mana' ||
+      view.walk.hold === 'trap' ||
+      view.walk.hold === 'resting')
   ) {
     return { level: 'info', label: t('tabs.tab.markRecovering') };
   }

@@ -467,10 +467,10 @@ const TUNING_DEFAULTS = {
      */
     lookAfterKillMs: 400,
     /**
-     * How long an arrival sentence stays pending its own state change. Short,
-     * because what it bounds is the case where the change never comes.
+     * How long a room re-read owed after a monster came, went or died holds
+     * walking and resting still, when its answer never comes.
      */
-    arrivalWindowMs: 2000,
+    roomOwedMs: 3000,
     /**
      * How long a typed `break` stands auto-combat down. The stand-down ends
      * early when the player attacks or the room changes; this is the backstop
@@ -585,6 +585,33 @@ const TUNING_DEFAULTS = {
      * or a potion prints much later.
      */
     onsetWindowMs: 3000,
+    /**
+     * How long a cast the server did not confirm by name keeps its burst open.
+     * Only the command named the spell (`c undd`), and the burst may print the
+     * cast's own chatter before the effect's sentence (`The undead skin builds
+     * on your body…`, then `You are covered in a layer of undead skin.`), so
+     * the last unread line of it is the onset: learned once a line arrives
+     * this long after it.
+     */
+    onsetSettleMs: 500,
+    /**
+     * The quiet that separates two rounds' blows. The server prints a round
+     * as one burst on its tick, five seconds apart on Paramud; the first blow
+     * after this long is a new round, which reopens the one heal, blessing or
+     * cure a round allows (`CastRound`).
+     */
+    roundGapMs: 1500,
+    /**
+     * How long a round's cast holds the gate when no round is seen to begin
+     * — a fight whose rounds print nothing — before the next may go anyway.
+     */
+    castRoundMs: 6000,
+    /**
+     * How soon after a heal, blessing or cure went out a `You have already
+     * cast a spell this round!` is taken as its answer — and the cast as
+     * failed, to go again next round.
+     */
+    refusedWindowMs: 2000,
     /**
      * How long an unread sentence is kept as a possible ending for the buffs
      * whose ending the client does not know, waiting for an `st` sheet to say

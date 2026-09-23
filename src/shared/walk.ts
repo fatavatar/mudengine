@@ -160,6 +160,10 @@ export type WalkHold =
   | 'barrier'
   | 'searching'
   | 'resting'
+  /** Mana under `meditateBelow`, standing still until `resumeAtMana`. */
+  | 'mana'
+  /** A room re-read after a monster came, went or died, not yet answered. */
+  | 'room'
   /** A room too dark to read, while the light that fixes it is on its way. */
   | 'dark'
   /** Waiting out what the realm's message table says is on the character. */

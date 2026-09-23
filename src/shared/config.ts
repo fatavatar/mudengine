@@ -1522,6 +1522,18 @@ export interface HealthConfig {
    */
   meditateBelow: number;
   /**
+   * Keep meditating, and keep a walk or lap standing still, until mana
+   * reaches this fraction. 0 is `meditateBelow` plus a small margin
+   * (`tuning.loop.resumeMarginWhenUncapped`), which is what the hold did
+   * before this was a setting.
+   *
+   * The mana half of `restTo`, asked for on 2026-09-23: skinny's lap walked
+   * on at 42% with `meditateBelow` at 50%, and the hold that fixed it needed
+   * a figure to let go at. Clamped up to `meditateBelow` for `restTo`'s
+   * reason — a `to` under the `below` is two opposite instructions.
+   */
+  meditateTo: number;
+  /**
    * What to use, and when — *use an item of this name when that is true*
    * (todo 19, 2026-09-12; the only potion setting since todo 00).
    *
@@ -2617,6 +2629,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       restNextDoor: true,
       restBeforeTraps: 0.45,
       meditateBelow: 0,
+      meditateTo: 0,
       potions: []
     },
     loot: {
@@ -3621,6 +3634,7 @@ function normalizeHealth(value: unknown): HealthConfig {
   const raw = isRecord(value) ? value : {};
   const d = DEFAULT_CONFIG.automation.health;
   const restBelow = fraction(raw['restBelow'], d.restBelow);
+  const meditateBelow = fraction(raw['meditateBelow'], d.meditateBelow);
   return {
     restBelow,
     /*
@@ -3635,7 +3649,12 @@ function normalizeHealth(value: unknown): HealthConfig {
     })(),
     restNextDoor: bool(raw['restNextDoor'], d.restNextDoor),
     restBeforeTraps: fraction(raw['restBeforeTraps'], d.restBeforeTraps),
-    meditateBelow: fraction(raw['meditateBelow'], d.meditateBelow),
+    meditateBelow,
+    // Clamped up to `meditateBelow`, as `restTo` is to `restBelow`; 0 stays 0.
+    meditateTo: (() => {
+      const to = fraction(raw['meditateTo'], d.meditateTo);
+      return to === 0 ? 0 : Math.max(to, meditateBelow);
+    })(),
     potions: normalizePotionRules(raw['potions'])
   };
 }
@@ -4270,6 +4289,39 @@ function normalizeLogging(value: unknown): LoggingConfig {
 export function resumeAtHealth(health: HealthConfig, marginWhenUncapped: number): number {
   if (health.restTo > 0) return health.restTo;
   return Math.min(1, health.restBelow + marginWhenUncapped);
+}
+
+/**
+ * The mana fraction a walk or lap held for mana walks on again at — the
+ * mana half of `resumeAtHealth`: `meditateTo` where it is set, and otherwise
+ * the uncapped margin above `meditateBelow`. 0 where meditating is off.
+ *
+ * Reported 2026-09-23 on skinny: `med` went out at 46% and the next step of
+ * the lap stood the character straight back up, so it walked the rest of the
+ * lap between 42% and 44% with `meditateBelow` at 50%. Health had a hold and
+ * mana had only the command.
+ */
+export function resumeAtMana(health: HealthConfig, marginWhenUncapped: number): number {
+  if (health.meditateBelow <= 0) return 0;
+  if (health.meditateTo > 0) return Math.max(health.meditateTo, health.meditateBelow);
+  return Math.min(1, health.meditateBelow + marginWhenUncapped);
+}
+
+/**
+ * Whether mana is under the figure a walk may travel at — `meditateBelow`
+ * going down, `resumeAtMana` while already held. Unknown is not low.
+ */
+export function manaHolding(
+  health: HealthConfig,
+  mana: number | null,
+  manaMax: number | null,
+  held: boolean,
+  marginWhenUncapped: number
+): boolean {
+  if (health.meditateBelow <= 0) return false;
+  if (mana === null || manaMax === null || manaMax <= 0) return false;
+  const floor = held ? resumeAtMana(health, marginWhenUncapped) : health.meditateBelow;
+  return mana / manaMax < floor;
 }
 
 /** The connection target implied by the config, for the command strip. */

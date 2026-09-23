@@ -166,6 +166,22 @@ export interface ActiveBuff {
    * whichever of them it really is. Absent when the buff was named by a cast.
    */
   candidates?: readonly string[];
+  /**
+   * Set when this character's own cast established it, so `appliedAt` is the
+   * cast. Absent for a buff first seen on the sheet or cast by somebody else,
+   * whose `appliedAt` is only when the client noticed it — and a duration
+   * measured from that is a lie in the direction that recasts early (a
+   * hellfire shield on the login sheet ended 29s later, and was recast every
+   * 36s from then on, 2026-09-23). Only these are timed.
+   */
+  cast?: true;
+  /**
+   * Epoch ms of the last `st` sheet that printed it. Present means the sheet
+   * speaks for this effect, so its watchdog can ask the sheet before recasting
+   * (`Blessings`), and a sheet that still lists it past the watchdog says the
+   * clock was wrong.
+   */
+  listedAt?: number;
 }
 
 /**

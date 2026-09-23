@@ -428,3 +428,24 @@ describe('choosing the heal from the spellbook', () => {
     expect(sent).toEqual(['c mahe Soul']);
   });
 });
+
+/*
+ * One heal or blessing a round (skinny, 2026-09-23): a second is refused, and
+ * the refusal switches the fight off.
+ */
+describe('the one cast a round allows', () => {
+  it('holds a heal mid-fight while this round’s cast is spent, and says when one goes', () => {
+    let open = false;
+    let told = 0;
+    const heal = make(spells({ heal: 'minor healing', healBelow: 0.5 }));
+    heal.useCastGate({ mayCast: () => open, noteCast: () => (told += 1) });
+    heal.onCharacter({ ...state({ hp: 20, hpMax: 100 }), inCombat: true });
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual([]);
+    open = true;
+    heal.onCharacter({ ...state({ hp: 19, hpMax: 100 }), inCombat: true });
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['c minor healing']);
+    expect(told).toBe(1);
+  });
+});

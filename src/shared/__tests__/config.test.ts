@@ -9,6 +9,7 @@ import {
   DEFAULT_CONFIG,
   readAutomationSwitch,
   normalizeConfig,
+  resumeAtMana,
   resolveTerminalFonts,
   resolveUiFonts,
   targetFromConfig,
@@ -516,6 +517,20 @@ describe('the resting pair', () => {
       restBelow: 0.6,
       restTo: 0
     });
+  });
+
+  /* The mana half (2026-09-23): the same order, and the same 0. */
+  it('lifts a meditate ceiling under its floor, and leaves 0 alone', () => {
+    expect(health({ meditateBelow: 0.5, meditateTo: 0.3 }).meditateTo).toBe(0.5);
+    expect(health({ meditateBelow: 0.5, meditateTo: 80 }).meditateTo).toBe(0.8);
+    expect(health({ meditateBelow: 0.5 }).meditateTo).toBe(0);
+  });
+
+  it('resumes a walk held for mana at the ceiling, or a margin above the floor', () => {
+    const base = health({ meditateBelow: 0.5 });
+    expect(resumeAtMana(base, 0.1)).toBeCloseTo(0.6);
+    expect(resumeAtMana({ ...base, meditateTo: 0.9 }, 0.1)).toBe(0.9);
+    expect(resumeAtMana({ ...base, meditateBelow: 0 }, 0.1)).toBe(0);
   });
 
   it('lets 0 mean never', () => {

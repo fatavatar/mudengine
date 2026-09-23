@@ -804,9 +804,15 @@ export const RULES: Rule[] = [
      * `You` as self. Below the `on` frame so a targeted cast matches that
      * first, and the `duration` gate in the tracker keeps an offensive
      * `You cast X, and it explodes!` off the buff list.
+     *
+     * The flavour need not open with `and`: Paramud's `You cast aura of
+     * undeath, surrounding everyone in the room with a black glow!` (captured
+     * 2026-09-23) fell through to the message table's `You cast %s!`, which
+     * took the whole tail for the spell's name. A spell's name holds no comma,
+     * so the first one ends it whatever follows.
      */
     type: 'spell-cast',
-    pattern: /^(?<caster>You) cast (?<spell>[\w' -]+?), and .+[.!]$/
+    pattern: /^(?<caster>You) cast (?<spell>[\w' -]+?), .+[.!]$/
   },
   /*
    * A kai power's confirmation does not say `cast` at all. `You invoke the
@@ -1140,6 +1146,18 @@ export const RULES: Rule[] = [
     type: 'mob-arrives-room',
     pattern:
       /^(?:(?:A|An|The) )?(?<line>.+?) (?:in(?:to)? the room from|in from) (?:the )?(?<direction>[\w ]+)[.!]$/
+  },
+  /*
+   * A monster walking out — the other half of the arrival, and data the same
+   * way: the server's table writes `The %s leaves to the %s.` and `%s just
+   * left to the %s.`. No live capture has one yet (2026-09-23); the frame is
+   * read off the table, and a player's one-word `just left to` is claimed by
+   * `player-leaves-room` above. Everything before the verb is the name.
+   */
+  {
+    type: 'mob-leaves-room',
+    pattern:
+      /^(?:(?:A|An|The) )?(?<mob>[\w' -]+?) (?:just left|leaves) (?:to (?:the )?)?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down|upwards|downwards|above|below)[.!]$/
   },
   /*
    * The one death sentence the server composes itself. `Mob.cs:1235` prints

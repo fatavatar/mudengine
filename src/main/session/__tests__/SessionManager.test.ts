@@ -5912,6 +5912,43 @@ describe('the fight of 2026-09-22', () => {
     expect(sent().filter((line) => line === '').length).toBe(before + 1);
   });
 
+  /*
+   * The player (2026-09-23): *ALWAYS be sending enter after a monster dies,
+   * leaves the room, or enters the room*. Fifteen dogs walked in on skinny,
+   * were counted as one, and the character sat down and walked off after the
+   * first kill. A burst of arrivals is every one of them on the list, and one
+   * Enter once the burst is in.
+   */
+  it('counts every monster that walks in, and reads the room once after the burst', async () => {
+    const { socket, seen } = await inTheForest();
+    const sent = (): string[] =>
+      seen()
+        .split(/\r\n?|\n/)
+        .slice(0, -1);
+    const before = manager!.character.room.occupants.length;
+    const enters = sent().filter((line) => line === '').length;
+    socket.write(
+      'A dark goblin moves into the room from the north.\r\n'.repeat(3) + '[HP=240/MA=214]:\r\n'
+    );
+    await until(() => manager!.character.room.occupants.length === before + 3);
+    await until(() => sent().filter((line) => line === '').length > enters);
+    await new Promise((resolve) => setTimeout(resolve, tuning().combat.lookAfterKillMs + 200));
+    expect(sent().filter((line) => line === '').length).toBe(enters + 1);
+  });
+
+  it('reads the room after a monster walks out', async () => {
+    const { socket, seen } = await inTheForest();
+    const sent = (): string[] =>
+      seen()
+        .split(/\r\n?|\n/)
+        .slice(0, -1);
+    const before = manager!.character.room.occupants.length;
+    const enters = sent().filter((line) => line === '').length;
+    socket.write('The dark goblin leaves to the north.\r\n[HP=240/MA=214]:\r\n');
+    await until(() => manager!.character.room.occupants.length === before - 1);
+    await until(() => sent().filter((line) => line === '').length > enters);
+  });
+
   it('goes on fighting after an attack on a goblin that has already died is said out loud', async () => {
     const { socket, seen, notices } = await inTheForest();
     socket.write(ROUND);

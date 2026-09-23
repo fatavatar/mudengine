@@ -232,6 +232,19 @@ export class Belongings implements BelongingsSink {
     this.schedule();
   }
 
+  /**
+   * Drops a measured duration the sheet has shown to be wrong — the buff was
+   * still printed after it ran out (`Blessings.askFirst`). The shipped
+   * watchdog stands in until a cast and its checked ending measure it again.
+   */
+  forgetSpellDuration(spell: string): void {
+    if (this.suspended) return;
+    const key = spell.trim().toLowerCase();
+    if (!(key in this.durations)) return;
+    delete this.durations[key];
+    this.schedule();
+  }
+
   /** Writes anything outstanding and stops the timer. Safe to call twice. */
   close(): void {
     if (this.timer) {

@@ -265,6 +265,8 @@ describe('a character', () => {
         // Absent above, and on: a blank field must not sit a character down in a lair.
         restNextDoor: true,
         meditateBelow: 0.25,
+        // Absent, and 0: the margin above the floor, as before it was a setting.
+        meditateTo: 0,
         // The rules list, empty where the payload states none.
         potions: []
       });
@@ -338,6 +340,7 @@ describe('a character', () => {
         // Absent above, and on: a blank field must not sit a character down in a lair.
         restNextDoor: true,
         meditateBelow: 0,
+        meditateTo: 0,
         // The rules list, empty where the payload states none.
         potions: []
       });

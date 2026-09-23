@@ -10,17 +10,25 @@ import {
   parseSpellMessagesCsv,
   SpellMessageBook,
   spellLoreOf,
+  withRealmSpellNames,
+  type RealmSpellRow,
   type SpellLore
 } from '../../../shared/spell-messages';
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** The table that ships, exactly as `index.ts` loads it. */
-function shippedSpellLore(): SpellLore {
+/**
+ * The table that ships, exactly as `index.ts` loads it — laid under a realm's
+ * own spell names where a test gives some, as `spellLoreFor` does.
+ */
+function shippedSpellLore(realm: readonly RealmSpellRow[] = []): SpellLore {
   const rows = parseSpellMessagesCsv(
     fs.readFileSync(path.resolve('resources/world/spell-messages.csv'), 'utf8')
   );
-  return spellLoreOf(SpellMessageBook.fromRows(rows), new SpellMessageBook());
+  return spellLoreOf(
+    SpellMessageBook.fromRows(withRealmSpellNames(rows, realm)),
+    new SpellMessageBook()
+  );
 }
 
 /**
@@ -39,6 +47,8 @@ function feeder(
   tracker: CharacterTracker;
   feed: (text: string, terminator?: 'newline' | 'flush') => string;
   ask: (command: string) => void;
+  /** A command the tracker sees going out as well, as `SessionManager` sends one. */
+  send: (command: string) => void;
   at: () => number;
 } {
   const classifier = new Classifier(
@@ -68,7 +78,16 @@ function feeder(
     if (batch) tracker.apply(batch, batch.rows);
     return block.type;
   };
-  return { tracker, feed, ask: (command) => classifier.observeCommand(command), at: stamp };
+  return {
+    tracker,
+    feed,
+    ask: (command) => classifier.observeCommand(command),
+    send: (command) => {
+      classifier.observeCommand(command);
+      tracker.observeCommand(command, stamp());
+    },
+    at: stamp
+  };
 }
 
 describe('a spell that failed to cast', () => {
@@ -371,5 +390,136 @@ describe('a knockdown, through the shipped table and realm', () => {
       feed(release);
       expect(tracker.current.afflictions.held, release).toBe('no');
     }
+  });
+});
+
+/*
+ * Paramud answers its own spells in its own words (skinny and healbot,
+ * 2026-09-23): `c ritu` printed `You begin to chant an evil blood ritual.`,
+ * `c undd` a line of chatter and then the effect, `c rsto` only the effect,
+ * and `c aund` a `You cast …` with no `and`. None named a spell the buff
+ * list could hold, so `Blessings` recast all five every thirty seconds.
+ */
+describe("Paramud's own words for its own spells", () => {
+  const realm: RealmSpellRow[] = [
+    { name: 'pagan ritual', abilities: [[115, 820]] },
+    { name: 'aura of undeath', abilities: [[115, 8542]] }
+  ];
+  const spellbook = (feed: (text: string) => string, send: (command: string) => void): void => {
+    feed('[HP=585/MA=420]:');
+    send('spells');
+    feed('You have the following spells:');
+    feed('Level Mana Short Spell Name');
+    feed(' 10   15   aund  aura of undeath               ');
+    feed(' 24   11   undd  undead armour                 ');
+    feed(' 33   20   ritu  pagan ritual                  ');
+    feed('[HP=585/MA=420]:');
+  };
+  const held = (tracker: CharacterTracker): string[] =>
+    tracker.current.buffs.map((buff) => buff.spell);
+
+  it('names a buff by the command that cast it, under the realm’s name for the sentence', () => {
+    const { tracker, feed, send } = feeder(shippedSpellLore(realm));
+    spellbook(feed, send);
+    send('c ritu');
+    feed('You begin to chant an evil blood ritual.');
+    feed('As you conclude your ritual, Skinny is surrounded by a blood-red aura!');
+    feed('[HP=585/MA=400]:', 'flush');
+    expect(feed('You are affected by a blood ritual!')).toBe('spell-onset');
+    expect(held(tracker)).toEqual(['pagan ritual']);
+  });
+
+  it('reads the flavour after a comma as flavour', () => {
+    const { tracker, feed } = feeder(shippedSpellLore(realm));
+    feed('[HP=585/MA=420]:');
+    expect(
+      feed('You cast aura of undeath, surrounding everyone in the room with a black glow!')
+    ).toBe('spell-cast');
+    feed('You feel safe from good!');
+    expect(held(tracker)).toEqual(['aura of undeath']);
+  });
+
+  /** Skinny's own `st`, with the given effect lines at its foot. */
+  const stat = (
+    feed: (text: string, terminator?: 'newline' | 'flush') => string,
+    send: (command: string) => void,
+    ...effects: string[]
+  ): void => {
+    send('st');
+    feed('Name: Skinny Fatterson                 Lives/CP:      9/5    ');
+    feed('Race: Wood-Elf    Exp: 867628497       Perception:    115');
+    feed('Class: Necrolyte  Level: 51            Stealth:        19');
+    feed('Hits:   585/585   Armour Class: 112/4  Thievery:        0');
+    feed('Mana: * 381/512   Spellcasting: 291    Traps:           0');
+    feed('                                       Picklocks:       0');
+    feed('Strength:  95     Agility: 100         Tracking:        0');
+    feed('Intellect: 80     Health:  110         Martial Arts:   54');
+    feed('Willpower: 120    Charm:   80          MagicRes:      110');
+    for (const effect of effects) feed(effect);
+    feed('[HP=585/MA=381]:', 'flush');
+  };
+
+  /*
+   * The player's procedure, end to end (2026-09-23): cast it, read the sheet
+   * for the line the cast added, then when it wears off read the sheet again
+   * and see the line gone. The chatter the cast printed first is on no sheet,
+   * so it is never the start; and it is no blow.
+   */
+  it('learns the start from the sheet after the cast, and the ending from the sheet after that', () => {
+    const lore = shippedSpellLore(realm);
+    const { tracker, feed, send } = feeder(lore);
+    spellbook(feed, send);
+    stat(feed, send, 'You feel safe from good!');
+    send('c undd');
+    feed('The undead skin builds on your body as you feel protected.');
+    feed('[HP=585/MA=409]:', 'flush');
+    feed('You are covered in a layer of undead skin.');
+    expect(held(tracker)).toContain('undead armour');
+    expect(tracker.current.combat.lastBlowAt ?? null).toBeNull();
+    // The burst goes quiet — prompts only, the feeder's 10ms apart — and
+    // nothing is learned off it: the sheet is asked for instead.
+    for (let tick = 0; tick < 60; tick += 1) feed('[HP=585/MA=409]:', 'flush');
+    expect(lore.startOf('undead armour')).toBeNull();
+    expect(tracker.takeSheetRequest()).toBe(true);
+
+    stat(feed, send, 'You are covered in a layer of undead skin.', 'You feel safe from good!');
+    expect(lore.startOf('undead armour')).toBe('You are covered in a layer of undead skin.');
+
+    feed('The undead skin dissipates and falls from your body.');
+    // Heard, and asked about rather than believed.
+    expect(lore.stopOf('undead armour')).toBeNull();
+    expect(tracker.takeSheetRequest()).toBe(true);
+    stat(feed, send, 'You feel safe from good!');
+    expect(held(tracker)).not.toContain('undead armour');
+    expect(lore.stopOf('undead armour')).toBe(
+      'The undead skin dissipates and falls from your body.'
+    );
+  });
+
+  it('moves an effect the sheet filed unnamed over to the spell that turns out to cast it', () => {
+    const lore = shippedSpellLore(realm);
+    const { tracker, feed, send } = feeder(lore);
+    spellbook(feed, send);
+    stat(feed, send, 'You are covered in a layer of undead skin.');
+    expect(held(tracker)).toEqual(['effect: You are covered in a layer of undead skin.']);
+
+    send('c undd');
+    feed('[HP=585/MA=409]:', 'flush');
+    feed('You are covered in a layer of undead skin.');
+    expect(held(tracker)).toEqual(['undead armour']);
+    stat(feed, send, 'You are covered in a layer of undead skin.');
+    expect(held(tracker)).toEqual(['undead armour']);
+    expect(lore.match('You are covered in a layer of undead skin.')?.starts).toEqual([
+      'undead armour'
+    ]);
+  });
+
+  it('lists nothing for a cast the server turned away', () => {
+    const { tracker, feed, send } = feeder(shippedSpellLore(realm));
+    spellbook(feed, send);
+    send('c undd');
+    feed('You do not have enough mana to cast that spell.');
+    feed('You feel a chill wind!');
+    expect(held(tracker)).toEqual([]);
   });
 });

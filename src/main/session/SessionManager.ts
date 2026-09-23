@@ -39,6 +39,7 @@ import {
 } from '../../shared/monsterRules';
 import { HangUpWatch, PVP_WINDOW_MS, playersHere } from '../automation/HangUp';
 import { AutoCombat } from '../automation/AutoCombat';
+import { CastRound, type CastGate } from '../automation/castRound';
 import { Recovery } from '../automation/Recovery';
 import { AutoDeposit } from '../automation/AutoDeposit';
 import { AutoDrop } from '../automation/AutoDrop';
@@ -879,6 +880,13 @@ export class SessionManager {
   private realmMonsters: readonly MonsterRule[] = [];
   private readonly login: LoginAutomator;
   private readonly recovery: Recovery;
+  /** The one heal, blessing or cure a round allows, shared. See `CastRound`. */
+  private readonly castRound = new CastRound();
+  /**
+   * A room re-read `rereadRoom` asked for and when it went out, until the
+   * listing answers it or `roomOwedMs` passes. See `roomUnsettled`.
+   */
+  private roomOwed: { asked: number; sent: number | null } | null = null;
   private readonly loot: AutoLoot;
   private readonly drop: AutoDrop;
   /** Looking for what a room did not print. See `AutoSearch`. */
@@ -1514,6 +1522,8 @@ export class SessionManager {
       // come back. The same kind of fact as a move in flight, and refused for
       // the same reason -- see `Recovery.restInFlight` and todo 14.
       restInFlight: () => this.recovery.restInFlight,
+      // A room being read again after a monster came, went or died.
+      roomUnsettled: () => this.roomUnsettled(),
       /*
        * A route that stood still for a fight plans again from wherever the
        * fight left the character. Answered here for the reason `holdAt` and
@@ -2372,8 +2382,30 @@ export class SessionManager {
        * fact here that is not the realm's, which is why it is still its own.
        */
       (spell) => this.belongings.recallSpellDurations()[spell.trim().toLowerCase()] ?? null,
-      realmSpell
+      realmSpell,
+      // A watchdog asks the sheet before it recasts, and forgets a measured
+      // duration the sheet has contradicted.
+      {
+        ask: () => this.routines.askSheet(),
+        forget: (spell) => this.belongings.forgetSpellDuration(spell)
+      }
     );
+    /*
+     * One heal, blessing or cure a round, shared by the three that cast between
+     * rounds: a second is refused and the refusal switches the fight off
+     * (`CastRound`).
+     */
+    const gate: CastGate = {
+      mayCast: () => this.castRound.mayCast(),
+      noteCast: () => {
+        this.castRound.noteCast();
+        // Answered `*Combat Off*`: the fight is engaged again at once.
+        if (this.tracker.current.inCombat) this.combat.openAgain();
+      }
+    };
+    this.heal.useCastGate(gate);
+    this.cures.useCastGate(gate);
+    this.blessings.useCastGate(gate);
     /*
      * And the blessing a carried item can give, which is not a cast at all:
      * the realm names a spell on the item and the server lets an unlimited one
@@ -2463,6 +2495,8 @@ export class SessionManager {
         // A rest this client asked for a millisecond ago. The lap waits a beat
         // rather than stepping into it — see `Recovery.restInFlight`, todo 14.
         restInFlight: () => this.recovery.restInFlight,
+        // And into a room whose occupants are being read again.
+        roomUnsettled: () => this.roomUnsettled(),
         // Some other walk is running this character — a `safe-haven` retreat,
         // in practice, which is the one walk that runs while the loop is held.
         walking: () => this.walker.walking,
@@ -2897,27 +2931,58 @@ export class SessionManager {
   }
 
   /**
-   * Something died here: read the room again, so what it dropped is seen.
+   * A monster came, went or died here: read the room again, always
+   * (the player, 2026-09-23 — *ALWAYS be sending enter after a monster dies,
+   * leaves the room, or enters the room*).
    *
-   * The drop itself is rarely announced — a key lies on the floor and only a
-   * look's `You notice … here.` says so — and `AutoLoot` picks up from that
-   * line, including a name the item errand added for the errand's length. Asked after `lookAfterKillMs`, coalesced, so a
-   * kill's two lines (the death sentence, the experience) are one Enter and
-   * the drop lines are in before it.
+   * A death, for what it dropped: the drop is rarely announced, and only a
+   * listing's `You notice … here.` says so, which `AutoLoot` picks up from.
+   * An arrival or a departure, for who is left: fifteen giant war dogs walked
+   * in on skinny, the room was believed empty after the first died, and the
+   * character sat down to meditate and walked off through the other fourteen.
+   *
+   * Asked after `lookAfterKillMs` and coalesced, so a kill's two lines and a
+   * burst of arrivals are one Enter each, with the burst already in. A bare
+   * Enter (`REREAD_ROOM`), never `l`, which is said to everybody here. Not
+   * while a step is unanswered: the room it arrives in is the re-read, and an
+   * Enter now would be read as the move's answer.
+   *
+   * **And nothing walks or sits down until it is answered** (`roomUnsettled`):
+   * a step or a `med` decided before the listing is decided on a room that
+   * may hold what just walked in. Bounded by `roomOwedMs` after the send.
    */
-  private lookAfterKill(): void {
+  private rereadRoom(reason: string): void {
     if (!this.automationConfig.enabled) return;
     if (this.tracker.current.phase !== 'in-game') return;
+    if (this.tracker.pendingMoves > 0) return;
     const now = Date.now();
+    const owed: { asked: number; sent: number | null } = { asked: now, sent: null };
+    this.roomOwed = owed;
     this.queue.enqueue({
       command: REREAD_ROOM,
       priority: 'probe',
-      coalesceKey: 'look-after-kill',
+      coalesceKey: 'room-reread',
       notBefore: now + tuning().combat.lookAfterKillMs,
       expiresAt: now + tuning().session.retreatPatienceMs,
       stillWanted: () => this.tracker.current.phase === 'in-game',
-      reason: t('automation.combat.reasonLookAfterKill')
+      onSent: () => {
+        if (this.roomOwed !== null) this.roomOwed.sent = Date.now();
+      },
+      reason
     });
+  }
+
+  /** Whether a re-read `rereadRoom` asked for is still to be answered. */
+  private roomUnsettled(): boolean {
+    const owed = this.roomOwed;
+    if (owed === null) return false;
+    const now = Date.now();
+    const settled =
+      owed.sent === null
+        ? now - owed.asked >= tuning().session.retreatPatienceMs
+        : now - owed.sent >= tuning().combat.roomOwedMs;
+    if (settled) this.roomOwed = null;
+    return !settled;
   }
 
   /**
@@ -3033,6 +3098,8 @@ export class SessionManager {
     this.remotes.reset();
     this.afk.reset();
     this.heal.reset();
+    this.castRound.reset();
+    this.roomOwed = null;
     this.potions.reset();
     this.cures.reset();
     this.blessings.reset();
@@ -3518,6 +3585,8 @@ export class SessionManager {
     this.remotes.reset();
     this.afk.reset();
     this.heal.reset();
+    this.castRound.reset();
+    this.roomOwed = null;
     this.potions.reset();
     this.cures.reset();
     this.blessings.reset();
@@ -4511,7 +4580,36 @@ export class SessionManager {
      * room the corpse is in either way.
      */
     for (const dead of this.tracker.takeDeaths()) this.noteQuestKilled(dead);
-    if (block.type === 'mob-dies' || block.type === 'user-gain-experience') this.lookAfterKill();
+    if (block.type === 'mob-dies' || block.type === 'user-gain-experience') {
+      this.rereadRoom(t('automation.combat.reasonLookAfterKill'));
+    } else if (block.type === 'mob-arrives-room') {
+      this.rereadRoom(t('automation.combat.reasonLookAfterArrival'));
+    } else if (block.type === 'mob-leaves-room') {
+      this.rereadRoom(t('automation.combat.reasonLookAfterDeparture'));
+    }
+    // The listing that answers it: after the Enter went out, the room's exits.
+    if (block.type === 'room-exits' && this.roomOwed?.sent != null) this.roomOwed = null;
+    /*
+     * The round clock the one heal or blessing a round is kept to: blows
+     * either way mark the rounds, and the server's own refusal spends one.
+     */
+    if (
+      block.type === 'user-hits' ||
+      block.type === 'user-misses' ||
+      block.type === 'mob-hits' ||
+      block.type === 'mob-misses'
+    ) {
+      this.castRound.noteBlow();
+    } else if (block.type === 'spell-refused') {
+      this.castRound.noteCast();
+      // Whichever of them sent the cast it answered has it back, to go again
+      // once the round has passed.
+      this.heal.noteRefused();
+      this.cures.noteRefused();
+      this.blessings.noteRefused();
+      // The refusal switches the fight off too, and it is engaged again at once.
+      this.combat.openAgain();
+    }
 
     /*
      * A prompt is an acknowledgement: the server has finished with the last
@@ -4857,6 +4955,9 @@ export class SessionManager {
    */
   private mayRest(): boolean {
     if (this.isRetreating()) return false;
+    // Not before the room re-read says who is left (`rereadRoom`): a `med` a
+    // moment after a kill sat skinny down among fourteen dogs (2026-09-23).
+    if (this.roomUnsettled()) return false;
     // A message said not to rest here (`run`): not in this room, for a while.
     if (this.restBarredHere()) return false;
     // An escape whose answer has not come is a room the character may still

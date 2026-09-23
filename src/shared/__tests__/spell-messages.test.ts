@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { parseSpellMessagesCsv, SpellMessageBook, spellLoreOf, wordsOf } from '../spell-messages';
+import {
+  parseSpellMessagesCsv,
+  SpellMessageBook,
+  spellLoreOf,
+  withRealmSpellNames,
+  wordsOf
+} from '../spell-messages';
 
 const SHIPPED = path.resolve('resources/world/spell-messages.csv');
 
@@ -33,12 +39,14 @@ describe('reading the shipped table', () => {
     expect(rows[2]).toEqual({
       spell: 'way of the bear',
       start: 'You feel strong, but clumsy!',
-      stop: 'The way of the bear wears off.'
+      stop: 'The way of the bear wears off.',
+      message: 590
     });
     expect(rows[5]).toEqual({
       spell: 'incense',
       start: null,
-      stop: 'The effects of the incense wear off.'
+      stop: 'The effects of the incense wear off.',
+      message: 8608
     });
     expect(rows[6]).toEqual({ spell: 'sunbolt wand', start: null, stop: null });
   });
@@ -47,6 +55,48 @@ describe('reading the shipped table', () => {
     const rows = parseSpellMessagesCsv('start,spell_name,stop\nYou glow.,glow,You dim.\n');
     expect(rows).toEqual([{ spell: 'glow', start: 'You glow.', stop: 'You dim.' }]);
     expect(parseSpellMessagesCsv('a,b\n1,2\n')).toEqual([]);
+  });
+});
+
+/*
+ * Paramud renames spells and keeps their message records (2026-09-23): its
+ * `pagan ritual` prints the file's `blood ritual` sentences, record 820.
+ */
+describe('a realm that names the same sentences differently', () => {
+  const rows = parseSpellMessagesCsv(
+    [
+      'spell_id,spell_name,start,stop,desc_msg_id',
+      '348,blood ritual,You are affected by a blood ritual!,The effects of the blood ritual wear off.,820',
+      '21,unholy aura,You feel safe from good!,You no longer feel safe from good!,8542'
+    ].join('\n')
+  );
+
+  it('files the sentences under the realm’s name too, joined by the message record', () => {
+    const book = SpellMessageBook.fromRows(
+      withRealmSpellNames(rows, [
+        {
+          name: 'pagan ritual',
+          abilities: [
+            [22, 5],
+            [115, 820]
+          ]
+        },
+        { name: 'aura of undeath', abilities: [[115, 8542]] },
+        { name: 'undead armour', abilities: [[115, 8679]] },
+        { name: 'harm' }
+      ])
+    );
+    expect(book.match('You are affected by a blood ritual!')?.starts).toEqual([
+      'blood ritual',
+      'pagan ritual'
+    ]);
+    expect(book.stopOf('aura of undeath')).toBe('You no longer feel safe from good!');
+    expect(book.startOf('undead armour')).toBeNull();
+  });
+
+  it('leaves a name the file already carries as the file has it', () => {
+    const merged = withRealmSpellNames(rows, [{ name: 'Blood Ritual', abilities: [[115, 8542]] }]);
+    expect(merged).toHaveLength(2);
   });
 });
 

@@ -505,6 +505,8 @@ export type LoopStatus = 'idle' | 'running' | 'stopped';
 export type LoopHold =
   | 'fight'
   | 'health'
+  /** Mana under `meditateBelow`; walks on again at `resumeAtMana`. */
+  | 'mana'
   | 'retreated'
   | 'errand'
   | 'offline'

@@ -16,13 +16,28 @@
  */
 import fs from 'node:fs';
 
-import { parseSpellMessagesCsv, SpellMessageBook } from '../../shared/spell-messages';
+import {
+  parseSpellMessagesCsv,
+  SpellMessageBook,
+  type SpellMessageRow
+} from '../../shared/spell-messages';
 import { t } from '../app/i18n';
 
 export function loadSpellMessages(
   file: string,
   notify?: (message: string) => void
 ): SpellMessageBook {
+  return SpellMessageBook.fromRows(loadSpellMessageRows(file, notify));
+}
+
+/**
+ * The file's rows rather than a book of them, for a caller that lays a
+ * realm's own spell names over them first (`withRealmSpellNames`).
+ */
+export function loadSpellMessageRows(
+  file: string,
+  notify?: (message: string) => void
+): SpellMessageRow[] {
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8');
@@ -33,11 +48,11 @@ export function loadSpellMessages(
         message: error instanceof Error ? error.message : String(error)
       })
     );
-    return new SpellMessageBook();
+    return [];
   }
   const rows = parseSpellMessagesCsv(text);
   if (rows.length === 0) {
     notify?.(t('notices.world.spellMessages.empty', { file }));
   }
-  return SpellMessageBook.fromRows(rows);
+  return rows;
 }
