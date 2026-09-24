@@ -18,6 +18,9 @@ import fs from 'node:fs';
 import zlib from 'node:zlib';
 import path from 'node:path';
 import { execSync, spawn, spawnSync } from 'node:child_process';
+import { parseDocument } from 'yaml';
+
+import { judgeFailures } from './lib/smoke-baseline.mjs';
 
 /** This repository's own version, which is the one a bug report must name. */
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -64,6 +67,26 @@ const keepOpen = process.argv.includes('--keep-open');
 const HOME = path.resolve('out/smoke-home');
 fs.rmSync(HOME, { recursive: true, force: true });
 const CONFIG = path.join(HOME, 'global', 'default.yaml');
+
+/*
+ * No dead-link hang-up in this run. The fixture below answers four commands
+ * and keeps silent after every other, which no realm does -- it answers each
+ * line with at least its status line. `LinkWatch` reads fifteen seconds of
+ * that silence after a line as a dead link, correctly, hangs up and dials
+ * back, and a run then holds a socket per redial: two log files, a second
+ * character counted as the third socket, and a remount checked mid-dial.
+ * `LinkWatch.test.ts` owns that behaviour; the fixture cannot honestly
+ * exercise it. The shipped template otherwise, comments and all.
+ */
+{
+  const internal = parseDocument(fs.readFileSync('resources/config/internal.yaml', 'utf8'));
+  if (!internal.hasIn(['tuning', 'reconnect', 'silentForMs'])) {
+    throw new Error('internal.yaml has no tuning.reconnect.silentForMs to switch off');
+  }
+  internal.setIn(['tuning', 'reconnect', 'silentForMs'], 0);
+  fs.mkdirSync(HOME, { recursive: true });
+  fs.writeFileSync(path.join(HOME, 'internal.yaml'), internal.toString(), 'utf8');
+}
 const SMOKE_FONT = 'LucidaProgrammer Nerd Font Mono';
 const SMOKE_FONT_SIZE = 15;
 fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
@@ -215,6 +238,15 @@ const writeProfiles = () => {
       '    retreat:',
       '      enabled: true',
       '      belowHealth: 0.1',
+      /*
+       * No defence lease (todo 00). The fixture scripts two volleys of blows
+       * at a character standing still with auto-combat off, which is exactly
+       * what lends it -- and the lend writes the switch into this file, so the
+       * settings checks below found it already on. `CombatLease.test.ts` and
+       * `SessionManager.test.ts` own the behaviour.
+       */
+      '  combat:',
+      '    defendAfterRounds: 0',
       ''
     ].join('\n'),
     'utf8'
@@ -253,13 +285,16 @@ const writeProfiles = () => {
 fs.rmSync(LOG_DIR, { recursive: true, force: true });
 
 let failures = 0;
+/** Each failed check by name, which is what the baseline compares. */
+const failedNames = [];
 const log = (...a) => console.log('  ', ...a);
 const pass = (m) => log('PASS ', m);
-const fail = (m) => {
+const fail = (m, name = m) => {
   failures += 1;
+  failedNames.push(name);
   log('FAIL ', m);
 };
-const check = (ok, m, detail) => (ok ? pass(m) : fail(`${m}${detail ? ` -- ${detail}` : ''}`));
+const check = (ok, m, detail) => (ok ? pass(m) : fail(`${m}${detail ? ` -- ${detail}` : ''}`, m));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Rough sRGB luminance of a #rrggbb string, for light/dark assertions. */
@@ -2646,10 +2681,11 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
   );
   check(peek !== null && peek.beside, 'placed against the room it hangs off', JSON.stringify(peek));
   // The walk moved here from the room's own click, so this is the check that
-  // the map can still send anybody anywhere at all.
+  // the map can still send anybody anywhere at all. Named for what it does:
+  // it lays out a route and walks nothing, which the check below asserts.
   check(
-    peek !== null && /walk/i.test(peek.walk),
-    'and carries the walk, which the bare click used to be',
+    peek !== null && /plan route/i.test(peek.walk),
+    'and carries the way there, which the bare click used to be',
     JSON.stringify(peek)
   );
   await evaluate(`document.querySelector('.room-peek .peek-actions button')?.click()`);
@@ -2905,6 +2941,39 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     'and the plan has steps to walk',
     plan
   );
+  check(
+    typeof plan === 'string' && !/cost/i.test(plan),
+    'and says how far without pricing it',
+    plan
+  );
+
+  /*
+   * *Run it* and *Walk it* are one choice made two ways, so they sit on one
+   * line: the head wraps around the box holding them, never between them.
+   * Measured off the laid-out boxes rather than asserted on the markup, which
+   * is what a flex container's wrapping actually decides, and `found` is the
+   * positive control -- two rects missing would make equal tops vacuous.
+   */
+  const presses = JSON.parse(
+    await evaluate(`
+    (() => {
+      const run = document.querySelector('.route-panel .route-summary .route-run');
+      const walk = document.querySelector('.route-panel .route-summary button.primary');
+      const found = [run, walk].filter((press) => press !== null).length;
+      if (found < 2) return JSON.stringify({ found, sameLine: null });
+      return JSON.stringify({
+        found,
+        sameLine:
+          Math.abs(run.getBoundingClientRect().top - walk.getBoundingClientRect().top) < 1
+      });
+    })()
+  `)
+  );
+  check(
+    presses.found === 2 && presses.sameLine === true,
+    'and Run it and Walk it are on one row',
+    JSON.stringify(presses)
+  );
 
   /*
    * The picture of where the route ends, under the head.
@@ -3033,21 +3102,27 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
    * The tick beside `Walk it` drops the last step from what the press hands
    * main: a doorway to wait in for a party, rather than the boss room itself.
    *
-   * Asserted on the list as well as on the tick, because the tick is at the
-   * top of a list that scrolls — by the time the reader is down among the
+   * Asserted on the list as well as on the toggle, because the toggle is at
+   * the top of a list that scrolls — by the time the reader is down among the
    * steps it is off the screen, so the step that will not be walked has to
    * say so where the reader is, and it has to be its own row rather than
    * folded into a run of rooms that *will* be walked. Never actually walked
    * here: the checks below drive this same panel.
+   *
+   * The toggle names no room: *entering* can only mean the destination, and
+   * the head states that one line above. So what is asserted is the pair —
+   * the toggle offered and held off, and the head naming somewhere — rather
+   * than the toggle repeating the head's words.
    */
   const stopOffer = JSON.parse(
     await evaluate(`
     (() => {
-      const label = document.querySelector('.route-panel .route-stop');
+      const toggle = document.querySelector('.route-panel .route-stop');
       const head = document.querySelector('.route-panel .route-head strong');
       return JSON.stringify({
-        offered: label !== null,
-        text: label === null ? '' : label.innerText.replace(/\\s+/g, ' ').trim().toLowerCase(),
+        offered: toggle !== null,
+        held: toggle === null ? null : toggle.getAttribute('aria-pressed'),
+        text: toggle === null ? '' : toggle.innerText.replace(/\\s+/g, ' ').trim().toLowerCase(),
         destination: head === null ? '' : head.innerText.trim().toLowerCase(),
         skipped: document.querySelectorAll('.route-steps li[data-skipped="true"]').length
       });
@@ -3056,8 +3131,9 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
   );
   check(
     stopOffer.offered &&
+      stopOffer.held === 'false' &&
       stopOffer.destination.length > 0 &&
-      stopOffer.text.includes(stopOffer.destination),
+      stopOffer.text.includes('stop before entering'),
     'the route panel offers to stop before entering the room the way ends in',
     JSON.stringify(stopOffer)
   );
@@ -3067,7 +3143,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     JSON.stringify(stopOffer)
   );
 
-  await evaluate(`document.querySelector('.route-panel .route-stop input').click()`);
+  await evaluate(`document.querySelector('.route-panel .route-stop').click()`);
   await readUntil(
     () => evaluate(`document.querySelectorAll('.route-steps li[data-skipped="true"]').length`),
     (count) => Number(count) === 1
@@ -3077,22 +3153,29 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     (() => {
       const rows = document.querySelectorAll('.route-steps > li');
       const last = rows.length === 0 ? null : rows[rows.length - 1];
+      const toggle = document.querySelector('.route-panel .route-stop');
       return JSON.stringify({
         skipped: document.querySelectorAll('.route-steps li[data-skipped="true"]').length,
         lastSkipped: last === null ? null : last.getAttribute('data-skipped'),
-        lastIsStep: last === null ? null : last.classList.contains('step')
+        lastIsStep: last === null ? null : last.classList.contains('step'),
+        // The toggle is a chip now, so the only thing that says which way
+        // it is held is aria-pressed -- read here against the false above.
+        held: toggle === null ? null : toggle.getAttribute('aria-pressed')
       });
     })()
   `)
   );
   check(
-    stopped.skipped === 1 && stopped.lastSkipped === 'true' && stopped.lastIsStep === true,
+    stopped.skipped === 1 &&
+      stopped.lastSkipped === 'true' &&
+      stopped.lastIsStep === true &&
+      stopped.held === 'true',
     'and ticking it drops the last step, on a row of its own rather than folded into a run',
     JSON.stringify(stopped)
   );
 
   // Back off again, because what the checks below read has to be the whole plan.
-  await evaluate(`document.querySelector('.route-panel .route-stop input').click()`);
+  await evaluate(`document.querySelector('.route-panel .route-stop').click()`);
   const unstop = await readUntil(
     () => evaluate(`document.querySelectorAll('.route-steps li[data-skipped="true"]').length`),
     (count) => Number(count) === 0
@@ -3223,8 +3306,8 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     planNeighbour !== null &&
       (planNeighbour.onPlan
         ? /walk here/i.test(planNeighbour.walk)
-        : /walk to/i.test(planNeighbour.walk)),
-    'and a neighbour offers the walk that fits it: here on the plan, to off it',
+        : /plan route/i.test(planNeighbour.walk)),
+    'and a neighbour offers what fits it: walk here on the plan, plan route off it',
     JSON.stringify(planNeighbour)
   );
 
@@ -3266,6 +3349,21 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     'and a second Enter walks it, rather than doing nothing',
     `before ${JSON.stringify(beforeWalk)} after ${JSON.stringify(afterWalk)}`
   );
+  /*
+   * And the caret is back in the terminal. Typing is what stops a walk, so
+   * the hand that started one has to be able to type at once.
+   */
+  if (!afterWalk.open) {
+    const caret = await readUntil(
+      () => evaluate(`!!document.activeElement?.closest('.xterm')`),
+      (inTerminal) => inTerminal === true
+    );
+    check(
+      caret === true,
+      'and starting it hands the caret back to the terminal',
+      await evaluate(`document.activeElement?.className ?? 'none'`)
+    );
+  }
 
   /*
    * And now a route really is being walked, which is the one moment the
@@ -3310,7 +3408,30 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
       'and pressing it opens the route panel on that room',
       `${String(heading)} -- ${JSON.stringify(panelText)}`
     );
-    await press('Escape', 'Escape', 27);
+    /*
+     * Alt G is *Walk it* from the keyboard. Waited for the plan first, since
+     * the chord is bound only while there is one to walk; then any of the
+     * three answers a press can have, and doing nothing is the failure.
+     */
+    await waitFor(async () => evaluate(`!!document.querySelector('.route-panel .route-run')`));
+    await press('g', 'KeyG', 71, 1);
+    await waitFor(async () =>
+      evaluate(
+        `!document.querySelector('.route-panel') || !!document.querySelector('.route-refused, .route-redrawn')`
+      )
+    );
+    const altWalk = await evaluate(`
+      (() => ({
+        open: !!document.querySelector('.route-panel'),
+        answered: !!document.querySelector('.route-refused, .route-redrawn')
+      }))()
+    `);
+    check(
+      !altWalk.open || altWalk.answered,
+      'and Alt G walks the plan on screen, as Walk it does',
+      JSON.stringify(altWalk)
+    );
+    if (altWalk.open) await press('Escape', 'Escape', 27);
     await waitFor(async () => !(await evaluate(`!!document.querySelector('.route-panel')`)));
   }
 
@@ -3793,16 +3914,20 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
   check(openedQuests === 'clicked', 'the Quest Book is reachable from the palette', openedQuests);
   // The book itself, assembled in main and pushed: a card drawn before its rows
   // have arrived is what the check below would otherwise read as an empty realm.
-  await shown('.quest-card .quest-table tbody tr');
+  await shown('.quest-card .quest-table tbody tr[data-standing]');
 
   const book = JSON.parse(
     await evaluate(`
       (() => {
         const card = document.querySelector('.quest-card');
         if (!card) return JSON.stringify({ error: 'no card' });
-        const rows = [...card.querySelectorAll('.quest-table tbody tr')];
+        // The quests, not the shelves' heads, which are rows of the same body.
+        const rows = [...card.querySelectorAll('.quest-table tbody tr[data-standing]')];
         return JSON.stringify({
           rows: rows.length,
+          shelves: [...card.querySelectorAll('.quest-table .table-group th')].map((th) =>
+            th.innerText.replace(/\s+/g, ' ').trim()
+          ),
           first: rows[0]?.innerText.replace(/\\s+/g, ' ').trim() ?? '',
           facets: [...card.querySelectorAll('.table-facets .chip')].map((c) => c.innerText.trim())
         });
@@ -3815,6 +3940,13 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     'and they can be cut by who each is for',
     JSON.stringify(book.facets)
   );
+  // Shelved in the card's own order, with a head naming each shelf that has a
+  // row on it; a book with rows and no head is one whose order says nothing.
+  check(
+    Array.isArray(book.shelves) && book.shelves.length > 0,
+    'and they are shelved under a head that says why they are in that order',
+    JSON.stringify(book.shelves)
+  );
 
   /*
    * Hiding is the whole of what this card lets a player record, because the
@@ -3823,7 +3955,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
    */
   const hidQuest = await evaluate(`
     (() => {
-      const before = document.querySelectorAll('.quest-table tbody tr').length;
+      const before = document.querySelectorAll('.quest-table tbody tr[data-standing]').length;
       const hide = document.querySelector('.quest-table tbody tr .row-action');
       if (!hide) return JSON.stringify({ error: 'no hide control' });
       hide.click();
@@ -3831,7 +3963,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     })()
   `);
   const afterHide = await readUntil(
-    () => evaluate(`document.querySelectorAll('.quest-table tbody tr').length`),
+    () => evaluate(`document.querySelectorAll('.quest-table tbody tr[data-standing]').length`),
     (afterHide) => Number(afterHide) === JSON.parse(hidQuest).before - 1
   );
   check(
@@ -3850,7 +3982,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     `document.querySelector('.quest-card [data-action="show-hidden"]')?.click() ?? null`
   );
   const restored = await readUntil(
-    () => evaluate(`document.querySelectorAll('.quest-table tbody tr').length`),
+    () => evaluate(`document.querySelectorAll('.quest-table tbody tr[data-standing]').length`),
     (restored) => Number(restored) === JSON.parse(hidQuest).before
   );
   check(
@@ -3976,11 +4108,11 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
       return true;
     })()
   `);
-  await gone('.quest-table tbody tr');
+  await gone('.quest-table tbody tr[data-standing]');
   const orphaned = JSON.parse(
     await evaluate(`
       (() => JSON.stringify({
-        rows: document.querySelectorAll('.quest-table tbody tr').length,
+        rows: document.querySelectorAll('.quest-table tbody tr[data-standing]').length,
         track: !!document.querySelector('.quest-card .quest-track')
       }))()
     `)
@@ -4002,12 +4134,14 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
   `);
   await waitFor(
     async () =>
-      Number(await evaluate(`document.querySelectorAll('.quest-table tbody tr').length`)) ===
-      JSON.parse(hidQuest).before
+      Number(
+        await evaluate(`document.querySelectorAll('.quest-table tbody tr[data-standing]').length`)
+      ) === JSON.parse(hidQuest).before
   );
   check(
-    Number(await evaluate(`document.querySelectorAll('.quest-table tbody tr').length`)) ===
-      JSON.parse(hidQuest).before,
+    Number(
+      await evaluate(`document.querySelectorAll('.quest-table tbody tr[data-standing]').length`)
+    ) === JSON.parse(hidQuest).before,
     'and clearing the filter brings the book back',
     'restored'
   );
@@ -4040,7 +4174,8 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     // read off: the find field is debounced, so the row standing here a moment
     // ago is the one the query before left.
     await readUntil(
-      () => evaluate(`document.querySelector('.quest-table tbody tr')?.innerText ?? ''`),
+      () =>
+        evaluate(`document.querySelector('.quest-table tbody tr[data-standing]')?.innerText ?? ''`),
       (row) => row.includes(query)
     );
     /*
@@ -4050,7 +4185,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
      */
     await evaluate(`
       (() => {
-        const row = document.querySelector('.quest-table tbody tr');
+        const row = document.querySelector('.quest-table tbody tr[data-standing]');
         if (!row) return false;
         if (row.getAttribute('data-open') !== 'true') row.querySelector('.lookup')?.click();
         return true;
@@ -4353,6 +4488,60 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
   await painted();
   await capture('smoke-quest-items.png', 'a step’s items, ticked against the pack');
 
+  /*
+   * ------------------------------------------- assert: the plan to a step
+   *
+   * Plan it on a step draws the steps still to do to reach it — what each
+   * gathers and how, where it happens, whether the way exists — in the track's
+   * place, and the way back is a control. Read as rows under a head rather
+   * than as a figure: the fake host places its character, so the plan is
+   * priced here, and a fixture that stopped placing it would answer unpriced
+   * — both are honest answers and neither is the check.
+   */
+  const askedPlan = JSON.parse(
+    await evaluate(`
+      (() => {
+        const control = document.querySelector(
+          '.quest-card .quest-step:not([data-state="done"]) .quest-plan-btn'
+        );
+        if (!control) return JSON.stringify({ error: 'no plan control' });
+        control.click();
+        return JSON.stringify({ clicked: true });
+      })()
+    `)
+  );
+  check(
+    askedPlan.clicked === true,
+    'a step still to do offers to plan the way to it',
+    JSON.stringify(askedPlan)
+  );
+  await shown('.quest-card .quest-plan-head');
+  const planned = JSON.parse(
+    await readUntil(
+      () =>
+        evaluate(`
+          (() => JSON.stringify({
+            rows: document.querySelectorAll('.quest-card .quest-plan > li').length,
+            loading: !!document.querySelector('.quest-card .quest-plan-loading'),
+            head: document.querySelector('.quest-card .quest-plan-head')?.innerText.replace(/\\s+/g, ' ').trim() ?? ''
+          }))()
+        `),
+      (answer) => !JSON.parse(answer).loading
+    )
+  );
+  check(
+    planned.rows > 0 && planned.head.length > 0,
+    'and the plan is steps under a head that says where it starts',
+    JSON.stringify(planned)
+  );
+  // And a picture of it, for the reason the book's own exists: the assertion
+  // is about the DOM, and a plan drawn as rooms would pass it either way.
+  await painted();
+  await capture('smoke-quest-plan.png', 'the plan to a quest step, as steps');
+  await evaluate(`document.querySelector('.quest-card .quest-plan-back')?.click() ?? null`);
+  await gone('.quest-card .quest-plan-head');
+  await shown('.quest-card .quest-steps');
+
   await evaluate(`
     (() => {
       const el = document.querySelector('.quest-card .table-find input');
@@ -4365,7 +4554,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
   `);
   // The book unnarrowed, so the picture below is of the book and not of one row.
   await readUntil(
-    () => evaluate(`document.querySelectorAll('.quest-table tbody tr').length`),
+    () => evaluate(`document.querySelectorAll('.quest-table tbody tr[data-standing]').length`),
     (rows) => Number(rows) > 1
   );
 
@@ -4382,6 +4571,11 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     (() => {
       const card = document.querySelector('.quest-card');
       if (card) card.scrollIntoView({ block: 'center' });
+      // And the table from its top: the ticked row was scrolled into the
+      // middle of it a moment ago, and a picture of the book that starts
+      // under its first shelf's head is a picture of an unexplained order.
+      const table = document.querySelector('.quest-card .table-scroller');
+      if (table) table.scrollTop = 0;
       return !!card;
     })()
   `);
@@ -4721,9 +4915,17 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
      * refusal *not* happening.
      */
     await press('Enter', 'Enter', 13);
-    // The card naming the loop, which is the reading every check below is of.
+    /*
+     * The card naming the loop *running*, which is the reading every check
+     * below is of. The name alone was already there: the lap stopped earlier
+     * in this run left `Smoke loop … Ended — you asked it to` on the card, so
+     * a wait for the name passed before the new start landed and read the
+     * old state (2026-09-18). A refusal still times out and fails both.
+     */
     await waitFor(async () =>
-      evaluate(`/Smoke loop/.test(document.querySelector('.navigation-card')?.innerText ?? '')`)
+      evaluate(
+        `(() => { const text = document.querySelector('.navigation-card')?.innerText ?? ''; return /Smoke loop/.test(text) && /running|fighting|resting/i.test(text); })()`
+      )
     );
     /*
      * The Navigation card is the positive control, and the stronger one: it names
@@ -5082,6 +5284,7 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
         if (!log) return null;
         return {
           top: Math.round(log.scrollTop),
+          client: log.clientHeight,
           // One pixel of slack, as the card itself allows: these are
           // fractional on a display whose device pixel ratio is not whole.
           edge: log.scrollHeight - log.scrollTop - log.clientHeight <= 1,
@@ -5098,6 +5301,115 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
     const filled = await evaluate(geometry);
     check(filled?.over === true, 'the conversation feed outgrows its box', JSON.stringify(filled));
     check(filled?.edge === true, 'and follows the newest line as it arrives');
+
+    /*
+     * And a box made shorter while it follows goes on following: the box's
+     * size is not the reader (`mudengine-ui`, *The feed follows the newest
+     * line*). Shortened with the card's own corner grip, as a player does it;
+     * the shrink is observed before the edge is read, and the line before the
+     * edge is asserted again.
+     */
+    const talkGrip = JSON.parse(
+      await evaluate(`
+        (() => {
+          const el = document.querySelector('.conversation-card .card-resize');
+          if (!el) return 'null';
+          const b = el.getBoundingClientRect();
+          return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) });
+        })()
+      `)
+    );
+    check(talkGrip !== null, 'the Talk card has a corner grip to shorten it by');
+    if (talkGrip !== null) {
+      const press = { x: talkGrip.x, y: talkGrip.y, button: 'left', pointerType: 'mouse' };
+      await cdp('Input.dispatchMouseEvent', {
+        ...press,
+        type: 'mousePressed',
+        buttons: 1,
+        clickCount: 1
+      });
+      for (let step = 1; step <= 6; step += 1) {
+        await cdp('Input.dispatchMouseEvent', {
+          ...press,
+          type: 'mouseMoved',
+          y: talkGrip.y - step * 10,
+          buttons: 1
+        });
+        await sleep(25);
+      }
+      await cdp('Input.dispatchMouseEvent', {
+        ...press,
+        type: 'mouseReleased',
+        y: talkGrip.y - 60,
+        buttons: 0,
+        clickCount: 1
+      });
+      const shorter = await readUntil(
+        () => evaluate(geometry),
+        (now) => now !== null && now.client < (filled?.client ?? 0) - 20
+      );
+      check(
+        shorter !== null && shorter.client < (filled?.client ?? 0) - 20,
+        'dragging the grip up makes the Talk feed shorter',
+        `${filled?.client} -> ${shorter?.client}`
+      );
+      const kept = await readUntil(
+        () => evaluate(geometry),
+        (now) => now?.edge === true
+      );
+      check(
+        kept?.edge === true,
+        'and stays on the newest line without waiting for one',
+        JSON.stringify(kept)
+      );
+      const before = await evaluate(geometry);
+      await evaluate(`(window.mudengine.input('${SESSION}', 'gos burst\\r'), true)`);
+      const grown = await readUntil(
+        () => evaluate(geometry),
+        (now) => now !== null && now.height > (before?.height ?? 0)
+      );
+      check(
+        grown?.height > (before?.height ?? 0) && grown?.edge === true,
+        'and a feed made shorter goes on following what is said next',
+        JSON.stringify({ before, grown })
+      );
+      // Back at its own height, so the hold checks below read the box they expect.
+      const moved =
+        JSON.parse(
+          await evaluate(`
+          (() => {
+            const el = document.querySelector('.conversation-card .card-resize');
+            if (!el) return 'null';
+            const b = el.getBoundingClientRect();
+            return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) });
+          })()
+        `)
+        ) ?? talkGrip;
+      for (const clickCount of [1, 2]) {
+        for (const type of ['mousePressed', 'mouseReleased']) {
+          await cdp('Input.dispatchMouseEvent', {
+            ...press,
+            x: moved.x,
+            y: moved.y,
+            type,
+            buttons: type === 'mousePressed' ? 1 : 0,
+            clickCount
+          });
+        }
+      }
+      const restored = await readUntil(
+        () => evaluate(geometry),
+        (now) => now !== null && Math.abs(now.client - (filled?.client ?? 0)) <= 2
+      );
+      check(
+        restored !== null &&
+          restored !== undefined &&
+          Math.abs(restored.client - (filled?.client ?? 0)) <= 2 &&
+          restored.edge === true,
+        'and a double-click on its grip puts it back, still on the newest line',
+        `${shorter?.client} -> ${restored?.client} (was ${filled?.client})`
+      );
+    }
 
     /*
      * Scrolled up, then somebody says something. The trigger is *observed* --
@@ -5272,6 +5584,51 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
       /(^|\r|\n)l\r/.test(sent) && !sent.includes('gos'),
       'so `l` looks in the room rather than being said to the realm',
       JSON.stringify(sent.slice(0, 40))
+    );
+  }
+
+  {
+    /*
+     * And a semicolon makes one line several commands, a count in front of one
+     * repeats it (todo 04). Paced by the prompt in main, and this host answers
+     * few commands with one, so the wait is the queue reclaiming its credit.
+     */
+    const before = Buffer.concat(received).length;
+    await evaluate(`
+      (() => {
+        const input = document.querySelector('.conversation-say input');
+        input.focus();
+        const set = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        ).set;
+        set.call(input, 'smile;2wave');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      })()
+    `);
+    await valued('.conversation-say input', 'smile;2wave');
+    await cdp('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13
+    });
+    await cdp('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13
+    });
+    const waves = (sent) => (sent.match(/(^|\r|\n)wave\r/g) ?? []).length;
+    const sent = await readUntil(
+      async () => Buffer.concat(received).subarray(before).toString('latin1'),
+      (sent) => waves(sent) === 2,
+      200
+    );
+    check(
+      /(^|\r|\n)smile\r/.test(sent) && waves(sent) === 2 && !sent.includes(';'),
+      'a semicolon sends each command in turn, and 2wave waves twice',
+      JSON.stringify(sent.slice(0, 60))
     );
   }
 
@@ -7350,12 +7707,14 @@ const wheelOver = (fractionX, fractionY, deltaY) =>
       floor
     );
     /*
-     * And exactly one figure, not two: the realm has no price for a newbie
-     * manual, and a `0` beside it would be a claim the data does not make.
+     * And exactly one figure, not two: the newbie manual is the realm's own
+     * furniture (placed at 1/2140, Newhaven's Village Entrance, `Gettable` 0),
+     * so *worth taking* has no answer there and it says so instead of quoting
+     * a price.
      */
     check(
-      /newbie manual/.test(floor) && !/"0"/.test(floor),
-      'and says nothing about one it cannot place',
+      /newbie manual fixed/i.test(floor) && !/"0"/.test(floor),
+      'and puts no price on what nobody can pick up',
       floor
     );
   }
@@ -9911,9 +10270,7 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
    */
   const picked = await evaluate(`
     (() => {
-      const select = [...document.querySelectorAll('.settings-form label')]
-        .find((l) => /plays on/i.test(l.querySelector('span')?.innerText ?? ''))
-        ?.querySelector('select');
+      const select = document.querySelector('.settings-form label[data-field="realm"] select');
       if (!select) return '(no control)';
       const wanted = [...select.options].find((o) => o.value === 'Smoke Realm');
       if (!wanted) return '(not offered)';
@@ -10019,7 +10376,9 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
           const inputs = [...document.querySelectorAll('.settings-form input')];
           return JSON.stringify({
             id: inputs[0]?.value ?? '(none)',
-            server: field('plays on')?.querySelector('select')?.value ?? '(none)',
+            server:
+              document.querySelector('.settings-form label[data-field="realm"] select')?.value ??
+              '(none)',
             password: field('^password')?.querySelector('input')?.value ?? '(none)',
             select: field('copy from')?.querySelector('select')?.value ?? '(none)'
           });
@@ -10039,13 +10398,11 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
   check(await pickInList('new character'), 'a second new character');
   await blankForm();
   await typeLabelled('file name', 'nowhere');
-  // Named by its label rather than taken as the first select in the form:
-  // "Copy From" sits above it once there is a character to copy.
+  // Addressed by the field's own name rather than taken as the first select in
+  // the form: "Copy From" sits above it once there is a character to copy.
   await evaluate(`
     (() => {
-      const select = [...document.querySelectorAll('.settings-form label')]
-        .find((l) => /plays on/i.test(l.querySelector('span')?.innerText ?? ''))
-        ?.querySelector('select');
+      const select = document.querySelector('.settings-form label[data-field="realm"] select');
       if (!select) return false;
       const set = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
       set.call(select, '');
@@ -10055,10 +10412,8 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
   `);
   await waitFor(async () =>
     evaluate(`
-      [...document.querySelectorAll('.settings-form label')].every(
-        (l) =>
-          !/plays on/i.test(l.querySelector('span')?.innerText ?? '') ||
-          l.querySelector('select')?.value === ''
+      [...document.querySelectorAll('.settings-form label[data-field="realm"]')].every(
+        (l) => l.querySelector('select')?.value === ''
       )
     `)
   );
@@ -10823,52 +11178,52 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
   );
   check(
     verbs.some((legend) => /^monsters$/i.test(legend)),
-    'and which monsters to leave alone'
+    'and what the realm’s own columns refuse'
   );
 
   /*
-   * And the ranked list beside it (todo 01). Three assertions, because the
-   * thing that could go wrong is not the drawing: the list is merged across
-   * global, realm and character, so the form must show this character's OWN
-   * rows -- seeding it from the merged list and saving would write the realm's
-   * and the global file's rows into this character's file, pinning down a
-   * ranking it was only inheriting.
+   * And the monster list beside it (todo 01, 104). Three assertions, because
+   * the thing that could go wrong is not the drawing: the list is merged
+   * across global, realm and character, so the form must show this character's
+   * OWN rows -- seeding it from the merged list and saving would write the
+   * realm's and the global file's rows into this character's file, pinning
+   * down rules it was only inheriting.
    */
   check(
-    verbs.some((legend) => /attack priority/i.test(legend)),
-    'and the order to attack them in',
+    verbs.some((legend) => /monster rules/i.test(legend)),
+    'and one row per monster for how to treat it',
     JSON.stringify(verbs)
   );
   const ranking = await evaluate(`
     (() => {
       const box = [...document.querySelectorAll('.settings-menus')]
-        .find((f) => /attack priority/i.test((f.querySelector('legend')?.innerText ?? '')));
-      if (!box) return 'no priority fieldset';
+        .find((f) => /monster rules/i.test((f.querySelector('legend')?.innerText ?? '')));
+      if (!box) return 'no monster rules fieldset';
       const add = [...box.querySelectorAll('button')].find((b) => /add a monster/i.test(b.innerText));
       if (!add) return 'no add button';
-      const before = box.querySelectorAll('.priority-line').length;
+      const before = box.querySelectorAll('.mob-rule-line').length;
       add.click();
       return JSON.stringify({ before, bands: null });
     })()
   `);
-  check(/"before":0/.test(ranking), 'the priority list starts empty on this character', ranking);
+  check(/"before":0/.test(ranking), 'the list starts empty on this character', ranking);
   const ranked = await readUntil(
     () =>
       evaluate(`
     (() => {
       const box = [...document.querySelectorAll('.settings-menus')]
-        .find((f) => /attack priority/i.test((f.querySelector('legend')?.innerText ?? '')));
-      const row = box?.querySelector('.priority-line');
+        .find((f) => /monster rules/i.test((f.querySelector('legend')?.innerText ?? '')));
+      const row = box?.querySelector('.mob-rule-line');
       if (!row) return 'no row';
       const bands = [...(row.querySelector('select')?.options ?? [])].map((o) => o.value);
-      return JSON.stringify({ rows: box.querySelectorAll('.priority-line').length, bands });
+      return JSON.stringify({ rows: box.querySelectorAll('.mob-rule-line').length, bands });
     })()
   `),
     (ranked) => /"rows":1/.test(ranked)
   );
   check(
-    /"rows":1/.test(ranked) && /"first".*"high".*"default".*"low".*"last"/.test(ranked),
-    'and a row offers the five bands in the order they are attacked',
+    /"rows":1/.test(ranked) && /"never".*"first".*"high".*"default".*"low".*"last"/.test(ranked),
+    'and a row offers never-attack ahead of the five bands, in the order they are attacked',
     ranked
   );
   // Taken back off, like the switch below: this run does not save, and a later
@@ -10876,8 +11231,8 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
   await evaluate(`
     (() => {
       const box = [...document.querySelectorAll('.settings-menus')]
-        .find((f) => /attack priority/i.test((f.querySelector('legend')?.innerText ?? '')));
-      const remove = box?.querySelector('.priority-line button[aria-label^="Remove"]');
+        .find((f) => /monster rules/i.test((f.querySelector('legend')?.innerText ?? '')));
+      const remove = box?.querySelector('.mob-rule-line button[aria-label^="Remove"]');
       if (remove) remove.click();
       return true;
     })()
@@ -11060,16 +11415,21 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
     );
     check(after === before + 1, 'which adds a row', `${before} -> ${after}`);
 
-    // Two fields per row -- when this arrives, send that -- and nothing else.
-    // Enter is always sent, so a blank answer is a bare Enter.
+    // Two fields per row -- when this arrives, send that -- and one box for a
+    // pager, which is answered every time it arrives rather than once
+    // (`LoginStep.repeat`). Enter is always sent, so a blank answer is a bare
+    // Enter.
     check(
       await evaluate(`
         (() => {
           const row = document.querySelector('.settings-steps li');
-          return row ? row.querySelectorAll('input').length === 2 : false;
+          if (!row) return false;
+          const fields = row.querySelectorAll('input:not([type=checkbox])').length;
+          const boxes = row.querySelectorAll('input[type=checkbox]').length;
+          return fields === 2 && boxes === 1;
         })()
       `),
-      'each row is a prompt and the answer to it'
+      'each row is a prompt, the answer to it, and whether it is answered every time'
     );
 
     // And taken away again, so this leaves the form as it found it.
@@ -12394,6 +12754,24 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
    * `CharacterTracker.rememberTheWayBack` writes nothing down for a move whose
    * two ends are the same room.
    */
+  /*
+   * On a lap, because only a character the client is taking somewhere runs
+   * (todo 03, 2026-09-23): standing still, it stays and says so. The fight
+   * from the Combat section is still on, and a lap waits a fight out, so the
+   * lap starts without a step and the escape is the only move this section
+   * sends. The Navigation card naming it running is the positive control.
+   */
+  const lapStarted = await evaluate(`window.mudengine.startLoop('${SESSION}', 'Smoke loop')`);
+  await waitFor(async () =>
+    evaluate(
+      `(() => { const text = document.querySelector('.navigation-card')?.innerText ?? ''; return /Smoke loop/.test(text) && /running|fighting|resting/i.test(text); })()`
+    )
+  );
+  check(
+    lapStarted === null,
+    'a lap is running for the escape to run on',
+    JSON.stringify(lapStarted)
+  );
   const chunksBefore = received.length;
   const bytesBefore = Buffer.concat(received).length;
   liveSockets[0]?.write(Buffer.from('\x1b[1;32m[HP=20/MA=50]:\x1b[0m\x1b[79D\x1b[K', 'latin1'));
@@ -12445,6 +12823,14 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
       ),
     /Also here: Nathaniel/,
     { prompt: true }
+  );
+  // The lap was only somewhere for the escape to run from: stopped before it
+  // plans a leg, as every other section leaves the character.
+  await evaluate(`(window.mudengine.stopMoving('${SESSION}'), true)`);
+  await waitFor(async () =>
+    evaluate(
+      `!/running|fighting|resting/i.test(document.querySelector('.navigation-card')?.innerText ?? '')`
+    )
   );
 
   /*
@@ -12877,7 +13263,7 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
     JSON.stringify(builderPeek)
   );
   check(
-    builderPeek !== null && builderPeek.actions === 1 && /walk/i.test(builderPeek.walk),
+    builderPeek !== null && builderPeek.actions === 1 && /plan route/i.test(builderPeek.walk),
     'and carries the same one action the Map card’s panel carries',
     JSON.stringify(builderPeek)
   );
@@ -13250,10 +13636,21 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
     'and the palette has no command per person: who to ask is an argument, not a command',
     perPerson
   );
-  await evaluate(`(window.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Escape', bubbles: true
-  })), true)`);
-  await waitFor(async () => !(await evaluate(`!!document.querySelector('.palette')`)));
+  /*
+   * Put away with a real key. The palette's Escape is its field's own
+   * `onKeyDown`, and a `KeyboardEvent` dispatched on `window` never reaches a
+   * field: the palette stays open, its scrim takes the Realm-card press below,
+   * and every flyout check after it fails with the fault here.
+   */
+  for (const type of ['keyDown', 'keyUp']) {
+    await cdp('Input.dispatchKeyEvent', {
+      type,
+      key: 'Escape',
+      code: 'Escape',
+      windowsVirtualKeyCode: 27
+    });
+  }
+  check(await gone('.palette'), 'and Escape puts the palette away before anything else is pressed');
 
   /*
    * Somebody who only ever *spoke* is in it. That is the whole point of the
@@ -13390,29 +13787,31 @@ const agree = (rows, pick) => Math.max(...rows.map(pick)) - Math.min(...rows.map
   );
   const fromRealm = grimjaw?.who ?? null;
   check(fromRealm === 'Grimjaw', 'a name on the Realm card is there to press', String(fromRealm));
-  const hitTest = await evaluate(`
-    (() => {
-      const panel = document.querySelector('.player-flyout');
-      const name = [...document.querySelectorAll('.realm-card button.realm-name')]
-        .find((b) => b.innerText.trim() === 'Grimjaw');
-      const r = name ? name.getBoundingClientRect() : null;
-      const at = r ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
-      return JSON.stringify({
-        panel: panel ? panel.getBoundingClientRect().toJSON() : null,
-        asks: !!document.querySelector('.player-asks'),
-        body: document.querySelector('.player-flyout .popover-body')?.innerText.slice(0, 60) ?? '',
-        name: r ? r.toJSON() : null,
-        hit: at ? (at.className || at.tagName) : null,
-        // Which dialog the scrim belongs to, when one is what the press lands
-        // on: the palette, the route panel and the loops modal all draw the
-        // same scrim, and the answer is the difference between three bugs.
-        scrim: [...document.querySelectorAll('.palette-scrim')]
-          .map((el) => el.firstElementChild?.className ?? '?')
-          .join(',')
-      });
-    })()
-  `);
-  check(false, 'DIAGNOSTIC before the Realm-card press', hitTest);
+  /*
+   * The press lands on the name, not on something drawn over it. A real
+   * pointer goes to whatever is on top, so a dialog left open above the card
+   * takes the press and every check below fails far from the cause; this one
+   * names what is in the way. Which dialog owns a scrim is said too: the
+   * palette, the route panel and the loops modal all draw the same one.
+   */
+  const hitTest = JSON.parse(
+    await evaluate(`
+      (() => {
+        const name = [...document.querySelectorAll('.realm-card button.realm-name')]
+          .find((b) => b.innerText.trim() === 'Grimjaw');
+        const r = name ? name.getBoundingClientRect() : null;
+        const at = r ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+        return JSON.stringify({
+          onName: !!(name && at && name.contains(at)),
+          hit: at ? (at.className || at.tagName) : null,
+          scrim: [...document.querySelectorAll('.palette-scrim')]
+            .map((el) => el.firstElementChild?.className ?? '?')
+            .join(',')
+        });
+      })()
+    `)
+  );
+  check(hitTest.onName, 'and nothing is drawn over it', JSON.stringify(hitTest));
   await evaluate(`window.__flyoutGone = false; new MutationObserver(() => {
     if (!document.querySelector('.player-flyout')) window.__flyoutGone = true;
   }).observe(document.body, { childList: true }); true`);
@@ -16438,7 +16837,12 @@ if (!keepOpen) {
 
 // ---------------------------------------------------------------------- finish
 
-console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) failed.`}\n`);
+if (failures > 0) console.log(`\n${failures} check(s) failed.`);
+const verdict = judgeFailures(failedNames, {
+  file: 'scripts/smoke-baseline.json',
+  accept: process.argv.includes('--accept'),
+  command: 'npm run smoke -- --accept'
+});
 
 if (!keepOpen) {
   clientSocket?.destroy();
@@ -16447,6 +16851,6 @@ if (!keepOpen) {
     // Whatever ignored the polite request goes now; the `exit` handler above
     // catches anything this misses.
     killApp('SIGKILL');
-    process.exit(failures === 0 ? 0 : 1);
+    process.exit(verdict);
   }, 400);
 }

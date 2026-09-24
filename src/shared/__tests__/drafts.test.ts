@@ -56,8 +56,9 @@ describe('a saved server', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      // Absent above: a realm ranks nothing until somebody playing it says so.
-      mobPriority: []
+      // Absent above: a realm rules nothing until somebody playing it says so.
+      mobRules: [],
+      hangPenalties: null
     });
   });
 
@@ -268,7 +269,10 @@ describe('a character', () => {
         // Absent, and 0: the margin above the floor, as before it was a setting.
         meditateTo: 0,
         // The rules list, empty where the payload states none.
-        potions: []
+        potions: [],
+        // And the realm's own half of them: absent above, and on, on the
+        // same rule `collectKeys` follows below.
+        useWards: true
       });
       expect(draft?.movement).toEqual({
         openDoors: true,
@@ -294,6 +298,7 @@ describe('a character', () => {
         // Off unless said: the dangerous regions stay out of planning.
         useVortexes: false,
         enterNegativePlane: false,
+        fightOnArrival: true,
         // Except the one that is on by default and whose absence would switch
         // it off, which is the health block's rule two assertions down: a
         // payload that failed to send the field must not mean `false`.
@@ -320,6 +325,7 @@ describe('a character', () => {
         cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
+        autoBless: true,
         invokeItems: false
       });
     });
@@ -342,7 +348,8 @@ describe('a character', () => {
         meditateBelow: 0,
         meditateTo: 0,
         // The rules list, empty where the payload states none.
-        potions: []
+        potions: [],
+        useWards: true
       });
       expect(draft?.movement).toEqual({
         openDoors: false,
@@ -366,6 +373,7 @@ describe('a character', () => {
         // Off unless said: the dangerous regions stay out of planning.
         useVortexes: false,
         enterNegativePlane: false,
+        fightOnArrival: true,
         // The shipped default, for the same reason `restBelow` keeps 0.35
         // here: a nonsense block must not silently switch off something that
         // ships on.
@@ -390,6 +398,7 @@ describe('a character', () => {
         cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
+        autoBless: true,
         invokeItems: false
       });
     });
@@ -485,7 +494,7 @@ describe('a character', () => {
           retaliate: false,
           maxMobs: 3,
           refreshRounds: 3,
-          avoid: ['town guard'],
+          mobRules: [{ mob: 'town guard', treat: 'never' }],
           politeAttacks: true
         }
       });
@@ -498,9 +507,8 @@ describe('a character', () => {
         maxTargetHealth: 0,
         minMobs: 0,
         maxMonsterExperience: 0,
-        // Absent above, and empty: nothing is ranked until somebody ranks it.
-        mobPriority: [],
-        // Absent above, and empty: the realm's monster table stands as it is.
+        // Stated above, keyed the way the wire spells it.
+        mobRules: [{ mob: 'town guard', treat: 'never' }],
         monsters: [],
         engage: 'all',
         retaliate: false,
@@ -508,11 +516,10 @@ describe('a character', () => {
         hideForOpener: false,
         // Stated above, and the one direction MegaMUD's own default is not.
         politeAttacks: true,
+        // Absent above: the shipped figure, since 0 would mean never defend.
+        defendAfterRounds: 2,
         maxMobs: 3,
-        // Absent above, so it takes its default: a refusal nobody asked for is off.
-        maxFightCost: 0,
-        refreshRounds: 3,
-        avoid: ['town guard']
+        refreshRounds: 3
       });
     });
 
@@ -532,12 +539,23 @@ describe('a character', () => {
     });
 
     /*
-     * A monster is called `giant rat`, so a name is one entry with a space in
+     * A monster is called `giant rat`, so a name is one row with a space in
      * it — splitting on whitespace would make it two that match nothing.
      */
-    it('keeps a two-word monster name as one entry', () => {
-      const draft = asProfileDraft({ ...good, combat: { avoid: ['giant rat', 'town guard'] } });
-      expect(draft?.combat.avoid).toEqual(['giant rat', 'town guard']);
+    it('keeps a two-word monster name as one row', () => {
+      const draft = asProfileDraft({
+        ...good,
+        combat: {
+          mobRules: [
+            { mob: 'giant rat', treat: 'never' },
+            { mob: 'town guard', treat: 'never' }
+          ]
+        }
+      });
+      expect(draft?.combat.mobRules).toEqual([
+        { mob: 'giant rat', treat: 'never' },
+        { mob: 'town guard', treat: 'never' }
+      ]);
     });
 
     it('takes only the first word of a command verb', () => {
@@ -573,12 +591,11 @@ describe('a character', () => {
     it('clamps rather than refusing the whole save', () => {
       const draft = asProfileDraft({
         ...good,
-        combat: { maxMobs: 999, maxFightCost: 4, avoid: 'town guard' }
+        combat: { maxMobs: 999, mobRules: 'town guard' }
       });
       expect(draft?.combat.maxMobs).toBe(20);
-      expect(draft?.combat.maxFightCost).toBe(1);
       // Not a list at all: nothing rather than a guess at what was meant.
-      expect(draft?.combat.avoid).toEqual([]);
+      expect(draft?.combat.mobRules).toEqual([]);
     });
   });
 });

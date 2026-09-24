@@ -26,7 +26,12 @@
  * place a decision stays revisable: if the situation changes, `cancel` still
  * works on anything not yet on the wire.
  */
-import { PRIORITY, type Priority, type QueueSnapshot } from '../../shared/automation';
+import {
+  MASKED_COMMAND,
+  PRIORITY,
+  type Priority,
+  type QueueSnapshot
+} from '../../shared/automation';
 import type { AutomationConfig } from '../../shared/config';
 import { tuning } from '../app/tuning';
 
@@ -79,6 +84,39 @@ export interface Intent {
    * would have to be cancelled when the session is.
    */
   notBefore?: number;
+  /**
+   * This command carries a credential and must never be written down.
+   *
+   * On the intent rather than on a session latch because the latch is armed
+   * when the answer is *decided* and read when the next command is *reported*,
+   * and the queue is free to hold the two apart — the typing hold does exactly
+   * that, and at a login screen the player typing is the ordinary case. What
+   * was armed for the password was then spent masking the player's own line,
+   * and the password went down verbatim behind it. A flag on the intent
+   * travels with the command it is about, so nothing can come between them.
+   *
+   * `SessionManager.reportable` is still the one choke point; this only tells
+   * it the answer without asking it to guess.
+   */
+  secret?: boolean;
+  /**
+   * The command keeps the **connection** alive rather than acting for the
+   * character, so it goes out with automation switched off as well — at its
+   * own band, unlike a login answer, which rides at `user`. The keep-alive is
+   * the one: without it a switched-off character sends nothing, and a link
+   * that dies then is noticed by nobody (`LinkWatch` only times a command that
+   * went out). Measured 2026-09-18: 23 minutes on a dead socket.
+   */
+  keepsLink?: boolean;
+  /**
+   * The player's own line, paced rather than written at once: one command of
+   * a talk-box line that stands for several (todo 04). Sent through
+   * `SessionManager.send`, the path a keystroke takes, so it is observed and
+   * recorded as the player's; queued because the realm queues fifteen, warns
+   * to twenty and drops the rest (`GMUDInGameState.cs:37`), and automation
+   * spends from the same fifteen.
+   */
+  typed?: boolean;
   /**
    * The command has just been written to the socket.
    *
@@ -143,6 +181,18 @@ export interface QueueEvents {
    * line per probe.
    */
   unavailable?(command: string): boolean;
+  /**
+   * Whether there is a socket to write to. False refuses every intent and
+   * sends nothing, the player's included.
+   *
+   * `TelnetClient.send` drops a write to a closed socket without a word, and
+   * `send` above had already filed the command for the capture, the trace and
+   * the dead-link clock by then — so a keep-alive proposed into a closed
+   * session was recorded as sent and reported unanswered every 45 seconds for
+   * seven hours (2026-09-18). A command that cannot reach the wire is not one
+   * this client sent.
+   */
+  connected?(): boolean;
 }
 
 export class CommandQueue {
@@ -160,8 +210,9 @@ export class CommandQueue {
    * by the acknowledgement timeout on the way in, since anything older than
    * that has been answered or written off.
    *
-   * Only automation's: the player's own typing never comes through this class,
-   * which is what makes `resendLast` unable to replay something a person typed.
+   * Only what this queue sent: the player's own typing never comes through
+   * this class, so `resendLast` cannot replay a keystroke. A talk-box line of
+   * several (`Intent.typed`) does, and is put back like any other.
    */
   private recentlySent: Array<{ intent: Queued; at: number }> = [];
   /**
@@ -248,9 +299,20 @@ export class CommandQueue {
       inFlight: this.inFlight,
       suppressed: this.isSuppressed(),
       pending: this.pending.map((intent) => ({
-        command: intent.command,
+        /*
+         * Masked here as well as in the record.
+         *
+         * This snapshot is the decision trace the Automation card and the
+         * status rail draw, republished on every block — so a login answer
+         * waiting out the typing hold or the pacing gap put the filled
+         * password on screen, in full, until it drained. `reportable` is still
+         * the one choke point for anything *persisted*; this is the same fact
+         * reaching a different surface.
+         */
+        command: intent.secret === true ? MASKED_COMMAND : intent.command,
         priority: intent.priority,
-        ...(intent.reason === undefined ? {} : { reason: intent.reason })
+        ...(intent.reason === undefined ? {} : { reason: intent.reason }),
+        ...(intent.typed === true ? { typed: true } : {})
       }))
     };
   }
@@ -264,7 +326,10 @@ export class CommandQueue {
     // toolbar press is a command for the realm too, and the realm is not what
     // is listening.
     if (this.held !== null) return false;
-    if (!this.config.enabled && intent.priority !== 'user') return false;
+    if (this.events.connected?.() === false) return false;
+    if (!this.config.enabled && intent.priority !== 'user' && intent.keepsLink !== true) {
+      return false;
+    }
     if (intent.expiresAt !== undefined && intent.expiresAt <= Date.now()) return false;
     /*
      * A word this realm does not have. Refused rather than sent, and said out
@@ -328,8 +393,10 @@ export class CommandQueue {
    * **Only what this queue sent, and only what the server named.** The caller
    * passes the command the status line echoed; a mismatch means the fumbled
    * command was not the one in flight — the player typed one — and nothing is
-   * put back. The player's own input never comes through this class at all,
-   * which is the other half of *not manual user commands*.
+   * put back. The player's typing never comes through this class, which is
+   * the other half of *not manual user commands*; a talk-box line of several
+   * does (`Intent.typed`), and a fumbled one is put back as a walk's step is,
+   * or the rest of the line walks from the wrong room.
    *
    * Returns whether anything was put back, so the caller can say so.
    */
@@ -385,6 +452,11 @@ export class CommandQueue {
       removed += 1;
     }
     return removed;
+  }
+
+  /** Whether anything matching a predicate is still waiting to go out. */
+  queued(match: (intent: Intent) => boolean): boolean {
+    return this.pending.some(match);
   }
 
   /**
@@ -493,6 +565,9 @@ export class CommandQueue {
     // empty; this is the invariant stated where a send would happen, so a
     // future path that puts something back cannot route around it.
     if (this.held !== null) return;
+    // Nor a closed socket. `enqueue` refuses too; what was queued before the
+    // close is dropped by `SessionManager`'s own `clear()` there.
+    if (this.events.connected?.() === false) return;
     /*
      * An abandoned line lapses before anything else is decided. Expiry is
      * frozen while the hold stands, so resolving the lapse *after* `expire`

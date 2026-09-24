@@ -1,11 +1,15 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
+import QuestRunBanner from './QuestRunBanner';
 import TerminalView, { type TerminalHandle } from './TerminalView';
 import { errorMessage } from '@shared/values';
 import { t } from '../lib/i18n';
+import { restores } from '../lib/restore';
 import type { AttachSnapshot, SessionId } from '@shared/ipc';
 import type { TerminalConfig } from '@shared/config';
-import type { StreamChunk, TerminalActionName, TerminalSize } from '@shared/types';
+import type { QuestRunProgress } from '@shared/quests';
+import type { WalkProgress } from '@shared/walk';
+import type { TerminalActionName, TerminalSize } from '@shared/types';
 import type { NameIndex } from '../lib/names';
 import type { PopoverAnchor } from '../lib/popover';
 import type { TerminalPalette } from '@shared/themes';
@@ -48,6 +52,11 @@ export interface SessionTerminalProps {
   /** The state this character was in when the terminal attached to it. */
   onSnapshot(session: SessionId, snapshot: AttachSnapshot): void;
   onSearchResult(result: { index: number; count: number } | undefined): void;
+  /** The run of a quest plan main reports for this character, drawn over the console. */
+  run: QuestRunProgress;
+  /** How far through the walk a running quest is, for the banner. */
+  walk: WalkProgress | null;
+  onStopRun(session: SessionId): void;
 }
 
 /**
@@ -94,18 +103,35 @@ function SessionTerminal({
   onInspect,
   onSelectPlayer,
   onSelectGang,
-  onChooseRoom
+  onChooseRoom,
+  run,
+  walk,
+  onStopRun
 }: SessionTerminalProps) {
   const api = window.mudengine;
   const handleRef = useRef<TerminalHandle | null>(null);
-  const pending = useRef<StreamChunk[]>([]);
+  /** Output and notices that arrived before the backscroll was queued, in order. */
+  const pending = useRef<Array<(handle: TerminalHandle) => void>>([]);
   const attached = useRef(false);
   const [ready, setReady] = useState(false);
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
 
   const handleReady = useCallback(
     (handle: TerminalHandle) => {
       handleRef.current = handle;
-      onHandle(session, handle);
+      /*
+       * The window's notices wait behind the backscroll as output does: a
+       * console queued behind another's restore waits seconds, and a notice
+       * written first ended up above a hundred thousand older lines.
+       */
+      onHandle(session, {
+        ...handle,
+        notice: (message) => {
+          if (attached.current) handle.notice(message);
+          else pending.current.push((to) => to.notice(message));
+        }
+      });
       setReady(true);
     },
     [onHandle, session]
@@ -125,7 +151,7 @@ function SessionTerminal({
       onChunk(session, payload.text.length);
       const handle = handleRef.current;
       if (handle && attached.current) handle.write(payload);
-      else pending.current.push(payload);
+      else pending.current.push((to) => to.write(payload));
     });
   }, [api, session, onChunk]);
 
@@ -141,19 +167,41 @@ function SessionTerminal({
     if (!ready || !handle) return;
 
     let live = true;
+    let takeBack: (() => void) | null = null;
     attached.current = false;
+    // The shown console keeps the slot free until its own attach arrives.
+    const letGo = shownRef.current ? restores.hold() : (): void => {};
 
     void api
       .attach(session)
       .then((snapshot) => {
         if (!live) return;
-        if (snapshot.backscroll.length > 0) {
-          handle.write({ seq: -1, at: Date.now(), text: snapshot.backscroll });
-        }
-        attached.current = true;
-        for (const chunk of pending.current) handle.write(chunk);
-        pending.current = [];
+        // The cards have the snapshot at once; the console waits its turn.
         onSnapshot(session, snapshot);
+        /*
+         * What arrived during the round trip stays held until the backscroll
+         * is queued ahead of it, and the backscroll is queued behind the
+         * shown console's (`lib/restore.ts`): a launch parsed every restored
+         * backscroll at once, a second-long freeze per character (todo 02).
+         */
+        const release = (): void => {
+          attached.current = true;
+          for (const act of pending.current) act(handle);
+          pending.current = [];
+        };
+        if (snapshot.backscroll.length === 0) {
+          release();
+          letGo();
+          return;
+        }
+        takeBack = restores.add({
+          shown: () => shownRef.current,
+          run: (done) => {
+            handle.restore(snapshot.backscroll, done);
+            release();
+          }
+        });
+        letGo();
       })
       .catch((error: unknown) => {
         /*
@@ -163,16 +211,19 @@ function SessionTerminal({
          * Said in the stream itself, because a terminal silently missing its
          * history is indistinguishable from one that has none.
          */
+        letGo();
         if (!live) return;
         console.error(`[terminal] attach failed for session ${session}:`, error);
         attached.current = true;
-        for (const chunk of pending.current) handle.write(chunk);
+        for (const act of pending.current) act(handle);
         pending.current = [];
         handle.notice(t('terminal.backscrollRestoreFailed', { message: errorMessage(error) }));
       });
 
     return () => {
       live = false;
+      letGo();
+      takeBack?.();
       attached.current = false;
       void api.detach(session);
     };
@@ -209,6 +260,12 @@ function SessionTerminal({
     (action: TerminalActionName) => onAct?.(session, action),
     [onAct, session]
   );
+  // The banner's Stop is this terminal's character's run, whichever pane has
+  // the keyboard — the same reason `act` binds the session above. A press
+  // that takes the control away hands the caret back to the console, as
+  // jump-to-latest does, rather than leaving it on a node that is gone.
+  const stopRun = useCallback(() => onStopRun(session), [onStopRun, session]);
+  const focusConsole = useCallback(() => handleRef.current?.focus(), []);
 
   return (
     <div
@@ -218,6 +275,8 @@ function SessionTerminal({
       onMouseDown={() => onFocusPane(session)}
       style={place}
     >
+      {/* Over this pane rather than docked: `mudengine-ui` › quests, *the run is a banner*. */}
+      <QuestRunBanner onSettled={focusConsole} onStop={stopRun} run={run} walk={walk} />
       <TerminalView
         fontStack={fontStack}
         index={index}

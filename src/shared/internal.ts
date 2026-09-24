@@ -354,6 +354,18 @@ const TUNING_DEFAULTS = {
      */
     staleMoveMs: 8000,
     /**
+     * A step unanswered this long is probed: `rm` goes out behind it, and its
+     * answer is an ordered one — the server answers in the order it was
+     * asked — so a `Location:` arriving with the step still unanswered proves
+     * the step produced nothing and it is dropped at once, while a probe
+     * still unanswered proves the server is slow and the step waits, up to
+     * `staleMoveMaxMs` (todo 10: a `n` answered after nine seconds cost a
+     * loop its place). Three seconds is two movement rounds; thirty is a
+     * link that has gone, not a server that is slow.
+     */
+    staleProbeMs: 3000,
+    staleMoveMaxMs: 30_000,
+    /**
      * Pack changes held against a listing that has not finished arriving. A
      * listing takes about a second; this covers what a person or a fight can
      * do in one, and no more.
@@ -361,6 +373,14 @@ const TUNING_DEFAULTS = {
     maxPackChanges: 16,
     /** Possible rooms kept for the resolution trace. */
     maxRoomCandidates: 8,
+    /**
+     * How often the experience total is sampled for the Combat Stats card's
+     * rate graph, and how many samples are kept: a minute, and a day of them.
+     * The newest sample is updated in place until its minute is spent, so a
+     * burst of kills is one point.
+     */
+    statsSampleMs: 60_000,
+    statsSamplesKept: 1440,
     /**
      * The band a line has to be inside to be read as a room's name.
      *
@@ -538,7 +558,18 @@ const TUNING_DEFAULTS = {
      * counts towards the order — taken early, at full health — without
      * outweighing every round of blows before it.
      */
-    deathOverRounds: 5
+    deathOverRounds: 5,
+    /**
+     * The room's fight, run (`simulateFight`): how many times, how long a
+     * fight may run before it is called, and the shares of fights survived
+     * that read as safe and as merely risky — under `riskyAbove` is deadly.
+     * Three hundred runs of a long fight are a millisecond or two on the
+     * socket's thread; the figures move by a point or two between seeds.
+     */
+    survivalTrials: 300,
+    survivalRoundCap: 120,
+    survivalSafeAbove: 0.95,
+    survivalRiskyAbove: 0.6
   },
   /** Casting on the character's behalf — `AutoHeal`, `Cures`, `Blessings`. */
   spells: {
@@ -552,6 +583,13 @@ const TUNING_DEFAULTS = {
     healExpiresMs: 3000,
     /** Long enough for the next status line to say whether the heal worked. */
     healCooldownMs: 6000,
+    /**
+     * How long a member's `@heal` stands waiting for a cast. Past one
+     * `healCooldownMs`, so a request arriving just after a heal to that member
+     * still gets its own once the first has been read; after that the asker's
+     * client asks again if it is still low.
+     */
+    healRequestMs: 10_000,
     /** How long a cure proposal stays worth sending. */
     cureExpiresMs: 3000,
     /** How often the blessing maintainer looks at what has lapsed. */
@@ -703,8 +741,18 @@ const TUNING_DEFAULTS = {
     backstabMultiplier: 4,
     /** How many rooms a suggested loop visits at most, fillers included. */
     maxLoopRooms: 8,
-    /** How many suggestions are handed back. */
+    /**
+     * How many of the best suggestions are measured — the ring's legs, its
+     * size, its fillers. Every other one is still listed, on the survey's
+     * first estimate: measuring all of them costs the thread a second.
+     */
     maxSpots: 24,
+    /**
+     * How many of this character's own opened fights its measured damage a
+     * round needs before the survey prices a kill with it, where the realm's
+     * arithmetic cannot (`measuredPerRound`, off the GreaterMUD lineage).
+     */
+    measuredFightsMin: 30,
     /** How far the loop's own low-experience stop looks for a better lair, in steps. */
     betterSpotRadius: 80,
     /**
@@ -873,7 +921,64 @@ const TUNING_DEFAULTS = {
      * and the whole realm's span of markups is worth about a hundred and
      * seventy. Zero makes the price count for nothing and detour decide alone.
      */
-    dearerSteps: 20
+    dearerSteps: 20,
+    /**
+     * Copper withdrawn over what a purchase costs, where the vault holds it.
+     *
+     * The price is the server's own arithmetic and exact, but a counter's
+     * markup is the realm's to change, and a purse withdrawn to the copper is
+     * one refused the moment anything moves. A thousand is ten gold crowns: a
+     * second waterskin, not a fortune carried about. Zero withdraws exactly.
+     */
+    cashBuffer: 1000
+  },
+  /** Carrying a quest's plan through the arbiter — `QuestRunner`. */
+  quests: {
+    /**
+     * How long an act has to move the counter, or a handover to reach the
+     * pack, before the silence is read as a refusal. The server answers an
+     * ask with the next prompt and `abil` lists everything in one burst, so
+     * this covers only a realm under load; a step with an `adddelay` waits
+     * that delay on top.
+     */
+    replyMs: 12_000,
+    /**
+     * How many times a step that rolls (`testskill`) is asked again after
+     * the counter stayed put. The red book passes one try in seven at
+     * Intellect 45; twelve tries fail one time in six, and every try is one
+     * ask and one listing.
+     */
+    rollTries: 12,
+    /**
+     * How many times a listing the outcome waits on — `abil` for a counter,
+     * `i` for a pack a script handed something to — is asked for, `replyMs`
+     * apart, before the silence is a setback.
+     */
+    listingAsks: 3,
+    /**
+     * How long to stand at a step's room waiting for its asker or its
+     * monster to be there before the run gives up on it. A lair's clock is
+     * minutes; a boss summoned by a step before this one is seconds.
+     */
+    waitForMs: 600_000,
+    /** Legs planned again after a stopped walk, before the run gives up. A fight spends none. */
+    maxLegs: 6,
+    /**
+     * How long the run stands still after a setback before trying the same
+     * thing again. Long enough for what caused one to pass — a move nobody
+     * answered, an escape, a monster between the character and the door —
+     * and short enough that a night's run is not spent waiting.
+     */
+    retryMs: 20_000,
+    /**
+     * Setbacks in a row, with nothing achieved between them, before the run
+     * gives up for good. Anything going right — a leg started, an item in the
+     * pack, a step confirmed — puts the count back to zero, so this counts a
+     * run that is stuck rather than a run having a hard night.
+     */
+    setbacks: 20,
+    /** A queued ask, phrase or `abil` still waiting after this is for a moment that has passed. */
+    expiresMs: 8000
   },
   /** Shedding named junk — `AutoDrop`. */
   drop: {
@@ -945,6 +1050,43 @@ const TUNING_DEFAULTS = {
     holdMs: 1_500,
     /** How many holds run back to back before it walks on regardless. */
     maxHolds: 3,
+    /**
+     * How long a walk stands in the room it has just arrived in before
+     * stepping out of it again, where the room it left held a monster.
+     *
+     * The server works the follow out **inside** the move — `Exits.cs:165`
+     * collects every mob in the room whose `CurrentTarget` is this character,
+     * rolls each against `MobType.FollowPercent` and moves the winners with
+     * the player — so the arrival sentences are composed *after* the room
+     * block, and `Also here:` is absent from a room block that is about to
+     * hold five monsters. Measured on
+     * `2026-09-23_09-33-51_festus.mudcap.jsonl` t=1678757: one socket read
+     * carried the room block, the prompt and all five
+     * `saracen ... moves into the room from the west.` lines, and the walk
+     * sent `ne` six milliseconds in.
+     *
+     * **A margin over that window, and only that window.** Across every
+     * session log on this machine, 28 monsters arrived from the direction the
+     * character had just come, naming something the departure room's own
+     * listing held. 22 are that synchronous follow: none later than 39ms, and
+     * four of them a socket read behind the room block rather than in it, so
+     * the read boundary alone is not the bound. One straggler at 330ms. This
+     * covers both with room to spare.
+     *
+     * **It does not cover the chase, and nothing could.** The other five
+     * arrived 959–1,670ms on: `Mob.CheckFollow` tracks through
+     * `Room.RecentMovers` on the monster's own clock and forgets the target
+     * only after thirty seconds, so a chaser can arrive at any tick. One that
+     * arrives while the character is standing there is the ordinary arrival's
+     * to answer; one that catches up after the walk has moved on is a
+     * different problem, and a longer settle would buy a slower walk rather
+     * than a solution.
+     *
+     * **Paid only where something could follow.** A room the character left
+     * empty settles for nothing, so an ordinary corridor walks at the speed
+     * it always did.
+     */
+    followSettleMs: 350,
     /**
      * How far the character may have wandered from what it was walking before
      * pressing play asks about it first.
@@ -1348,7 +1490,14 @@ const TUNING_DEFAULTS = {
      * command answer is well under ten — with the rest as margin for a client
      * whose player is mid-fight. Revisit with a capture.
      */
-    replyMs: 30_000
+    replyMs: 30_000,
+    /**
+     * How often a character still under `party.askForHealBelow` says `@heal`
+     * again. MegaMUD's own party clock (`ParPeriod=15` in its sample.ini) is
+     * how often it re-reads the listing in a fight; a healer that could not
+     * answer the first request hears the second about as often.
+     */
+    healAskAgainMs: 15_000
   },
   /**
    * How many commands one press or one `@` may spend.
@@ -1383,6 +1532,12 @@ const TUNING_DEFAULTS = {
     /** Framed lines retained; the terminal keeps the real backscroll. */
     lineLogLimit: 500,
     /**
+     * The most commands one talk-box line may stand for (todo 04). The line
+     * is paced by the prompt, so this is not the realm's flood limit; it is
+     * what `99s` typed for `9s` would cost before anyone could stop it.
+     */
+    macroCommands: 40,
+    /**
      * How long a prompt that has opened its bracket and not closed it may
      * keep arriving before the client stops waiting for the rest.
      *
@@ -1397,6 +1552,24 @@ const TUNING_DEFAULTS = {
      * finishes. `mudengine-wire` § Line framing is not CRLF.
      */
     promptHoldMs: 1000,
+    /**
+     * How long a tail that is *not* a prompt may keep arriving before the
+     * client frames it anyway.
+     *
+     * The quiet period that releases a prompt is 150ms, and over the internet
+     * that is not long enough to mean a sentence ended: bearfather's BBS
+     * paused 178ms in the middle of `Intersection of River St. & Mystic
+     * Alley`, and the half in hand was framed as a line, read as a room name,
+     * and written into the character's memory as a place that does not exist.
+     * Measured over 670 captured sessions, 25 server sentences were cut in
+     * half this way — room exits, a monster's arrival, and `who` roster rows
+     * split mid-name; 700ms covers 22 of them. The three left are two BBS
+     * banner lines nothing parses and one 33-second stall, where waiting
+     * would be worse than splitting. Nothing waits on this deadline but text
+     * the server appended after a prompt, which is why it is not longer.
+     * `mudengine-wire` § Line framing is not CRLF.
+     */
+    sentenceHoldMs: 700,
     /**
      * How long the lines of a listing the client redraws (`ui.rewrites`) are
      * withheld while the rest of it arrives, before they are painted as sent.
@@ -1524,8 +1697,23 @@ const TUNING_DEFAULTS = {
     talkFlushMs: 2000,
     /** How many it holds if a flush never happens. */
     talkHeld: 500,
+    /** How long painted console output waits before it is written down. */
+    backscrollFlushMs: 2000,
+    /**
+     * Rewrite the backscroll file once it holds this many times what is kept,
+     * rather than appending for ever: it is read whole at launch, and a cap
+     * on the lines kept is not a cap on a file that only grows.
+     */
+    backscrollRewriteAt: 2,
     /** How long a balance change waits before it is written. */
     belongingsWriteDelayMs: 2000,
+    /**
+     * How long the running totals wait before the record is written. Longer
+     * than a balance, because they move on every blow and the record is
+     * rewritten whole; a crash costs at most this much of them, and a quit
+     * writes them exactly.
+     */
+    statsWriteDelayMs: 30_000,
     /**
      * Vaults kept for one character. The shipped realm has seven banks; a file
      * past this is one being fed something that is not a bank name.
@@ -1659,6 +1847,25 @@ const TUNING_DEFAULTS = {
      */
     deadlyShare: 1,
     /**
+     * The most of the bar a pass **nobody can say will happen** may be priced
+     * at, however bad it would be if it did.
+     *
+     * A monster's disposition can be conditional — `hates-evil` opens on an
+     * Outlaw and leaves a Saint alone — so a character whose standing the
+     * client has not read meets *nobody can say*, and `lairPassage` counts
+     * such a monster **in** rather than out, because unknown is never the
+     * reassuring answer. Counted in at its full share it reaches
+     * `deadlyShare`, and a fact nobody has read then **walls** a corridor —
+     * which is the one thing `edgePenalty` was fixed not to do for a gate it
+     * cannot evaluate, and which sent a route 46 steps around a town square
+     * it could have crossed (bearfather, 2026-09-17). So the share is capped
+     * rather than the monster dropped: a tenth of the bar is about twenty
+     * plain steps, enough to prefer a way round that exists and never enough
+     * to justify a map. `deadlyShare` or above restores the wall; zero says
+     * *safe*, which is the other way to be wrong.
+     */
+    unsureShare: 0.1,
+    /**
      * What one pass through a room whose spell this client **cannot read** is
      * priced at, as a share of the bar.
      *
@@ -1693,6 +1900,32 @@ const TUNING_DEFAULTS = {
      * shown. One more A* per route planned for a reader.
      */
     alternativeMinSteps: 10,
+    /**
+     * What a step along the plan costs while the router is asked for a way
+     * that differs from it (`Route.another`): the plan's own edges are priced
+     * this many times over and the search asked again, so it leaves the plan
+     * wherever a detour costs less than this much of what it replaces. 1
+     * finds the plan again and offers nothing.
+     */
+    anotherWayPenalty: 3,
+    /**
+     * How much longer than the plan a different way may be and still be
+     * offered, as a share of the plan's steps: 0.5 is half again as long. A
+     * way that differs is expected to be dearer — that is why it was not the
+     * plan — and past this it is a tour rather than a choice.
+     */
+    anotherWayLonger: 0.5,
+    /**
+     * How many of a consumable a quest's plan buys against a room spell on
+     * the way, where the realm says using one stops the spell.
+     *
+     * A waterskin is three uses and its spell lasts 600 ticks, the desert
+     * crossing is 64 rooms each way, and the plan cannot know how many times
+     * the walk will stop: two is one spare. A thing that is not spent
+     * (`WorldItem.uses` absent or unbounded) is fetched once whatever this
+     * says.
+     */
+    hazardSupplyCount: 2,
     /**
      * How many rounds of a lair's blows one pass through the room is priced
      * at. In and out is one round from whatever attacks on sight; two prices
@@ -1909,6 +2142,14 @@ const TUNING_DEFAULTS = {
      * there for the whole of the hold.
      */
     talkFollowResumeMs: 45_000,
+    /**
+     * How long the quest run banner stays over the console saying how the run
+     * ended, before it takes itself down. The ending is also in the stream
+     * and on the Quest card, so the banner is a notice and not the record —
+     * and while it stands it covers the console's top rows and takes their
+     * clicks. Long enough to read a reason; the × on it is for sooner.
+     */
+    questRunLingerMs: 30_000,
     /**
      * Lines the Talk composer remembers for its Up arrow.
      *
@@ -2149,6 +2390,20 @@ const TUNING_DEFAULTS = {
      */
     clockTickMs: 1000,
     /**
+     * How much restored backscroll a console is handed per write at launch.
+     * xterm parses one write in one go and yields only between writes, so a
+     * whole restored backscroll (100,000 lines, 8 MB) was a second-long task
+     * per character (todo 02, 2026-09-23); slices this size keep each under a
+     * frame.
+     */
+    restoreSliceChars: 65536,
+    /**
+     * How long after a plain Enter the shown console must have turned it into
+     * input before the console says it did not (todo 00). xterm hands a key
+     * over inside its own keydown, so this only has to outlast a busy frame.
+     */
+    enterTakenMs: 250,
+    /**
      * How long a room search waits after the last keystroke, and the shortest
      * query worth running.
      *
@@ -2159,6 +2414,22 @@ const TUNING_DEFAULTS = {
      */
     roomSearchDebounceMs: 150,
     roomSearchMinChars: 2,
+    /**
+     * How many of the realm's own things — monsters, items, spells — a palette
+     * query lists beneath the rooms it found.
+     *
+     * The lookup answers a dozen per kind with the name-prefix matches first,
+     * so the cap trims the substring tail rather than the answer somebody
+     * typed for; typing one more letter is how the list narrows, not
+     * scrolling.
+     */
+    paletteFoundRows: 12,
+    /**
+     * How many bars or points the Combat Stats card's rate graph draws across
+     * its window, whatever the window is. Two dozen is what its width holds
+     * on the rail at the shipped density.
+     */
+    statsGraphBins: 24,
     /**
      * How long a pointer rests on a room before its quick view opens, and how
      * long the panel stays after the pointer has left both it and the room.
@@ -2258,6 +2529,9 @@ export const DEFAULT_INTERNAL: InternalConfig = {
       'automation',
       'combat',
       'retaliate',
+      // Keeping the blessings up, on the row: the switch somebody flips for
+      // one fight to keep the mana for healing, and back after.
+      'autoBless',
       'loot',
       /*
        * Searching every room, on the row rather than in the kebab.
@@ -2283,6 +2557,16 @@ export const DEFAULT_INTERNAL: InternalConfig = {
 };
 
 /**
+ * The durations whose template says `0` switches them off, as `group.key`.
+ *
+ * Floored at 1 like every other duration, `reconnect.silentForMs: 0` became a
+ * one-millisecond deadline: the client called every connection dead a
+ * millisecond after its first command and dialled again for ever. Its reader
+ * (`LinkWatch.noteSent`) arms no timer at 0, so nothing spins.
+ */
+const OFF_AT_ZERO: ReadonlySet<string> = new Set(['reconnect.silentForMs']);
+
+/**
  * One number out of the file, bounded by the shape of its default.
  *
  * Two rules, both mechanical so that a key added to `TUNING_DEFAULTS` needs no
@@ -2291,7 +2575,8 @@ export const DEFAULT_INTERNAL: InternalConfig = {
  * - **A fractional default means a fraction**, clamped to 0–1. Every one of
  *   them is a confidence, a threshold or a tolerance.
  * - **A key ending `Ms` is a duration and floors at 1.** A zero-millisecond
- *   timer spins a core, and this file is one somebody edits by hand.
+ *   timer spins a core, and this file is one somebody edits by hand — except
+ *   a key in `OFF_AT_ZERO`, whose reader tests for 0 and arms nothing.
  *
  * Anything unreadable takes the default rather than throwing, for the reason
  * the whole file works that way: a bad edit must never take the client down.
@@ -2300,7 +2585,8 @@ function tunedNumber(key: string, value: unknown, fallback: number): number {
   const n = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
   if (!Number.isFinite(n)) return fallback;
   if (!Number.isInteger(fallback)) return Math.min(1, Math.max(0, n));
-  return Math.min(1_000_000_000, Math.max(key.endsWith('Ms') ? 1 : 0, Math.round(n)));
+  const floor = key.endsWith('Ms') && !OFF_AT_ZERO.has(key) ? 1 : 0;
+  return Math.min(1_000_000_000, Math.max(floor, Math.round(n)));
 }
 
 /**
@@ -2319,7 +2605,7 @@ function normalizeTuning(raw: unknown): TuningConfig {
   for (const [group, fields] of Object.entries(out)) {
     const stated = isRecord(root[group]) ? (root[group] as Record<string, unknown>) : {};
     for (const key of Object.keys(fields)) {
-      fields[key] = tunedNumber(key, stated[key], fields[key] as number);
+      fields[key] = tunedNumber(`${group}.${key}`, stated[key], fields[key] as number);
     }
   }
   return out as TuningConfig;

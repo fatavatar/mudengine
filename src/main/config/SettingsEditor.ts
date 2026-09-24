@@ -14,6 +14,7 @@ import {
   mergeServers,
   normalizeConfig,
   type AutomationSwitch,
+  type LoginStep,
   type RetreatConfig,
   type SupplyItem
 } from '../../shared/config';
@@ -22,7 +23,8 @@ import { loopFileName, type Loop, type LoopScope, type ScopedLoop } from '../../
 import type { Home } from '../app/home';
 import { t } from '../app/i18n';
 import {
-  ownMobPriority,
+  ownHangPenalties,
+  ownMobRules,
   PROFILE_ACCENTS,
   resolveProfile,
   type ProfileAccent
@@ -280,10 +282,7 @@ export class SettingsEditor {
          * be noise in a file people read besides.
          */
         if (draft.login.length > 0) {
-          document.setIn(
-            ['login', 'steps'],
-            draft.login.map((step) => ({ when: step.when, send: step.send }))
-          );
+          document.setIn(['login', 'steps'], draft.login.map(loginRow));
         } else if (document.hasIn(['login'])) {
           document.deleteIn(['login']);
         }
@@ -334,7 +333,9 @@ export class SettingsEditor {
           document.setIn(['automation', 'safety', 'hangUp'], {
             enabled: draft.hangUp.enabled,
             belowHealth: draft.hangUp.belowHealth,
-            onlyWhenClean: draft.hangUp.onlyWhenClean,
+            // Absent leaves it to the realm and then the options file, so null
+            // writes no key rather than a copy of what is inherited.
+            ...(draft.hangUp.penalties === null ? {} : { penalties: draft.hangUp.penalties }),
             onPlayerInRoom: draft.hangUp.onPlayerInRoom
           });
         }
@@ -380,6 +381,8 @@ export class SettingsEditor {
           [['automation', 'movement'], draft.movement, DEFAULT_CONFIG.automation.movement],
           [['automation', 'hunting'], draft.hunting, DEFAULT_CONFIG.automation.hunting],
           [['automation', 'train'], draft.train, DEFAULT_CONFIG.automation.train],
+          [['automation', 'quests'], draft.quests, DEFAULT_CONFIG.automation.quests],
+          [['automation', 'gear'], draft.gear, DEFAULT_CONFIG.automation.gear],
           [['automation', 'loot'], draft.loot, DEFAULT_CONFIG.automation.loot],
           [['automation', 'drop'], draft.drop, DEFAULT_CONFIG.automation.drop],
           [['automation', 'search'], draft.search, DEFAULT_CONFIG.automation.search],
@@ -739,10 +742,7 @@ export class SettingsEditor {
          * reads as a script somebody meant to fill in.
          */
         if (draft.login.length > 0) {
-          document.setIn(
-            ['login'],
-            draft.login.map((step) => ({ when: step.when, send: step.send }))
-          );
+          document.setIn(['login'], draft.login.map(loginRow));
         } else if (document.hasIn(['login'])) {
           document.deleteIn(['login']);
         }
@@ -766,18 +766,23 @@ export class SettingsEditor {
         else if (document.hasIn(['database'])) document.deleteIn(['database']);
 
         /*
-         * And the realm's own ranking of its monsters, on the same rule: an
+         * And the realm's own rules for its monsters, on the same rule: an
          * empty list is what a realm with no key already has, so the key is
          * removed rather than written as `[]`.
          */
-        if (draft.mobPriority.length > 0) {
+        if (draft.mobRules.length > 0) {
           document.setIn(
-            ['mobPriority'],
-            draft.mobPriority.map((row) => ({ mob: row.mob, priority: row.priority }))
+            ['mobRules'],
+            draft.mobRules.map((row) => ({ mob: row.mob, treat: row.treat }))
           );
-        } else if (document.hasIn(['mobPriority'])) {
-          document.deleteIn(['mobPriority']);
+        } else if (document.hasIn(['mobRules'])) {
+          document.deleteIn(['mobRules']);
         }
+
+        // And whether a hang-up here is charged: absent leaves it to the
+        // options file, so null removes the key rather than writing one.
+        if (draft.hangPenalties !== null) document.setIn(['hangPenalties'], draft.hangPenalties);
+        else if (document.hasIn(['hangPenalties'])) document.deleteIn(['hangPenalties']);
       },
       verify: (value) => {
         const server = asServer(value, id);
@@ -955,7 +960,7 @@ export class SettingsEditor {
         hangUp: {
           enabled: config.automation.safety.hangUp.enabled,
           belowHealth: config.automation.safety.hangUp.belowHealth,
-          onlyWhenClean: config.automation.safety.hangUp.onlyWhenClean,
+          penalties: config.automation.safety.hangUp.penalties,
           onPlayerInRoom: config.automation.safety.hangUp.onPlayerInRoom
         },
         retreat: retreatOf(config.automation.safety.retreat),
@@ -966,6 +971,14 @@ export class SettingsEditor {
         health: { ...config.automation.health },
         movement: { ...config.automation.movement },
         train: { ...config.automation.train, wanted: { ...config.automation.train.wanted } },
+        quests: { ...config.automation.quests },
+        // Deep, because the sets and their `wear` lists are the draft's
+        // own to edit: a shallow copy hands the form the config's arrays.
+        gear: {
+          ...config.automation.gear,
+          sets: config.automation.gear.sets.map((set) => ({ ...set, wear: [...set.wear] })),
+          offRound: { ...config.automation.gear.offRound }
+        },
         spells: { ...config.automation.spells },
         loot: { ...config.automation.loot, items: [...config.automation.loot.items] },
         drop: { ...config.automation.drop, items: [...config.automation.drop.items] },
@@ -1009,10 +1022,7 @@ export class SettingsEditor {
         set(['connection', 'encoding'], draft.connection.encoding);
         // No account and no autoconnect here: both belong to a character, and
         // `dropAnonymousConnection` has already taken any old ones out.
-        set(
-          ['connection', 'login', 'steps'],
-          draft.connection.login.steps.map((step) => ({ when: step.when, send: step.send }))
-        );
+        set(['connection', 'login', 'steps'], draft.connection.login.steps.map(loginRow));
 
         set(['terminal', 'font', 'family'], splitNames(draft.terminal.fontFamily));
         set(['terminal', 'font', 'size'], draft.terminal.fontSize);
@@ -1074,6 +1084,8 @@ export class SettingsEditor {
           ...draft.automation.train,
           wanted: { ...draft.automation.train.wanted }
         });
+        set(['automation', 'quests'], { ...draft.automation.quests });
+        set(['automation', 'gear'], { ...draft.automation.gear });
         set(['automation', 'spells'], { ...draft.automation.spells });
         set(['automation', 'loot'], { ...draft.automation.loot });
         set(['automation', 'drop'], { ...draft.automation.drop });
@@ -1185,7 +1197,11 @@ export class SettingsEditor {
         login: Array.isArray(login['steps'])
           ? login['steps']
               .filter(isRecord)
-              .map((step) => ({ when: text(step['when']), send: text(step['send']) }))
+              .map((step) => ({
+                when: text(step['when']),
+                send: text(step['send']),
+                ...(step['repeat'] === true ? { repeat: true } : {})
+              }))
               .filter((step) => step.when.length > 0)
           : [],
         /*
@@ -1194,7 +1210,12 @@ export class SettingsEditor {
          * stale the first time the first one changes, which is the rule the
          * options template already keeps: defaults live in exactly one place.
          */
-        hangUp: effective?.automation.safety.hangUp ?? DEFAULT_CONFIG.automation.safety.hangUp,
+        // The character's own answer about penalties, read raw as `mobRules`
+        // is below: the resolved one may be the realm's or the options file's.
+        hangUp: {
+          ...(effective?.automation.safety.hangUp ?? DEFAULT_CONFIG.automation.safety.hangUp),
+          penalties: ownHangPenalties(record)
+        },
         retreat: retreatOf(
           effective?.automation.safety.retreat ?? DEFAULT_CONFIG.automation.safety.retreat
         ),
@@ -1202,26 +1223,28 @@ export class SettingsEditor {
           effective?.automation.safety.fleeGoto ?? DEFAULT_CONFIG.automation.safety.fleeGoto,
         pvp: effective?.automation.safety.pvp ?? DEFAULT_CONFIG.automation.safety.pvp,
         /*
-         * The resolved combat block, except for the priority list, which is
+         * The resolved combat block, except for the monster list, which is
          * the character's **own** rows from the file as written (todo 01).
          *
-         * `mobPriority` is the one list here merged across the three scopes
+         * `mobRules` is the one list here merged across the three scopes
          * rather than replaced, so the resolved one holds the realm's rows and
          * the global file's as well. Seeding the form with those and saving it
          * back would write them into this character's own file — pinning down
-         * a ranking it was only inheriting, so that changing the realm's list
+         * rules it was only inheriting, so that changing the realm's list
          * afterwards would silently not reach it. The same distinction
          * `login.steps` above keeps, for the same reason.
          */
         combat: {
           ...(effective?.automation.combat ?? DEFAULT_CONFIG.automation.combat),
-          mobPriority: ownMobPriority(record)
+          mobRules: ownMobRules(record)
         },
         party: effective?.automation.party ?? DEFAULT_CONFIG.automation.party,
         health: effective?.automation.health ?? DEFAULT_CONFIG.automation.health,
         movement: effective?.automation.movement ?? DEFAULT_CONFIG.automation.movement,
         hunting: effective?.automation.hunting ?? DEFAULT_CONFIG.automation.hunting,
         train: effective?.automation.train ?? DEFAULT_CONFIG.automation.train,
+        quests: effective?.automation.quests ?? DEFAULT_CONFIG.automation.quests,
+        gear: effective?.automation.gear ?? DEFAULT_CONFIG.automation.gear,
         loot: effective?.automation.loot ?? DEFAULT_CONFIG.automation.loot,
         drop: effective?.automation.drop ?? DEFAULT_CONFIG.automation.drop,
         search: effective?.automation.search ?? DEFAULT_CONFIG.automation.search,
@@ -1322,6 +1345,18 @@ function inheritedLoops(
   ];
 }
 
+/**
+ * One login row as it is written to disk.
+ *
+ * Projected field by field rather than spread, so a field the draft happens to
+ * carry cannot leak into the player's file. `repeat` is written only when it is
+ * on: an ordinary menu row stays the two keys it has always been, and a file
+ * somebody reads is not full of `repeat: false`.
+ */
+function loginRow(step: LoginStep): Record<string, unknown> {
+  return { when: step.when, send: step.send, ...(step.repeat ? { repeat: true } : {}) };
+}
+
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -1370,7 +1405,7 @@ function blank(id: string): ProfileEditable {
     username: '',
     hasPassword: false,
     login: [],
-    hangUp: DEFAULT_CONFIG.automation.safety.hangUp,
+    hangUp: { ...DEFAULT_CONFIG.automation.safety.hangUp, penalties: null },
     retreat: retreatOf(DEFAULT_CONFIG.automation.safety.retreat),
     fleeGoto: DEFAULT_CONFIG.automation.safety.fleeGoto,
     pvp: DEFAULT_CONFIG.automation.safety.pvp,
@@ -1380,6 +1415,8 @@ function blank(id: string): ProfileEditable {
     movement: DEFAULT_CONFIG.automation.movement,
     hunting: DEFAULT_CONFIG.automation.hunting,
     train: DEFAULT_CONFIG.automation.train,
+    quests: DEFAULT_CONFIG.automation.quests,
+    gear: DEFAULT_CONFIG.automation.gear,
     loot: DEFAULT_CONFIG.automation.loot,
     drop: DEFAULT_CONFIG.automation.drop,
     search: DEFAULT_CONFIG.automation.search,

@@ -63,6 +63,8 @@ export interface RoutineEvents {
 export class Routines {
   /** Whether the realm-entry probe has already run this session. */
   private probed = false;
+  /** Whether the character is in the realm: the only time the idle clock runs. */
+  private inRealm = false;
   private idleTimer: NodeJS.Timeout | null = null;
   private lastSent = Date.now();
   /**
@@ -148,6 +150,7 @@ export class Routines {
     this.askedAbilities = false;
     this.bookCorrected = false;
     this.lastSent = Date.now();
+    this.inRealm = false;
     this.stopIdle();
   }
 
@@ -159,11 +162,24 @@ export class Routines {
    * is ready to answer questions.
    */
   onCharacter(state: CharacterState): void {
-    if (state.phase !== 'in-game') return;
-    if (!this.probed) {
-      this.probed = true;
+    if (state.phase !== 'in-game') {
       /*
-       * Armed here unconditionally, before the enabled check below.
+       * Out of the realm — the socket gone, or the exit to the menu — there is
+       * nothing to keep alive and nobody to ask. Left running, the clock
+       * proposed a bare Enter every forty-five seconds into a socket that had
+       * closed, for seven hours (2026-09-18: 552 of them in
+       * `logs/2026-09-17_23-47-17_soul.mudcap.jsonl`), each one then read as
+       * a command the realm had failed to answer.
+       */
+      this.inRealm = false;
+      this.stopIdle();
+      return;
+    }
+    if (!this.inRealm) {
+      this.inRealm = true;
+      /*
+       * Armed here unconditionally, before the enabled check below, and on
+       * every entry rather than the first: leaving stopped it.
        *
        * It used to sit after the probe commands were built and only ran when
        * there were some — so a character configured with an empty
@@ -175,6 +191,9 @@ export class Routines {
        * probes configured.
        */
       this.armIdle();
+    }
+    if (!this.probed) {
+      this.probed = true;
 
       const commands = this.config.onEnterRealm;
       if (this.config.enabled && commands.length > 0) {
@@ -711,7 +730,11 @@ export class Routines {
 
   private armIdle(): void {
     this.stopIdle();
-    if (!this.config.enabled || !this.config.idle.enabled) return;
+    // A reload while out of the realm must not start it; entering does. Not
+    // gated on the master switch: the keep-alive serves the connection (see
+    // `Intent.keepsLink`), and the two drains that share this tick gate
+    // themselves on it.
+    if (!this.inRealm || !this.config.idle.enabled) return;
 
     // Checked at a fraction of the threshold so the command lands close to the
     // configured quiet period rather than up to a whole period late.
@@ -738,6 +761,7 @@ export class Routines {
       command: this.config.idle.command,
       priority: 'idle',
       coalesceKey: 'idle',
+      keepsLink: true,
       // Worthless if it arrives late — by then something else has happened.
       expiresAt: Date.now() + this.config.idle.afterSeconds * 1000,
       reason: t('automation.routines.reasonIdle')

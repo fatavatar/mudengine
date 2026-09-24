@@ -43,6 +43,13 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
       'sentences with `{target}`/`{dmg}` tokens — so each is compiled once when the table is ' +
       'loaded (`MessageTriggers.load`) and held; the per-line path tests a literal with ' +
       '`includes` before any compiled one runs'
+  },
+  'src/shared/template.ts': {
+    count: 2,
+    because:
+      'user-authored templates may specify regex patterns for grouping and filtering ' +
+      '({group ...}, `=~`), which are user input unknown at compile time; compiled on demand ' +
+      'and cached by string in `compileRegex`'
   }
 };
 

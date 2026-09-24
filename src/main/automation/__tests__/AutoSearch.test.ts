@@ -4,7 +4,7 @@ import { AutoSearch } from '../AutoSearch';
 import { wireExit } from '../../../shared/entities';
 import { CommandQueue } from '../CommandQueue';
 import { DEFAULT_CONFIG, type AutomationConfig, type SearchConfig } from '../../../shared/config';
-import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
+import { EMPTY_CHARACTER, type CharacterState, type RoomOccupant } from '../../../shared/character';
 
 const automation: AutomationConfig = {
   ...DEFAULT_CONFIG.automation,
@@ -15,6 +15,17 @@ const config = (over: Partial<SearchConfig> = {}): SearchConfig => ({
   enabled: true,
   tries: 1,
   ...over
+});
+
+const monster = (name: string): RoomOccupant => ({
+  name,
+  kind: 'mob',
+  disposition: null,
+  uncertain: false,
+  costly: 'never',
+  charmed: false,
+  hidden: false,
+  free: false
 });
 
 /** A character standing in a room the realm has placed, unless told otherwise. */
@@ -44,6 +55,8 @@ let queue: CommandQueue;
  * moves this one on its own.
  */
 let now: CharacterState;
+/** `AutoCombat.quarry`, as the session hands it in: nothing to fight unless a test says so. */
+let quarry: (state: CharacterState) => boolean;
 let queueSearch: (config?: SearchConfig, enabled?: boolean) => AutoSearch;
 /** A status line: proposed against this state, and sent against it too. */
 const at = (search: AutoSearch, said: CharacterState): void => {
@@ -55,8 +68,15 @@ beforeEach(() => {
   sent = [];
   queue = new CommandQueue(automation, { send: (command) => sent.push(command) });
   now = state();
+  quarry = () => false;
   queueSearch = (over = config(), enabled = true) =>
-    new AutoSearch(over, enabled, queue, () => now);
+    new AutoSearch(
+      over,
+      enabled,
+      queue,
+      () => now,
+      (said) => quarry(said)
+    );
 });
 afterEach(() => {
   queue.dispose();
@@ -182,6 +202,43 @@ describe('when it will not search', () => {
     expect(sent).toEqual([]);
   });
 
+  /*
+   * `festus`, 2026-09-18: dragged by its leader into a room holding a fierce
+   * orc fanatic, it sent `aa fierce orc fanatic` and `search` 3ms apart — the
+   * prompt closing the room released the attack's credit — and the search
+   * reached the server before `*Combat Engaged*` came back. Nothing was
+   * fighting yet at either ask; the monster auto-combat was opening on was.
+   */
+  it('fights what auto-combat would open on first, then searches', () => {
+    const fanatic = monster('fierce orc fanatic');
+    quarry = (said) => said.room.occupants.length > 0;
+    const search = queueSearch();
+    // Arrived, and the attack is proposed but unanswered.
+    at(search, state({ occupants: [fanatic] }));
+    // Engaged: the fight is the tracker's now, and quarry stands down.
+    at(search, state({ occupants: [fanatic] }, { inCombat: true }));
+    expect(sent).toEqual([]);
+    // The kill takes it out of the room, and the room is searched.
+    at(search, state());
+    expect(sent).toEqual(['search']);
+  });
+
+  it('drops a search when a monster auto-combat would open on walks in before the send', () => {
+    const search = queueSearch();
+    queue.noteTyping(true);
+    at(search, state());
+    quarry = () => true;
+    queue.noteTyping(false);
+    expect(sent).toEqual([]);
+  });
+
+  /* The positive control: a monster nobody will fight is no reason to wait. */
+  it('searches a room whose monster auto-combat will not open on', () => {
+    const search = queueSearch();
+    at(search, state({ occupants: [monster('town crier')] }));
+    expect(sent).toEqual(['search']);
+  });
+
   /* Unmeasured rather than settled, like `AutoLoot`: whether `search` breaks a
      rest has never been asked of the wire, and waiting costs only the wait. */
   it('does not search while resting or meditating', () => {
@@ -228,6 +285,39 @@ describe('when it will not search', () => {
     // A differently-shaped Sewer Tunnel is a different room.
     at(search, state({ ...unplaced, exits: [wireExit('s')] }));
     expect(sent).toEqual(['search', 'search']);
+  });
+
+  /*
+   * A maze repeats its addresses on purpose: three rooms called `Secret
+   * Passage` printing `east, west` in a row, walked one after another on
+   * bearfather (2026-09-17). The name and the exits say one room; the arrival
+   * says three, and the arrival is the only thing that can.
+   */
+  it('searches each room of a corridor of namesakes', () => {
+    const passage = {
+      map: null,
+      number: null,
+      name: 'Secret Passage',
+      exits: [wireExit('e'), wireExit('w')]
+    };
+    const search = queueSearch();
+    at(search, state({ ...passage, arrival: 4 }));
+    at(search, state({ ...passage, arrival: 5 }));
+    at(search, state({ ...passage, arrival: 6 }));
+    expect(sent).toEqual(['search', 'search', 'search']);
+  });
+
+  /*
+   * And the other half of the same fact: a room merely printed again — a
+   * `look`, the courtesy reprint after a fight, the idle Enter — is the room
+   * the character is already standing in, whatever else changed about it.
+   */
+  it('does not search a room the server simply printed again', () => {
+    const search = queueSearch();
+    at(search, state({ arrival: 7 }));
+    at(search, state({ arrival: 7, occupants: [] }));
+    at(search, state({ arrival: 7 }));
+    expect(sent).toEqual(['search']);
   });
 });
 

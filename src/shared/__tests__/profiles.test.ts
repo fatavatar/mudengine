@@ -90,6 +90,43 @@ describe('the realm a character walks', () => {
   });
 });
 
+/* Whether a hang-up is charged: the character, then its realm, then the options file (todo 01). */
+describe('who says a hang-up is charged', () => {
+  const realm = (hangPenalties?: boolean) => ({
+    servers: [
+      {
+        name: 'Bearfather',
+        host: 'bbs.bearfather.net',
+        port: 23,
+        ...(hangPenalties === undefined ? {} : { hangPenalties })
+      }
+    ],
+    automation: { safety: { hangUp: { penalties: false } } }
+  });
+  const penalties = (raw: Record<string, unknown>, config: unknown): boolean =>
+    resolve({ server: 'Bearfather', ...raw }, config).config.automation.safety.hangUp.penalties;
+  const own = (value: boolean) => ({ automation: { safety: { hangUp: { penalties: value } } } });
+
+  it('takes the realm over the options file where the character says nothing', () => {
+    expect(penalties({}, realm(true))).toBe(true);
+    expect(penalties({ automation: { safety: { hangUp: { enabled: true } } } }, realm(true))).toBe(
+      true
+    );
+  });
+
+  it('takes the character over its realm', () => {
+    expect(penalties(own(false), realm(true))).toBe(false);
+    expect(penalties(own(true), realm(false))).toBe(true);
+  });
+
+  it('falls to the options file where the realm says nothing, and that is off', () => {
+    expect(penalties({}, realm())).toBe(false);
+    expect(
+      resolve({ server: 'GreaterMUD (local)' }).config.automation.safety.hangUp.penalties
+    ).toBe(false);
+  });
+});
+
 describe('resolveProfile', () => {
   it('resolves a server named in the options file', () => {
     const profile = resolve({ server: 'GreaterMUD (local)' });
@@ -272,24 +309,24 @@ describe('the mob priority list, across global, realm and character', () => {
     host: 'gmud-tgs',
     port: 2427,
     encoding: 'cp437',
-    mobPriority: [{ mob: 'sewer rat', priority: 'last' }]
+    mobRules: [{ mob: 'sewer rat', treat: 'last' }]
   };
   const withRealm: Record<string, unknown> = {
     servers: [realm],
-    automation: { combat: { mobPriority: [{ mob: 'red dragon', priority: 'last' }] } }
+    automation: { combat: { mobRules: [{ mob: 'red dragon', treat: 'last' }] } }
   };
 
-  const priorities = (profile: { config: { automation: { combat: { mobPriority: unknown } } } }) =>
-    profile.config.automation.combat.mobPriority;
+  const rules = (profile: { config: { automation: { combat: { mobRules: unknown } } } }) =>
+    profile.config.automation.combat.mobRules;
 
   it('keeps a monster only the realm names', () => {
     const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withRealm);
-    expect(priorities(profile)).toContainEqual({ mob: 'sewer rat', priority: 'last' });
+    expect(rules(profile)).toContainEqual({ mob: 'sewer rat', treat: 'last' });
   });
 
   it('keeps the global rows beside the realm’s', () => {
     const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withRealm);
-    expect(priorities(profile)).toContainEqual({ mob: 'red dragon', priority: 'last' });
+    expect(rules(profile)).toContainEqual({ mob: 'red dragon', treat: 'last' });
   });
 
   /*
@@ -301,15 +338,15 @@ describe('the mob priority list, across global, realm and character', () => {
       {
         name: 'Thorn',
         server: 'GreaterMUD (local)',
-        automation: { combat: { mobPriority: [{ mob: 'gnoll shaman', priority: 'first' }] } }
+        automation: { combat: { mobRules: [{ mob: 'gnoll shaman', treat: 'first' }] } }
       },
       withRealm
     );
-    expect(priorities(profile)).toEqual(
+    expect(rules(profile)).toEqual(
       expect.arrayContaining([
-        { mob: 'gnoll shaman', priority: 'first' },
-        { mob: 'sewer rat', priority: 'last' },
-        { mob: 'red dragon', priority: 'last' }
+        { mob: 'gnoll shaman', treat: 'first' },
+        { mob: 'sewer rat', treat: 'last' },
+        { mob: 'red dragon', treat: 'last' }
       ])
     );
   });
@@ -319,23 +356,23 @@ describe('the mob priority list, across global, realm and character', () => {
       {
         name: 'Thorn',
         server: 'GreaterMUD (local)',
-        automation: { combat: { mobPriority: [{ mob: 'sewer rat', priority: 'first' }] } }
+        automation: { combat: { mobRules: [{ mob: 'sewer rat', treat: 'first' }] } }
       },
       withRealm
     );
-    expect(priorities(profile)).toContainEqual({ mob: 'sewer rat', priority: 'first' });
-    expect(priorities(profile)).not.toContainEqual({ mob: 'sewer rat', priority: 'last' });
+    expect(rules(profile)).toContainEqual({ mob: 'sewer rat', treat: 'first' });
+    expect(rules(profile)).not.toContainEqual({ mob: 'sewer rat', treat: 'last' });
   });
 
   it('lets the realm’s row win over the global one', () => {
     const profile = resolve(
       { name: 'Thorn', server: 'GreaterMUD (local)' },
       {
-        servers: [{ ...realm, mobPriority: [{ mob: 'red dragon', priority: 'first' }] }],
-        automation: { combat: { mobPriority: [{ mob: 'red dragon', priority: 'last' }] } }
+        servers: [{ ...realm, mobRules: [{ mob: 'red dragon', treat: 'first' }] }],
+        automation: { combat: { mobRules: [{ mob: 'red dragon', treat: 'last' }] } }
       }
     );
-    expect(priorities(profile)).toEqual([{ mob: 'red dragon', priority: 'first' }]);
+    expect(rules(profile)).toEqual([{ mob: 'red dragon', treat: 'first' }]);
   });
 
   /*
@@ -344,6 +381,6 @@ describe('the mob priority list, across global, realm and character', () => {
    */
   it('keeps the global list for a character that spells its address out inline', () => {
     const profile = resolve({ name: 'Thorn', server: { host: 'gmud-tgs', port: 2427 } }, withRealm);
-    expect(priorities(profile)).toEqual([{ mob: 'red dragon', priority: 'last' }]);
+    expect(rules(profile)).toEqual([{ mob: 'red dragon', treat: 'last' }]);
   });
 });

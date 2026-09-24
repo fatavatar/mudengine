@@ -73,15 +73,35 @@ connection:
     # order would stall there. Enter is always sent, so `send: ''` is a bare
     # Enter, which several menus want.
     #
+    # `repeat: true` answers a row every time its prompt arrives instead of
+    # once. It is for a *pager* -- `(N)onstop, (Q)uit, or (C)ontinue?` -- which
+    # a BBS asks once per screenful, so it comes back precisely because the
+    # answer worked. A menu is the other kind and stays once-only: one that
+    # comes back means the answer was refused, and answering again loops. A row
+    # that sends `{user}` or `{password}` ignores the flag; the account goes out
+    # once per connection whatever the script says, which is what stops an
+    # automated client retrying a password into a lockout.
+    #
     # This replaced four named keys -- selection, realm, character, enterRealm.
     # Those were *Paradigm's* menus, and naming them made one realm's layout
     # part of the client's vocabulary; MajorMUD behind WorldGroup can put any
     # number of menus and any amount of ANSI in between.
     #
+    # `{user}` and `{password}` send the character's own, so the two account
+    # prompts are rows here like every other. They used to be answered from the
+    # client's own vocabulary instead, which recognised one wording of each --
+    # a realm that asks `Enter your ID:` got no answer and no way to say so.
+    # The values are still never written here: they come from the character's
+    # file. `{username}` and `{pass}` mean the same two things.
+    #
     # The rows below are what Paradigm asks for. A realm you add on the Realms
     # page carries its own `login:` list, which is the better place for it:
     # every character on one realm meets the same menus.
     steps:
+      - when: 'Please enter your username'
+        send: '{user}'
+      - when: 'Please enter your password'
+        send: '{password}'
       - when: 'Please enter your selection'
         send: P
       - when: 'Please select a realm'
@@ -94,8 +114,12 @@ connection:
       # the same way; one nobody has configured is left alone silently.
       - when: Accept these realm rules to continue
         send: '1'
+      # The pager, which is asked once per screenful: without `repeat` the
+      # first one is answered, the text that follows fills another screen, and
+      # the login sits at the second prompt for ever.
       - when: '(N)onstop, (Q)uit, or (C)ontinue?'
         send: ''
+        repeat: true
 
 # Realms -- the servers you connect to -- are files: one directory each.
 #
@@ -146,7 +170,9 @@ terminal:
       - LucidaProgrammer Nerd Font Mono
     size: 16
 
-  # Lines kept in the virtualised backscroll buffer.
+  # Lines kept in the backscroll: what the console can scroll back through,
+  # and how much of it is written down per character and read back at the
+  # next launch, so quitting empties nothing. 0 keeps none and writes none.
   scrollback: 100000
 
   cursorBlink: true
@@ -475,7 +501,8 @@ ui:
     #               {count}.
     #   shop        A shop's shelf, in place of `list`: {items} is one row per
     #               thing sold -- {item} {item.quantity} {item.price} as the
-    #               counter said it, {item.cost} in copper, {item.afford}
+    #               counter said it, {item.priceLong} the same on the coin
+    #               ladder (5 runic, 3 gold), {item.cost} in copper, {item.afford}
     #               (`short` when it is more than the purse holds) {item.short}
     #               {item.usable} (the reason this character may not wear it)
     #               {item.wearable} {item.note} {item.basePrice} and the
@@ -520,7 +547,7 @@ ui:
         template: |
           {table header}
           {for item in items}
-          {bold}{item}{/bold}  {dim}x{item.quantity}{/dim}  {item.price}  {item.afford}  {item.usable}  {item.icon}
+          {bold}{item}{/bold}  {dim}x{item.quantity}{/dim}  {item.priceLong}  {item.afford}  {item.usable}  {item.icon}
           {/for}
           {/table}
       - name: Party
@@ -544,7 +571,8 @@ ui:
   # is open, and the next launch starts with them hidden again.
 
 automation:
-  # With this off, only what you type is ever sent.
+  # With this off, only what you type is ever sent, bar the keep-alive (idle,
+  # below): that keeps the connection open rather than acting for you.
   enabled: true
 
   # Asked once on entering the realm. The server volunteers almost nothing --
@@ -801,6 +829,13 @@ automation:
     walkWhileBlind: false
     walkWhilePoisoned: false
 
+    # Turn auto-combat back on when a route you asked for arrives. The usual
+    # reason to walk with it off is to get somewhere without fighting on the
+    # way, and on arrival that reason is gone. A loop's leg and an errand are
+    # not journeys with an arrival in them. Flips the switch in this file, so
+    # the toolbar shows it.
+    fightOnArrival: true
+
     # And confusion -- MegaMUD's Ignore Confusion, off by default as MegaMUD's
     # is. Nothing on the wire says a character is confused in words this
     # client knows; a realm's message table does (import MegaMUD's
@@ -1038,12 +1073,15 @@ automation:
   # one), so it is deliberately not evidence.
   #
   # `party` is what anybody who has **joined this character's party** may ask
-  # for, and it is the one list that ships with anything in it. Two names, and
-  # they are the two that say nothing the party listing does not already say and
-  # do nothing to this character: @health is the absolute figures behind the
+  # for, and it is the one list that ships with anything in it. The first two
+  # names say nothing the party listing does not already say and do nothing to
+  # this character: @health is the absolute figures behind the
   # percentage the listing shows, and @bless-expired is a member telling this
   # character their blessing ran out, which `blessings` decides about against
-  # your own configuration.
+  # your own configuration. The third, @heal, is a member asking for one party
+  # heal: nothing at all while `spells.healParty` is off, and while it is on,
+  # one cast per request, no oftener than the heal's cooldown and never below
+  # `minMana`. Deny it by name to refuse one member.
   #
   # @where, @status, @wait and @ok were on this list and were taken off. @where
   # names the room and its exits and @status names the walk's destination and
@@ -1085,7 +1123,7 @@ automation:
     enabled: false
     gangpath: false
     gang: []
-    party: [health, bless-expired]
+    party: [health, bless-expired, heal]
     players: {}
 
   # Commands on a clock -- MegaMUD's Events tab.
@@ -1242,6 +1280,13 @@ automation:
     # `Your command had no effect.` in the room.
     meditateBelow: 0
 
+    # And how far up to meditate before a walk or a lap goes on: the mana half
+    # of restTo. 0 is meditateBelow and a small margin, which is what the hold
+    # did before this was a setting. Raised to meditateBelow if set under it --
+    # a figure to stop at below the one to start at is two opposite
+    # instructions.
+    meditateTo: 0
+
     # Potions and anything else, with its own condition -- *use this when that
     # is true*. MegaMUD's Health tab had one row beside "Heal if below" and
     # this client had two named slots; this replaced both, because it says
@@ -1263,6 +1308,21 @@ automation:
     #       below: 0
     #       verb: drink
     potions: []
+    # And the realm's own half of that list.
+    #
+    # Where the realm says a spell stops a room's effect and a carried item's
+    # use casts it -- the waterskin against the desert spell, 945 rooms of it
+    # -- the item is used before the step into such a room, and again whenever
+    # the spell lapses while standing in one. The rule is the realm's, so
+    # there is nothing to write here: what a realm this client does not hold
+    # says nothing about, it does nothing about.
+    #
+    # On, for the reason the torch is: a rule cannot see the step ahead, and
+    # the desert takes 13 hit points a tick from a character carrying the
+    # answer. A use spends a charge, and where the server prints no countdown
+    # the client's clock on the spell is its own reckoning off the realm's
+    # stated duration.
+    useWards: true
 
   # Going to collect the level, and spending the points it awards.
   #
@@ -1312,6 +1372,68 @@ automation:
       health: 0
       charm: 0
 
+  # Running a quest's plan -- the Quest card's Run it (todo 102).
+  #
+  # Plan it draws the steps still to do to reach a step of a chain: what each
+  # gathers and where, where the act happens, what is said or killed there.
+  # With `enabled` on, Run it carries that plan one step at a time -- the pack
+  # is read, each item is bought, hunted or asked for the way the plan says,
+  # the way to the act is walked as a leg, the act is sent, and the counter is
+  # read back with `abil` before the next step starts. A step that rolls is
+  # asked again, a bounded number of times; a step whose counter did not move
+  # stops the run and says so.
+  #
+  # Off, because a run walks across the realm, buys, hunts and fights for as
+  # long as the chain takes, and that is a night to sign up for on purpose.
+  quests:
+    enabled: false
+
+  # Which kit to be in, and when -- the equipment manager.
+  #
+  # The gear buttons are presses: put back what was on, wear everything. What a
+  # press cannot say is "these boots while walking and those while fighting",
+  # which is a decision rather than an action -- and one this client can make,
+  # because it already knows which of the two is happening.
+  #
+  # A set names only the slots it cares about. The kit is the `always` set
+  # overlaid by whichever other set applies, so `Moving` is one line about boots
+  # rather than a second copy of everything the character owns.
+  #
+  # `when` is `always`, `moving` (a route or a lap under way) or `fighting`
+  # (anything swinging). A fighting set may add `mob:` to apply against one
+  # monster only -- the lap fought with throwing hammers and the one boss that
+  # wants the magic weapon. Most specific wins, and two sets that match equally
+  # are decided by the order they are written in.
+  #
+  # The off-hand comes off before a two-handed weapon goes on, and the weapon
+  # hand is sent before the rest, so coming back the other way frees the hand
+  # before the shield is asked for. Handedness is the realm's own
+  # `Items.WeaponType`, not a guess from the name.
+  #
+  #   sets:
+  #     - name: Default
+  #       when: always
+  #       wear: [plate boots, golden chalice, lifestealer]
+  #     - name: Moving
+  #       when: moving
+  #       wear: [brown leather boots]
+  #     - name: Boss
+  #       when: fighting
+  #       mob: nasty sandworm
+  #       wear: [nexus spear]
+  gear:
+    enabled: false
+    sets: []
+    # `use <item> <target>` between rounds -- the off-round weapon.
+    #
+    # It costs the round. The server will not use a weapon that is not in hand
+    # (`You do not have <item> equipped.`), so a two-handed one is six commands
+    # -- off-hand off, spear on, use, weapon back, off-hand back -- against a
+    # window of three. `everyRounds` is the floor under that, and 0 is off.
+    offRound:
+      item: ''
+      everyRounds: 0
+
   # Going hunting on its own: where this character should be at all.
   #
   # The Hunting card ranks every lair the exits reach from where the character
@@ -1350,13 +1472,12 @@ automation:
   # lands inside the round or after it. That window is what this covers.
   #
   # Write the spell's whole name (or its abbreviation) -- readable either
-  # way. What actually goes out is `c <short> <target>`, the realm's own
-  # short name, because `c` reads exactly one word as the spell: measured
-  # live, `c pressure points` answers `You do not know how to cast
-  # pressure.` while `c pres` casts it. The client resolves the name through
-  # your own spell listing and the realm data at the moment of casting, and
-  # a cast on yourself goes out bare, with no target -- a targetless cast
-  # lands on the caster.
+  # way. What actually goes out is `<short> <target>`, the realm's own
+  # short name typed as the command itself, never behind `c`: a mystic's
+  # `swan` has no `c` form, and `pres` casts what `c pressure points`
+  # refuses. The client resolves the name through your own spell listing
+  # and the realm data at the moment of casting, and a cast on yourself
+  # goes out bare, with no target -- a targetless cast lands on the caster.
   spells:
     # Auto Choose Best Spell.
     #
@@ -1514,6 +1635,12 @@ automation:
     # Off: it speaks on somebody's telepath channel unasked.
     notifyPartyOnWearOff: false
 
+    # Whether the blessings above are cast unasked at all. The toolbar's
+    # Auto-Bless switch: turn it off to keep the mana for healing through a
+    # fight and back on after, without emptying the list. Off, nothing here is
+    # cast for you; the cures and the heal are untouched.
+    autoBless: true
+
   # Fighting for you, rather than keeping you alive.
   #
   # The thing MegaMUD was actually for, and the last part of this client you
@@ -1532,6 +1659,12 @@ automation:
     # fight -- something is already swinging -- so it is on, and it ignores
     # every limit below.
     retaliate: true
+
+    # With auto-combat off, or a route run with it off, being hit for this many
+    # rounds without moving turns it on until you next arrive in another room.
+    # Off means do not start fights; it never meant stand there and be killed.
+    # Flips the switch in this file, both ways. 0 never does.
+    defendAfterRounds: 2
 
     # Leave alone a monster somebody outside your party is already fighting --
     # MegaMUD's PoliteAttacks, under its own name and in its own direction. On,
@@ -1575,16 +1708,6 @@ automation:
     # place to decline being swarmed: a health threshold notices too late.
     maxMobs: 0
 
-    # Do not open on a monster whose fight is expected to cost more than this
-    # share of your *current* health -- the one preference the "can I fight
-    # this?" verdict leaves to you. The figure is the same one the Room and
-    # Reference cards draw, an upper bound from the realm's own arithmetic, so
-    # what the card calls a bad fight the engine declines, with both figures
-    # in the trace. A monster the realm cannot cost is not refused by this:
-    # unknown is not expensive, and refusing it would make auto-combat useless
-    # on a lineage whose arithmetic the client does not have. 0 never refuses.
-    maxFightCost: 0
-
     # Re-read the room every this many rounds of a fight. 0 never does.
     #
     # A fight is where the room list goes stale fastest and matters most:
@@ -1622,31 +1745,30 @@ automation:
     # nothing to hide for. Off, because it spends a command per fight.
     hideForOpener: false
 
-    # Monsters never attacked automatically, as the realm spells them.
+    # How named monsters are treated -- MegaMUD's Attack Priority List and its
+    # avoid list, as one row per monster.
     #
-    #   avoid: [town guard, priest]
-    avoid: []
-
-    # The order monsters are attacked in — MegaMUD's Attack Priority List.
+    # Six treatments: never, first, high, default, low, last. `never` is the
+    # refusal -- that monster is not attacked automatically at all -- and the
+    # other five are the order the rest are attacked in. A monster no row names
+    # is `default`, so this is somewhere to add the one that matters rather
+    # than a ranking of the realm.
     #
-    # Five bands: first, high, default, low, last. A monster no row names is
-    # `default`, so this is somewhere to add the one that matters rather than a
-    # ranking of the realm.
+    #   mobRules:
+    #     - { mob: town guard, treat: never }
+    #     - { mob: gnoll shaman, treat: first }
+    #     - { mob: giant rat, treat: last }
     #
-    #   mobPriority:
-    #     - { mob: gnoll shaman, priority: first }
-    #     - { mob: giant rat, priority: last }
-    #
-    # Where one of these is in the room the band decides outright and the
-    # client's own weighing is skipped — which is the point: a ranking the
+    # Where a banded monster is in the room the band decides outright and the
+    # client's own weighing is skipped -- which is the point: a ranking the
     # realm's arithmetic could overturn is one nobody can predict from reading
-    # it. `avoid` and every other refusal still apply first, so a band says
+    # it. `never` and every other refusal still apply first, so a band says
     # which of the monsters worth attacking to attack, never that one is.
     #
     # A realm may state its own list in `servers/<id>/server.yaml`, and it is
     # merged rather than replaced: a row here wins for the monster it names,
     # and the realm's rows for every other monster still apply.
-    mobPriority: []
+    mobRules: []
 
     # What this character does differently about particular monsters -- MegaMUD's
     # Monster Details, laid one field at a time over the realm's own table
@@ -1705,6 +1827,12 @@ automation:
     # Sit down when the leader does, out of combat.
     restWithLeader: false
 
+    # Say @heal in the room when health falls below this share of maximum while
+    # in a party -- MegaMUD's Ask For Healing. A member running MegaMUD or this
+    # client answers with a heal. Said on the crossing and again every
+    # tuning.remotes.healAskAgainMs while still under it. 0 never asks.
+    askForHealBelow: 0
+
   # Keeping a character alive, rather than playing it.
   safety:
     # Running away.
@@ -1720,6 +1848,10 @@ automation:
     # the character was beaten from 70 HP to death in a room it had walked
     # into itself a minute earlier. So the escape is always a DIRECTION, and
     # if there is no direction to send, nothing is sent and it says so.
+    #
+    # Only while something is taking the character somewhere: a route, a loop,
+    # an errand, a quest run. Once a route has arrived, the character stays
+    # where it is and says so: the room it arrived in is the one you asked for.
     #
     # Off, like everything automated: a client that starts running away on its
     # own the first time you open it is a client deciding when a fight is lost,
@@ -1791,6 +1923,17 @@ automation:
     # The five-minute window is the part nothing on screen shows. Combat has
     # ended, the room is empty, and a hangup is still penalised.
     #
+    # A second way out, for a realm that answers `sys status` (see `locate` on
+    # the realm): there `sys goto <place>` is a real command that moves the
+    # character in one round, so it is its own, more desperate rung -- below
+    # retreat's belowHealth and above hangUp's. The fight is broken off the
+    # way a retreat breaks it; once it is over, this sends `sys goto` to
+    # `destination` instead of walking. Empty `destination` never sends it.
+    fleeGoto:
+      enabled: false
+      belowHealth: 0.2
+      destination: ''
+
     # Walking out is the escape that works. Hanging up is the escape that
     # works afterwards. See docs/greatermud/combat.md.
     hangUp:
@@ -1799,18 +1942,21 @@ automation:
       # Fraction of maximum health below which hanging up is considered.
       belowHealth: 0.15
 
-      # Refuse while the client can see a reason the disconnect would be
-      # penalised, and say so in the terminal rather than declining quietly.
+      # Whether this realm charges for a hang-up at all. Off: a PvE realm charges
+      # nothing, so below `belowHealth` the client simply hangs up. On, it
+      # refuses while it can see a reason the disconnect would be charged, and
+      # says so in the terminal rather than declining quietly.
       #
-      # Leave this on. The client can see four of the five conditions; with it
-      # off it will hang up anyway, into a penalty it could often have
-      # predicted. Off is for a realm where PvP is disabled or the penalty is
-      # not configured -- which the client cannot detect and you can know.
-      onlyWhenClean: true
+      # Paradigm's realm menu states it (`Hang Penalties 25%` under the PvP
+      # realm), and what the menu said outranks this. A realm's own
+      # `server.yaml` can say `hangPenalties: true` for every character playing
+      # there, and a character's own file outranks its realm. MajorMUD says
+      # nothing, so there this setting is the answer.
+      penalties: false
 
       # Also hang up when a player is in the room, at any health. Off: this is
-      # the setting most likely to fire inside the five-minute window, so it is
-      # the one that most needs `onlyWhenClean` left on.
+      # the setting most likely to fire inside the five-minute window, which is
+      # where a realm's penalty bites.
       onPlayerInRoom: false
 
     # What to do the moment a player opens on you -- `<Name> moves to attack

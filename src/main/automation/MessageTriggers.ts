@@ -12,7 +12,7 @@
  *   something that lasts until that sentence arrives, and a row that says to
  *   rest until full lasts until the session says the figure is full
  *   (`release`). What is held goes onto the character (`events.stated`,
- *   `CharacterState.stated`), where the modules that already own each
+ *   `CharacterState.heard`), where the modules that already own each
  *   decision read it: the walk waits, the fight holds, a cure is cast. What
  *   is a moment rather than a state — a fight the realm ended, a command it
  *   refused, a look, a hang-up — is handed to the session (`events.fired`).

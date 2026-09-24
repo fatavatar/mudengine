@@ -37,12 +37,26 @@ export const PRIORITY = {
 
 export type Priority = keyof typeof PRIORITY;
 
+/**
+ * What a command carrying a credential is shown and written down as.
+ *
+ * Fixed width, so the length is not recorded either. Here rather than beside
+ * either reader because there are two — the record (`SessionManager.reportable`,
+ * for the capture and the sent log) and the *queue*, whose pending intents the
+ * Automation card and the status rail draw while they wait their turn. A
+ * password that is masked in one and printed in the other is a password
+ * written down.
+ */
+export const MASKED_COMMAND = '••••••••';
+
 /** One intent waiting its turn. */
 export interface PendingIntent {
   command: string;
   priority: Priority;
   /** Why it was proposed. This is the trace. */
   reason?: string;
+  /** The player's own line, paced: a talk-box line of several commands (todo 04). */
+  typed?: boolean;
 }
 
 export interface QueueSnapshot {

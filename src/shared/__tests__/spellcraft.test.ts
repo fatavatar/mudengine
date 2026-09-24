@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  castOf,
   castWord,
   castsBare,
   castsOnOthers,
   castsOnSelf,
   cureGates,
   holdsMovement,
+  isShortIn,
   resolveSpell,
   spellCost,
   spellTargeting,
@@ -300,5 +302,33 @@ describe('holdsMovement', () => {
     expect(holdsMovement({})).toBe(false);
     expect(holdsMovement(null)).toBe(false);
     expect(holdsMovement(undefined)).toBe(false);
+  });
+});
+
+/*
+ * Both spellings the server reads as a cast: `c <short>` and the short name
+ * bare, which is what this client sends (healbot's `rsto stat`, answered `You
+ * may not cast that spell on a user!`, 2026-09-22).
+ */
+describe('castOf', () => {
+  const book = [
+    { name: 'pagan ritual', short: 'ritu' },
+    { name: 'minor healing', short: 'mahe' }
+  ];
+  const known = (word: string): boolean => isShortIn(word, book);
+
+  it('reads the Cast command and a bare short name alike', () => {
+    expect(castOf('c ritu', known)).toEqual({ word: 'ritu', argument: '' });
+    expect(castOf('cast mahe bob', known)).toEqual({ word: 'mahe', argument: 'bob' });
+    expect(castOf('ritu', known)).toEqual({ word: 'ritu', argument: '' });
+    expect(castOf('MAHE bob', known)).toEqual({ word: 'MAHE', argument: 'bob' });
+  });
+
+  it('reads no command of the table, and no word the book lacks, as a cast', () => {
+    expect(castOf('rest', known)).toBeNull();
+    expect(castOf('look', () => true)).toBeNull();
+    expect(castOf('swan', known)).toBeNull();
+    expect(castOf('c', known)).toBeNull();
+    expect(castOf('  ', known)).toBeNull();
   });
 });

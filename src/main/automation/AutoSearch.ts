@@ -17,11 +17,11 @@
  * - **Search the same room twice.** A room the character stands in for ten
  *   minutes, a `look` reprinting it, a fight ending with a courtesy reprint —
  *   all leave the room the same room, and a search per status line would be
- *   the whole command budget. The room is keyed by where it *is* (`map/room`)
- *   and, when that is unknown, by the name plus the exits it printed, which is
- *   as much as the client has. Re-entering a room searches it again, because
- *   the realm may have changed and because a lap is the natural unit of "try
- *   again".
+ *   the whole command budget. The room is keyed by where it *is* (`map/room`),
+ *   or by the name plus the exits it printed, **and by the arrival it was read
+ *   on**, which is what keeps a corridor of namesakes from reading as one room
+ *   (`whereIsThis`). Re-entering a room searches it again, because the realm
+ *   may have changed and because a lap is the natural unit of "try again".
  * - **Search in a fight.** A command spent mid-round is one the fight paid for,
  *   and nothing found by it can be used until the fight ends. The server says
  *   so outright — `You may not search while attacking!` — and says it *after*
@@ -33,6 +33,13 @@
  *   2026-09-13). Dropped rather than held, so the next status line after the
  *   fight proposes it again — which is *do it after attacking*, arrived at
  *   without a second memory of having wanted to.
+ * - **Search a room holding a monster auto-combat would open on**
+ *   (`AutoCombat.quarry`, the walker's `holdAt`). Fighting is not yet true
+ *   while the attack is unanswered: `festus` (2026-09-18) sent `search` 3ms
+ *   behind `aa fierce orc fanatic`, released by the prompt closing the room
+ *   its leader dragged it into, 65ms before `*Combat Engaged*`. The monster
+ *   first, then the room — and a room whose monsters nobody will fight is
+ *   searched as before.
  * - **Search while resting**, for `AutoLoot`'s reason and with the same date on
  *   it: whether `search` breaks a rest has never been asked of the wire, and
  *   refusing costs only a delay where being wrong costs the rest. `npm run
@@ -62,12 +69,28 @@ import { fightIsRunning } from './Walker';
  * which is the same pair `resolve.ts` uses to tell one Sewer Tunnel from
  * another and is a great deal better than the name alone in a realm with 293
  * of them. Null when neither is known, and a null room is never searched.
+ *
+ * **And the arrival it was read on, because neither address is unique.** A
+ * name and a set of exits is an address a maze repeats on purpose: three
+ * rooms called `Secret Passage` printing `east, west` in a row (bearfather,
+ * 2026-09-17) are one address, the first was searched, and the client then
+ * believed it had already looked in the two it walked into afterwards — the
+ * reported *it is skipping search in some rooms*. Coordinates repeat for the
+ * honest reason instead: walking out and back in is the lap this feature
+ * searches again on, and that used to work only because the room in between
+ * happened to be addressed differently.
+ *
+ * `Room.arrival` is what separates the two questions. It moves when the
+ * character arrives somewhere and not when the room is merely printed again,
+ * so a `look`, a courtesy reprint after a fight and the idle Enter all leave
+ * the address alone — which is the whole of what this key was guarding
+ * against — while every step taken makes a new one.
  */
 function whereIsThis(state: CharacterState): string | null {
-  const { map, number, name, exits } = state.room;
-  if (map !== null && number !== null) return `${map}/${number}`;
+  const { map, number, name, exits, arrival } = state.room;
+  if (map !== null && number !== null) return `${arrival}@${map}/${number}`;
   if (name === null) return null;
-  return `${name}|${exits.map((exit) => exit.direction).join(',')}`;
+  return `${arrival}@${name}|${exits.map((exit) => exit.direction).join(',')}`;
 }
 
 export class AutoSearch {
@@ -87,8 +110,15 @@ export class AutoSearch {
      * against, and the whole point of the second ask is that it is no longer
      * true. `Walker` takes its own `stateNow` for the same reason.
      */
-    private readonly stateNow: () => CharacterState
+    private readonly stateNow: () => CharacterState,
+    /** `AutoCombat.quarry`: asked rather than worked out, for `holdAt`'s reason. */
+    private readonly quarry: (state: CharacterState) => boolean
   ) {}
+
+  /** A fight running here, or one auto-combat is about to open. */
+  private fightHere(state: CharacterState): boolean {
+    return fightIsRunning(state) || this.quarry(state);
+  }
 
   configure(config: SearchConfig, enabled: boolean): void {
     this.config = config;
@@ -130,7 +160,7 @@ export class AutoSearch {
      * the send-time ask below has to be the same question as this one or the
      * pair would disagree about the round between a kill and the next swing.
      */
-    if (fightIsRunning(state)) return;
+    if (this.fightHere(state)) return;
     if (this.tries >= this.config.tries) return;
 
     this.queue.enqueue({
@@ -158,7 +188,7 @@ export class AutoSearch {
        * rather than held: the next status line after the fight proposes it
        * again, and the budget below is spent on what actually went out.
        */
-      stillWanted: () => !fightIsRunning(this.stateNow()),
+      stillWanted: () => !this.fightHere(this.stateNow()),
       /*
        * **Counted at the send, never at the proposal.** A search the guard
        * above dropped never reached the server, and charging it to the room's

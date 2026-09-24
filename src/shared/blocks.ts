@@ -18,6 +18,9 @@
  * This module must stay dependency-free: the parser produces blocks in the main
  * process and the HUD consumes them in the renderer.
  */
+// Type-only, so nothing is imported at runtime and no value cycle can form —
+// `types.ts` imports nothing from here either. See `module-cycle.test.ts`.
+import type { LineTerminator } from './types';
 
 /** Coarse grouping, so a consumer can subscribe to a whole domain. */
 export type BlockDomain =
@@ -40,6 +43,17 @@ export type BlockType =
   | 'prompt-new-password'
   | 'prompt-selection'
   | 'prompt-realm'
+  /**
+   * `[1] . Paradigm PVE (v1.9.1) [ PvE ]` — one realm on Paradigm's realm
+   * menu, with its mode (`PvE`, `PvP Enabled`). Wire, 226 sessions; stock
+   * GreaterMUD's menu (` 1) GreaterMUD - Docker`) states no mode and is not read.
+   */
+  | 'realm-listed'
+  /**
+   * `    . . Hang Penalties 25%` — the realm listed above it charges this share
+   * for a hang-up. Printed under Paradigm's PvP realm only (todo 01).
+   */
+  | 'realm-hang-penalty'
   | 'prompt-character'
   | 'prompt-menu'
   | 'login-failed'
@@ -50,6 +64,22 @@ export type BlockType =
    * the one case automatic login must *not* answer the menu that follows.
    */
   | 'user-exits-realm'
+  /**
+   * `Your meditation has been interrupted - you may not exit now!` — the exit
+   * called off by a blow, a spell or a player's attack (`Mob.cs`, `Spell.cs`,
+   * `PlayerAttackType.cs`, one sentence; bearfather's wire, 2026-09-17). The
+   * only other way an exit ends is the menu, so unread, the leaving it armed
+   * stood for the rest of the connection.
+   */
+  | 'user-exit-interrupted'
+  /**
+   * `Your character has been saved. If you have any comments or suggestions,
+   * please leave them in E-mail to Sysop. Thanks.` — MajorMUD's exit
+   * completing, just before `[MAJORMUD]:` (bearfather's wire, 2026-09-17;
+   * not in the GreaterMUD source, whose exit prints nothing and draws the
+   * menu). The next menu clears it off the screen; the log keeps it.
+   */
+  | 'user-left-realm'
   // status
   | 'status-line'
   | 'user-experience'
@@ -259,6 +289,17 @@ export type BlockType =
    * `source`, so a reader can tell that the listing ran to its end.
    */
   | 'user-abilities'
+  /**
+   * `stat all` — the server's own arithmetic for this character
+   * (`Player.ShowStatAll`): a three-column sheet, then the attack table,
+   * `Attacks:` or `Attacks against <monster>:`, then the spells cast in the
+   * last fight. Wire-verbatim on `orohost` and Paradigm, 2026-09-05 onward.
+   *
+   * Rows carry `healthRegen`/`restingRegen`, `baseManaRegen`/`manaRegen`, a
+   * `section` heading (with `against`), and the plain `Attack` row's
+   * `swings`, `accuracy`, `min` and `max`. See `src/shared/stated.ts`.
+   */
+  | 'user-stat-all'
   | 'user-inventory'
   /**
    * `You have 22 platinum pieces, 50 gold crowns, 3 silver nobles, 4 copper
@@ -472,6 +513,8 @@ export type BlockType =
   | 'user-held'
   /** `You can move again!` */
   | 'user-held-ends'
+  /** `You are confused!` — the confusion family's fixed start; the rest is the table's. Ends by the table alone. */
+  | 'user-confused'
   // conversation
   | 'conversation-gossip'
   | 'conversation-broadcast'
@@ -519,6 +562,13 @@ export type BlockType =
    */
   | 'door-changed'
   /**
+   * `The door to the northwest just closed.` / `just opened.` — a door in this
+   * room moved by its own timer or by somebody on the far side. The only door
+   * sentence that names the direction, so it is the one that can re-note the
+   * exit the room listed (`closed door northwest`) without a reprint.
+   */
+  | 'door-swings'
+  /**
    * `Your skill fails you this time.` — a skill was tried and did not work.
    *
    * Deliberately not named for picking. The server spends this one sentence on
@@ -541,8 +591,16 @@ export type BlockType =
    * reached by a move, and the tracker has to be told which.
    */
   | 'party-follows'
+  /**
+   * `A new day has come!` and its three warnings — the nightly cleanup, at
+   * 22:00 server time. What it does to the floor and the pack is in
+   * `docs/greatermud/rooms-and-items.md`; `phase` is the server's own words.
+   */
+  | 'realm-cleanup'
   // items
   | 'user-hides'
+  /** `Your <item> has been returned to its proper place` — the cleanup took it out of the pack. */
+  | 'user-item-returned'
   | 'player-gets'
   | 'player-drops'
   | 'user-equipped'
@@ -805,6 +863,25 @@ export interface Block {
   /** The plain text that was matched. */
   text: string;
   /**
+   * How the line this came from ended, carried through from `StreamLine`.
+   *
+   * Here because **a prompt is a line that ends because the server stopped
+   * talking** — `flush` — and that is the only fact distinguishing one from an
+   * ordinary sentence on a realm whose prompts the classifier does not
+   * recognise. `LoginAutomator` is the reader: a script row that sends the
+   * account may answer a prompt and must not answer a notice, and on a strange
+   * BBS both arrive as `unknown` with nothing else to tell them apart. It is
+   * evidence rather than proof — see the account of what `flush` does and does
+   * not promise beside that reader.
+   *
+   * **On a `BatchBlock` this is the terminator of the line that *closed* the
+   * listing**, because a batch is many lines and only the last has one to
+   * carry. Nothing reads it there — the automator is fed the single-line block
+   * — and nothing should without saying what it means first: a gate checked
+   * against one line while the match runs over twenty is not the same test.
+   */
+  terminator: LineTerminator;
+  /**
    * 0–1. Text match alone is 0.8; agreeing ANSI colour raises it, disagreeing
    * colour lowers it. Never a gate — a rule that only fires on the right colour
    * is a rule that breaks on the next server.
@@ -818,11 +895,15 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'prompt-new-password': 'session',
   'prompt-selection': 'session',
   'prompt-realm': 'session',
+  'realm-listed': 'session',
+  'realm-hang-penalty': 'session',
   'prompt-character': 'session',
   'prompt-menu': 'session',
   'login-failed': 'session',
   'login-welcome': 'session',
   'user-exits-realm': 'session',
+  'user-exit-interrupted': 'session',
+  'user-left-realm': 'session',
 
   'status-line': 'status',
   'user-experience': 'status',
@@ -850,6 +931,7 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'spellbook-empty': 'status',
   'user-mortally-wounded': 'status',
   'user-abilities': 'status',
+  'user-stat-all': 'status',
   'user-inventory': 'status',
   'user-wealth': 'status',
   'who-list': 'status',
@@ -892,6 +974,7 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'user-disease-ends': 'status',
   'user-held': 'status',
   'user-held-ends': 'status',
+  'user-confused': 'status',
 
   'conversation-gossip': 'conversation',
   'conversation-broadcast': 'conversation',
@@ -912,12 +995,15 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'bash-failed': 'movement',
   'heard-movement': 'movement',
   'door-changed': 'movement',
+  'door-swings': 'movement',
   'skill-failed': 'movement',
   'user-tracks': 'movement',
   'user-tracks-failed': 'movement',
   'party-follows': 'movement',
 
   'user-hides': 'items',
+  'user-item-returned': 'items',
+  'realm-cleanup': 'session',
   'player-gets': 'items',
   'player-drops': 'items',
   'user-equipped': 'items',

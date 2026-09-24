@@ -18,6 +18,7 @@ import {
 import { classifyOccupant, type AlignmentCost, type MobDisposition } from '../../../shared/mobs';
 import type { Block } from '../../../shared/blocks';
 import type { ItemEntity, MobEntity } from '../../../shared/entities';
+import { GUARDED_BY_ABILITY } from '../../../shared/guards';
 import { WEAPON_HAND } from '../../../shared/items';
 import type { RealmFamily } from '../../../shared/realm';
 import type { MobAttack, WorldSpell } from '../../../shared/world';
@@ -550,53 +551,22 @@ describe('which one to go for', () => {
     expect(sent).toEqual(['a thug']);
   });
 
-  /* The one preference the verdict leaves to the player. An ogre with six
-     thousand health costs this swordsman far more than a tenth of its own,
-     and the refusal names both figures — from the same `Verdict` the card
-     draws, so the card and the engine cannot disagree about a bad fight. */
-  it('declines a fight expected to cost more than the stated share of health, and says so', () => {
-    const auto = make(combat({ maxFightCost: 0.1 }), true, undefined, armed);
-    const me = swordsman({
-      ...EMPTY_CHARACTER.room,
-      occupants: [fighter('ogre', 6000, [bite(40, 60)])]
-    });
-    auto.onCharacter({ ...me, vitals: { ...me.vitals, hp: 100, hpMax: 100 } });
-    drain();
-    expect(sent).toEqual([]);
-    expect(refusals()[0]).toMatch(
-      /^ogre — the fight with ogre would cost up to \d+ hp of your 100$/
-    );
-  });
-
-  /* Unknown is not expensive: a monster the realm cannot cost is still opened
-     on, or auto-combat would be off by another name on a lineage the client
-     has no arithmetic for. */
-  it('takes a fight whose cost is unknown, whatever the share', () => {
-    const auto = make(combat({ maxFightCost: 0.1 }), true, undefined, armed);
-    const me = swordsman({
-      ...EMPTY_CHARACTER.room,
-      occupants: [mob('giant rat', 'hostile')]
-    });
-    auto.onCharacter({ ...me, vitals: { ...me.vitals, hp: 100, hpMax: 100 } });
-    drain();
-    expect(sent).toEqual(['a giant rat']);
-  });
-
   it('skips one it was told never to attack', () => {
-    const auto = make(combat({ avoid: ['giant rat'] }));
+    const auto = make(combat({ mobRules: [{ mob: 'giant rat', treat: 'never' }] }));
     auto.onCharacter(state({ room }));
     drain();
     expect(sent).toEqual(['a wererat shaman']);
   });
 
-  /* The config keys names the way the wire spells them, so case and the
-     leading article cannot make a list silently miss. */
-  it('matches a name however the config spelled it', () => {
-    const auto = make(combat({ avoid: ['The Giant Rat'] }));
+  /* Both sides go through `mobKey`, as the ranking's rows already did: a row
+     typed on the settings screen has not been through `normalizeCombat` yet,
+     and a refusal that did nothing until the file was reloaded would be the
+     control lying about itself while somebody watched it. */
+  it('leaves it alone however the row spelled the name', () => {
+    const auto = make(combat({ mobRules: [{ mob: 'The Giant Rat', treat: 'never' }] }));
     auto.onCharacter(state({ room }));
     drain();
-    // Normalisation happens in `normalizeCombat`, so go through it.
-    expect(sent).toEqual(['a giant rat']);
+    expect(sent).toEqual(['a wererat shaman']);
   });
 });
 
@@ -745,6 +715,80 @@ describe('refusing to start one', () => {
   });
 
   /*
+   * *Run it* (todo 06) declines the journey the moment the walk starts and
+   * asks the file to turn the switch off in the same breath — but the file
+   * answers through `configure` half a second later, and until then the
+   * switch still reads on. The decline has to hold across that, or the first
+   * step beside a monster opens the fight the press was made to avoid.
+   */
+  it('stays declined while the switch still reads on, until it is turned back on', () => {
+    const auto = make(combat({ enabled: true }));
+    auto.noteWalking(true);
+    auto.declineWhileTravelling();
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual([]);
+    // The file lands: still declined, and not a journey that fights.
+    auto.configure(combat({ enabled: false }), true);
+    expect(auto.fightingBecauseTravelling).toBe(false);
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual([]);
+    // Turned back on by hand: the journey fights again.
+    auto.configure(combat({ enabled: true }), true);
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual(['a giant rat']);
+  });
+
+  /*
+   * The decline is the journey's and ends with it (2026-09-23). `acting` read
+   * it bare, so a journey declined and then ended beside a switch that reads
+   * on left the character refusing every fight until a reload happened to
+   * clear it, and saying nothing.
+   */
+  it('ends the decline with the journey, so a switch that reads on fights again', () => {
+    const auto = make(combat({ enabled: true }));
+    auto.noteWalking(true);
+    auto.declineWhileTravelling();
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual([]);
+    auto.noteWalking(false);
+    expect(auto.willFight).toBe(true);
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual(['a giant rat']);
+  });
+
+  /* And the decline is reported for that half second, not only obeyed. */
+  it('reports the decline while the switch still reads on, and sends nothing', () => {
+    const auto = make(combat({ enabled: true }));
+    auto.noteWalking(true);
+    auto.declineWhileTravelling();
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual([]);
+    expect(refusals()).toEqual(['giant rat — you turned auto-combat off for this journey']);
+  });
+
+  /*
+   * A reload that reads on is the player's hand whichever edge it arrived on:
+   * a run's write and the toolbar's press inside one poll reach `configure`
+   * as on → on, and a decline left standing there would be auto-combat dead
+   * with the switch reading on and nothing to say why.
+   */
+  it('takes the decline back on any reload that reads on', () => {
+    const auto = make(combat({ enabled: true }));
+    auto.noteWalking(true);
+    auto.declineWhileTravelling();
+    auto.configure(combat({ enabled: true }), true);
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual(['a giant rat']);
+  });
+
+  /*
    * And **nothing swings** on that path, retaliation included.
    *
    * `declinedOnly` opens a door through the `acting` early return purely so
@@ -791,6 +835,41 @@ describe('refusing to start one', () => {
     auto.onCharacter(state({ room }));
     drain();
     expect(sent).toEqual(['a giant rat']);
+  });
+
+  /*
+   * `CombatLease` lent the switch and handed it back (todo 00): the off edge
+   * that follows is the lease's, so the journey is put back as it was when
+   * the switch was lent — declined after a *Run it*, fighting on a route.
+   */
+  it('puts a declined journey back declined when the lease hands the switch back', () => {
+    const auto = make(combat({ enabled: false }));
+    auto.noteWalking(true);
+    auto.declineWhileTravelling();
+    // Lent: the reload reads on and the journey fights.
+    auto.configure(combat({ enabled: true }), true);
+    expect(auto.journeyDeclined).toBe(false);
+    auto.leaseReturned(true);
+    auto.configure(combat({ enabled: false }), true, undefined, undefined, true);
+    expect(auto.journeyDeclined).toBe(true);
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('leaves a route that was fighting still fighting when the lease hands the switch back', () => {
+    const auto = make(combat({ enabled: true }));
+    auto.noteWalking(true);
+    auto.leaseReturned(false);
+    auto.configure(combat({ enabled: false }), true, undefined, undefined, true);
+    expect(auto.journeyDeclined).toBe(false);
+    auto.onCharacter(state({ room }));
+    drain();
+    expect(sent).toEqual(['a giant rat']);
+    // Nothing is left over: the player's own off edge declines as it always did.
+    auto.configure(combat({ enabled: true }), true);
+    auto.configure(combat({ enabled: false }), true);
+    expect(auto.journeyDeclined).toBe(true);
   });
 
   /* Turning it back on mid-journey answers in the other direction too. */
@@ -887,6 +966,14 @@ describe('the beat a walk takes for it', () => {
     const auto = make(combat({ engage: 'none' }));
     auto.noteWalking(true);
     expect(auto.quarry(state({ room }))).toBe(false);
+  });
+
+  it('is not asked for in a room too small for engage to open in', () => {
+    const auto = make(combat({ engage: 'all', minMobs: 2 }));
+    auto.noteWalking(true);
+    expect(auto.quarry(state({ room }))).toBe(false);
+    const two = { ...room, occupants: [...room.occupants, mob('kobold', 'hostile')] };
+    expect(auto.quarry(state({ room: two }))).toBe(true);
   });
 
   it('is not asked for in a room with nothing in it worth stopping for', () => {
@@ -1547,7 +1634,7 @@ describe('casting in a fight', () => {
     auto.onBlock(block('user-hits'));
     vi.advanceTimersByTime(200);
     drain();
-    expect(sent).toEqual(['c fjet mutant']);
+    expect(sent).toEqual(['fjet mutant']);
     expect(notices.filter((n) => /Casting fire jet/.test(n))).toHaveLength(1);
     // Said once: the next round repeats the choice and not the sentence.
     auto.onBlock(block('user-hits'));
@@ -1601,13 +1688,14 @@ describe('casting in a fight', () => {
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
+      autoBless: true,
       autoChoose: false
     });
     auto.onCharacter(fighting());
     auto.onBlock(block('user-hits'));
     vi.advanceTimersByTime(200);
     drain();
-    expect(sent).toEqual(['c ma giant rat']);
+    expect(sent).toEqual(['ma giant rat']);
   });
 
   it('names what it is casting at, so it cannot fall back to the last target', () => {
@@ -1630,6 +1718,7 @@ describe('casting in a fight', () => {
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
+      autoBless: true,
       autoChoose: false
     });
     auto.onCharacter(fighting());
@@ -1638,7 +1727,7 @@ describe('casting in a fight', () => {
     drain();
     // The whole spell name, not a first word: the server matches on a prefix,
     // so `ice` would cast whatever begins with it.
-    expect(sent).toEqual(['c ice blade giant rat']);
+    expect(sent).toEqual(['ice blade giant rat']);
   });
 
   it('casts nothing when the mana is not there', () => {
@@ -1661,6 +1750,7 @@ describe('casting in a fight', () => {
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
+      autoBless: true,
       autoChoose: false
     });
     auto.onCharacter(fighting());
@@ -1691,6 +1781,7 @@ describe('casting in a fight', () => {
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
+      autoBless: true,
       autoChoose: false
     });
     auto.onCharacter(
@@ -1702,7 +1793,7 @@ describe('casting in a fight', () => {
     auto.onBlock(block('user-hits'));
     vi.advanceTimersByTime(200);
     drain();
-    expect(sent).toEqual(['c ma giant rat']);
+    expect(sent).toEqual(['ma giant rat']);
   });
 
   /*
@@ -1729,13 +1820,14 @@ describe('casting in a fight', () => {
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
+      autoBless: true,
       autoChoose: false
     });
     auto.onCharacter(fighting());
     auto.onBlock(block('user-hits'));
     vi.advanceTimersByTime(200);
     drain();
-    expect(sent).toEqual(['c ma giant rat']);
+    expect(sent).toEqual(['ma giant rat']);
   });
 
   it('casts nothing when no spell is configured', () => {
@@ -1773,6 +1865,7 @@ describe('casting in a fight', () => {
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
+      autoBless: true,
       autoChoose: false,
       ...over
     });
@@ -1795,7 +1888,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     /* MegaMUD's FailoverSpellAttacks: the server says the round spell has no
@@ -1811,12 +1904,12 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
       auto.onBlock(block('spell-ineffective', { target: 'giant rat' }));
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat', 'c mmis giant rat']);
+      expect(sent).toEqual(['ma giant rat', 'mmis giant rat']);
       expect(notices.some((line) => line.includes('mmis'))).toBe(true);
     });
 
@@ -1831,7 +1924,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat', 'a giant rat']);
+      expect(sent).toEqual(['ma giant rat', 'a giant rat']);
       expect(notices.filter((line) => line.includes('no effect'))).toHaveLength(1);
     });
 
@@ -1848,12 +1941,12 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
       auto.onBlock(block('spell-cast', { caster: 'You', spell: 'ma', target: 'giant rat' }));
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat', 'a giant rat']);
+      expect(sent).toEqual(['ma giant rat', 'a giant rat']);
     });
 
     /*
@@ -1869,7 +1962,7 @@ describe('casting in a fight', () => {
         vi.advanceTimersByTime(200);
         drain();
       }
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     /*
@@ -1884,13 +1977,13 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
       auto.onCharacter({ ...fight, inCombat: false, combat: EMPTY_CHARACTER.combat });
       auto.onCharacter(fight);
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     /* The server's own repeat is what spends a cap after the first cast. */
@@ -1906,7 +1999,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat', 'a giant rat']);
+      expect(sent).toEqual(['ma giant rat', 'a giant rat']);
     });
 
     /* A heal confirmed in the same window is a different spell and spends
@@ -1922,7 +2015,7 @@ describe('casting in a fight', () => {
       vi.advanceTimersByTime(200);
       drain();
       // Unspent: the fight would have gone back to the attack verb.
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     it('starts the count again on a new target', () => {
@@ -1937,7 +2030,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat', 'c ma kobold thief']);
+      expect(sent).toEqual(['ma giant rat', 'ma kobold thief']);
     });
 
     it('casts the crowd spell bare at the threshold', () => {
@@ -1946,7 +2039,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c poison cloud']);
+      expect(sent).toEqual(['poison cloud']);
     });
 
     it('falls back to the single-target spell under the crowd floor', () => {
@@ -1956,7 +2049,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     /* Unknown is not empty — the same asymmetry the single spell keeps. */
@@ -1970,7 +2063,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c poison cloud']);
+      expect(sent).toEqual(['poison cloud']);
     });
 
     /* A shopkeeper is not a reason to gas the room: the crowd is threats,
@@ -1992,7 +2085,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     /*
@@ -2013,7 +2106,7 @@ describe('casting in a fight', () => {
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
   });
 });
@@ -2023,30 +2116,6 @@ describe('casting in a fight', () => {
  * The mechanisms are documented on `endFight` and `noteUserCommand`.
  */
 describe('asking once about one monster', () => {
-  /*
-   * A heal switches the fight off with the monster still here (skinny,
-   * 2026-09-23), and the re-engage waited out the four-second cooldown since
-   * the first attack — past the server's next round, every time.
-   */
-  it('engages again at once after a cast of its own switched the fight off', () => {
-    const auto = make(combat());
-    const rat = mob('small giant rat', 'hostile');
-    const here = { ...EMPTY_CHARACTER.room, occupants: [rat] };
-    auto.onCharacter(state({ room: here }));
-    drain();
-    auto.onCharacter(state({ room: here, inCombat: true }));
-    expect(sent).toEqual(['a small giant rat']);
-
-    auto.openAgain();
-    // Not while the fight is still on: the heal has not switched it off yet.
-    auto.onCharacter(state({ room: here, inCombat: true, combat: { ...EMPTY_CHARACTER.combat } }));
-    drain();
-    expect(sent).toEqual(['a small giant rat']);
-    auto.onCharacter(state({ room: here, inCombat: false }));
-    drain();
-    expect(sent).toEqual(['a small giant rat', 'a small giant rat']);
-  });
-
   it('keeps the engage cooldown across the end of a fight', () => {
     // Re-attacking makes the server answer `*Combat Off*` then `*Combat
     // Engaged*`; clearing the cooldown on the Off half re-armed the very next
@@ -2068,6 +2137,55 @@ describe('asking once about one monster', () => {
       drain();
     }
     expect(sent).toEqual(['a small giant rat']);
+  });
+
+  /*
+   * festus, 2026-09-23 (todo 03): `aa dustdevil`, then a lapsed `gbls` 167ms
+   * later — an instant spell ends the fight — and the cooldown the `aa` had
+   * just armed refused the re-engage until the dustdevil had swung twice.
+   */
+  it('re-engages at once when a cast, not an attack, ended the fight', () => {
+    const auto = make(combat());
+    const devil = mob('dustdevil', 'hostile');
+    const here = { ...EMPTY_CHARACTER.room, occupants: [devil] };
+
+    auto.onCharacter(state({ room: here }));
+    drain();
+    expect(sent).toEqual(['a dustdevil']);
+
+    auto.onCharacter(
+      state({
+        room: here,
+        inCombat: true,
+        combat: { ...EMPTY_CHARACTER.combat, target: 'dustdevil', engaged: true }
+      })
+    );
+    auto.onBlock(block('combat-status', { status: 'Off' }), 'gbls');
+    auto.onCharacter(state({ room: here, inCombat: false }));
+    drain();
+    expect(sent).toEqual(['a dustdevil', 'a dustdevil']);
+  });
+
+  it('keeps the cooldown when the Off answers the attack itself', () => {
+    const auto = make(combat());
+    const devil = mob('dustdevil', 'hostile');
+    const here = { ...EMPTY_CHARACTER.room, occupants: [devil] };
+
+    auto.onCharacter(state({ room: here }));
+    drain();
+    auto.onCharacter(
+      state({
+        room: here,
+        inCombat: true,
+        combat: { ...EMPTY_CHARACTER.combat, target: 'dustdevil', engaged: true }
+      })
+    );
+    // A re-attack's own pair, and a bare prompt's Off: neither releases it.
+    auto.onBlock(block('combat-status', { status: 'Off' }), 'aa dustdevil');
+    auto.onBlock(block('combat-status', { status: 'Off' }), null);
+    auto.onCharacter(state({ room: here, inCombat: false }));
+    drain();
+    expect(sent).toEqual(['a dustdevil']);
   });
 
   it('releases the cooldown when the monster itself is gone', () => {
@@ -2171,6 +2289,178 @@ describe('asking once about one monster', () => {
   });
 });
 
+/*
+ * One target, kept until it is dead (todo 00, 2026-09-23). Festus's desert
+ * fight: the leader died, `aa saracen raider` went out, and each raider's
+ * first swing before the engagement came back — the tracker files the newest
+ * attacker first, and equal verdicts tie in that order — sent another `aa`,
+ * three a round, every round, each cancelling the last.
+ */
+describe('one target until it is dead', () => {
+  const raider = (name: string): RoomOccupant => fighter(name, 250, [bite(5, 18, 105)]);
+  const desert = {
+    ...EMPTY_CHARACTER.room,
+    occupants: [
+      raider('saracen raider'),
+      raider('small saracen raider'),
+      raider('fat saracen raider')
+    ]
+  };
+  const swinging = (attackers: string[], target: string | null = null): CharacterState =>
+    state({
+      room: desert,
+      inCombat: target !== null,
+      combat: { ...EMPTY_CHARACTER.combat, engaged: target !== null, target, attackers }
+    });
+
+  it('does not open on each new attacker before the first attack is answered', () => {
+    const auto = make(combat({ attack: 'aa', engage: 'hostile' }));
+    auto.onCharacter(swinging([]));
+    drain();
+    expect(sent).toEqual(['aa saracen raider']);
+
+    auto.onCharacter(swinging(['saracen raider']));
+    auto.onCharacter(swinging(['small saracen raider', 'saracen raider']));
+    auto.onCharacter(swinging(['fat saracen raider', 'small saracen raider', 'saracen raider']));
+    drain();
+    expect(sent).toEqual(['aa saracen raider']);
+  });
+
+  it('goes back to the same one after the fight drops, past the cooldown', () => {
+    const auto = make(combat({ attack: 'aa', engage: 'hostile' }));
+    auto.onCharacter(swinging([]));
+    drain();
+    auto.onCharacter(swinging([], 'saracen raider'));
+    // A heal's `*Combat Off*` a round later: target and attackers cleared,
+    // and the others' blows arrive newest first.
+    vi.advanceTimersByTime(5_000);
+    auto.onCharacter(swinging([]));
+    auto.onCharacter(swinging(['fat saracen raider']));
+    auto.onCharacter(swinging(['small saracen raider', 'fat saracen raider']));
+    drain();
+    expect(sent).toEqual(['aa saracen raider', 'aa saracen raider']);
+    expect(decisions.filter((one) => one.acted).at(-1)?.because).toContain('still on');
+  });
+
+  it('chooses afresh once it is dead', () => {
+    const auto = make(combat({ attack: 'aa', engage: 'hostile' }));
+    auto.onCharacter(swinging([]));
+    drain();
+    const rest = desert.occupants.filter((who) => who.name !== 'saracen raider');
+    auto.onCharacter(state({ room: { ...desert, occupants: rest } }));
+    drain();
+    expect(sent).toEqual(['aa saracen raider', 'aa small saracen raider']);
+  });
+
+  it('keeps the one the player chose', () => {
+    const auto = make(combat({ attack: 'aa', engage: 'hostile' }));
+    auto.onCharacter(swinging([]));
+    drain();
+    auto.noteUserCommand('aa fat');
+    vi.advanceTimersByTime(5_000);
+    auto.onCharacter(swinging(['saracen raider']));
+    drain();
+    expect(sent).toEqual(['aa saracen raider', 'aa fat saracen raider']);
+  });
+
+  it('chooses afresh in a new room, whatever its monsters are called', () => {
+    const auto = make(combat({ attack: 'aa', engage: 'hostile' }));
+    auto.onCharacter(swinging([]));
+    drain();
+    expect(sent).toEqual(['aa saracen raider']);
+    vi.advanceTimersByTime(5_000);
+    // A step into the next `Scorching Desert`: a namesake, and a leader.
+    auto.onCharacter(
+      state({
+        inCombat: true,
+        room: {
+          ...desert,
+          arrival: 1,
+          occupants: [
+            raider('saracen raider'),
+            fighter('fierce saracen leader', 350, [bite(8, 24, 110), bite(40, 80, 110)])
+          ]
+        },
+        combat: { ...EMPTY_CHARACTER.combat, engaged: true, attackers: ['saracen raider'] }
+      })
+    );
+    drain();
+    expect(sent).toEqual(['aa saracen raider', 'aa fierce saracen leader']);
+  });
+
+  /*
+   * A monster that has not swung is one retaliation would be opening on, so
+   * every refusal `choose` makes of it stands: the heavier one is not picked.
+   */
+  describe('weighing the whole fight passes the refusals opening would', () => {
+    const ogre = (over: Partial<MobEntity> = {}): RoomOccupant =>
+      fighter('orc warrior', 60, [bite(20, 60, 90)], over);
+    const rat = fighter('giant rat', 20, [bite(1, 3, 20)]);
+    const bitten = (occupants: RoomOccupant[], claimed = {}): CharacterState =>
+      state({
+        inCombat: true,
+        room: { ...EMPTY_CHARACTER.room, occupants },
+        combat: { ...EMPTY_CHARACTER.combat, engaged: true, attackers: ['giant rat'], claimed }
+      });
+
+    it('positive control: the heavier bystander is taken first', () => {
+      make(combat({ engage: 'hostile' })).onCharacter(bitten([ogre(), rat]));
+      drain();
+      expect(sent).toEqual(['a orc warrior']);
+    });
+
+    it('leaves a stranger’s monster to them', () => {
+      make(combat({ engage: 'hostile', politeAttacks: true })).onCharacter(
+        bitten([ogre(), rat], { 'orc warrior': { by: 'Rend', at: Date.now() } })
+      );
+      drain();
+      expect(sent).toEqual(['a giant rat']);
+    });
+
+    it('leaves what a guard left alone protects', () => {
+      const guard: RoomOccupant = {
+        ...fighter('kobold thief', 30, [bite(1, 8, 15)]),
+        mob: { ...fighter('kobold thief', 30, []).mob!, ids: [10] }
+      };
+      const ward = ogre({ ids: [20], abilities: [[GUARDED_BY_ABILITY, 10]] });
+      make(
+        combat({ engage: 'hostile', mobRules: [{ mob: 'kobold thief', treat: 'never' }] })
+      ).onCharacter(bitten([guard, ward, rat]));
+      drain();
+      expect(sent).toEqual(['a giant rat']);
+    });
+
+    it('keeps to the caps', () => {
+      make(combat({ engage: 'hostile', maxTargetHealth: 50 })).onCharacter(bitten([ogre(), rat]));
+      make(combat({ engage: 'hostile', maxMonsterExperience: 100 })).onCharacter(
+        bitten([ogre({ experience: 5_000 }), rat])
+      );
+      drain();
+      expect(sent).toEqual(['a giant rat', 'a giant rat']);
+    });
+  });
+
+  /* The first to swing is the order the server walks the room in, not the worst. */
+  it('hits back at the worst of the whole fight, not the first to swing', () => {
+    const auto = make(combat({ engage: 'hostile' }));
+    auto.onCharacter(
+      state({
+        inCombat: true,
+        room: {
+          ...EMPTY_CHARACTER.room,
+          occupants: [
+            fighter('kobold thief', 30, [bite(1, 8, 15)]),
+            fighter('wererat shaman', 40, [bite(10, 30, 60)])
+          ]
+        },
+        combat: { ...EMPTY_CHARACTER.combat, engaged: true, attackers: ['kobold thief'] }
+      })
+    );
+    drain();
+    expect(sent).toEqual(['a wererat shaman']);
+  });
+});
+
 describe('a typed break', () => {
   it('stands engaging down until the player moves or attacks', () => {
     const auto = make(combat());
@@ -2225,7 +2515,7 @@ describe('a typed break', () => {
     auto.onCharacter(
       state({
         room: here,
-        stated: afraid,
+        heard: afraid,
         combat: { ...EMPTY_CHARACTER.combat, attackers: ['large acid slime'] }
       })
     );
@@ -2233,7 +2523,7 @@ describe('a typed break', () => {
     expect(sent).toEqual([]);
     expect(notices.some((m) => m.includes('cannot attack'))).toBe(true);
 
-    auto.onCharacter(state({ room: here, stated: [] }));
+    auto.onCharacter(state({ room: here, heard: [] }));
     drain();
     expect(sent).toEqual(['a large acid slime']);
   });
@@ -2298,7 +2588,8 @@ describe('fighting what the leader fights', () => {
   const party = {
     assistLeader: true,
     defendParty: false,
-    restWithLeader: false
+    restWithLeader: false,
+    askForHealBelow: 0
   };
   const following = (target: string, at = Date.now()) => ({
     following: 'Soul',
@@ -2392,7 +2683,8 @@ describe('defending the party', () => {
   const party = {
     assistLeader: false,
     defendParty: true,
-    restWithLeader: false
+    restWithLeader: false,
+    askForHealBelow: 0
   };
   /** Soul is being hit by `target`; nobody here follows anybody. */
   const threatened = (target: string, at = Date.now()) => ({
@@ -2518,11 +2810,11 @@ describe('saying why it did not open a fight', () => {
     expect(refusals()).toEqual(['shopkeeper — the realm does not say shopkeeper attacks first']);
   });
 
-  it('names the avoid list', () => {
-    const auto = make(combat({ avoid: ['thug'] }));
+  it('names a row set to never attack', () => {
+    const auto = make(combat({ mobRules: [{ mob: 'thug', treat: 'never' }] }));
     auto.onCharacter(room(mob('thug', 'hostile')));
     drain();
-    expect(refusals()).toEqual(['thug — thug is on the avoid list']);
+    expect(refusals()).toEqual(['thug — thug is set to never attack']);
   });
 
   /*
@@ -2779,12 +3071,12 @@ describe('the monster table', () => {
     expect(sent).toEqual(['a wererat shaman']);
   });
 
-  /* The priority list is the more specific statement. */
-  it('lets a priority-list row outrank a monster row', () => {
+  /* The character's own rule is the more specific statement. */
+  it('lets a monster rule outrank a monster-table row', () => {
     const auto = make(
       combat({
         monsters: [{ mob: 'wererat shaman', priority: 'first' }],
-        mobPriority: [{ mob: 'wererat shaman', priority: 'last' }]
+        mobRules: [{ mob: 'wererat shaman', treat: 'last' }]
       })
     );
     auto.onCharacter(state({ room }));
@@ -2855,7 +3147,7 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(fighting());
       round(auto);
-      expect(sent).toEqual(['c mmis giant rat']);
+      expect(sent).toEqual(['mmis giant rat']);
     });
 
     /* A warrior with no round spell still casts what a row names. */
@@ -2871,7 +3163,7 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(fighting());
       round(auto);
-      expect(sent).toEqual(['c mmis giant rat']);
+      expect(sent).toEqual(['mmis giant rat']);
     });
 
     /* The pre-attack spell belongs before the fight; a round never casts it. */
@@ -2887,7 +3179,7 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(fighting());
       round(auto);
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     /*
@@ -2906,14 +3198,14 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(state({ room: rat }));
       drain();
-      expect(sent).toEqual(['c harm giant rat']);
+      expect(sent).toEqual(['harm giant rat']);
     });
 
     it('opens the fight with the round spell when no row names one', () => {
       const auto = make(combat({ refreshRounds: 0 }), true, spells());
       auto.onCharacter(state({ room: rat }));
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     it('counts the opening cast against the row’s cap', () => {
@@ -2931,7 +3223,7 @@ describe('the monster table, fighting', () => {
       auto.onCharacter(fighting());
       round(auto);
       // Spent on the opening cast: the fight goes back to the attack verb.
-      expect(sent).toEqual(['c harm giant rat', 'a giant rat']);
+      expect(sent).toEqual(['harm giant rat', 'a giant rat']);
     });
 
     it('opens with the attack when the pool is under the spell’s floor', () => {
@@ -2955,7 +3247,7 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(state({ room: rat }));
       drain();
-      expect(sent).toEqual(['c pcloud']);
+      expect(sent).toEqual(['pcloud']);
     });
 
     /*
@@ -2974,7 +3266,7 @@ describe('the monster table, fighting', () => {
       auto.onCharacter(state({ room: rat, inCombat: true }));
       auto.onCharacter(state({ room: { ...EMPTY_CHARACTER.room, occupants: [] } }));
       drain();
-      expect(sent).toEqual(['c pcloud', 'break']);
+      expect(sent).toEqual(['pcloud', 'break']);
     });
 
     /*
@@ -2994,20 +3286,20 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(state({ room: dogs(5) }));
       drain();
-      expect(sent).toEqual(['c pcloud']);
+      expect(sent).toEqual(['pcloud']);
       auto.onCharacter(state({ room: dogs(5), inCombat: true }));
       // Two die, each with its own `*Combat Off*`: three left, still the room spell's.
       auto.onCharacter(state({ room: dogs(4) }));
       auto.onCharacter(state({ room: dogs(3) }));
       drain();
-      expect(sent).toEqual(['c pcloud']);
+      expect(sent).toEqual(['pcloud']);
       // Two left: under the threshold — but only once the burst is over.
       auto.onCharacter(state({ room: dogs(2) }));
       drain();
-      expect(sent).toEqual(['c pcloud']);
+      expect(sent).toEqual(['pcloud']);
       vi.advanceTimersByTime(800);
       drain();
-      expect(sent).toEqual(['c pcloud', 'c ma giant rat']);
+      expect(sent).toEqual(['pcloud', 'ma giant rat']);
     });
 
     /*
@@ -3033,7 +3325,28 @@ describe('the monster table, fighting', () => {
       auto.onCharacter(state({ room: dogs(0) }));
       vi.advanceTimersByTime(1_000);
       drain();
-      expect(sent).toEqual(['c pcloud', 'break']);
+      expect(sent).toEqual(['pcloud', 'break']);
+    });
+
+    /*
+     * A heal cast into a room-spell fight replaced the spell the server was
+     * repeating (skinny, 2026-09-23): the `*Combat Off*` answering it lets the
+     * room spell go and the whole cooldown with it, so the room is opened on
+     * again at once — MegaMUD sends the room spell again after `aund`.
+     */
+    it('opens again at once when a cast of its own broke the room spell off', () => {
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 1 })
+      );
+      auto.onCharacter(state({ room: rat }));
+      drain();
+      auto.onCharacter(state({ room: rat, inCombat: true }));
+      auto.onBlock(block('combat-status', { status: 'Off' }), 'mahe');
+      auto.onCharacter(state({ room: rat, inCombat: false }));
+      drain();
+      expect(sent).toEqual(['pcloud', 'pcloud']);
     });
 
     /*
@@ -3053,7 +3366,7 @@ describe('the monster table, fighting', () => {
       expect(sent).toEqual(['break']);
       auto.onCharacter(state({ room: rat }));
       drain();
-      expect(sent).toEqual(['break', 'c pcloud']);
+      expect(sent).toEqual(['break', 'pcloud']);
     });
 
     /*
@@ -3075,12 +3388,12 @@ describe('the monster table, fighting', () => {
         })
       );
       drain();
-      expect(sent).toEqual(['c ma giant rat']);
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     it('keeps the room spell back while an avoided monster stands in the room', () => {
       const auto = make(
-        combat({ refreshRounds: 0, avoid: ['wolf'] }),
+        combat({ refreshRounds: 0, mobRules: [{ mob: 'wolf', treat: 'never' }] }),
         true,
         spells({ attack: '', areaAttack: 'pcloud', areaMinMobs: 1 })
       );
@@ -3117,7 +3430,7 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(state({ room: rat }));
       drain();
-      expect(sent).toEqual(['c hold giant rat', 'c harm giant rat']);
+      expect(sent).toEqual(['hold giant rat', 'harm giant rat']);
     });
 
     it('casts the pre-attack spell ahead of the attack verb', () => {
@@ -3131,7 +3444,7 @@ describe('the monster table, fighting', () => {
       );
       auto.onCharacter(state({ room: rat }));
       drain();
-      expect(sent).toEqual(['c hold giant rat', 'a giant rat']);
+      expect(sent).toEqual(['hold giant rat', 'a giant rat']);
     });
 
     it('counts both opening casts, and leaves the attack spell to repeat by itself', () => {
@@ -3155,7 +3468,7 @@ describe('the monster table, fighting', () => {
       auto.onBlock(block('spell-cast', { caster: 'You', spell: 'harm', target: 'giant rat' }));
       auto.onCharacter(fighting());
       round(auto);
-      expect(sent).toEqual(['c hold giant rat', 'c harm giant rat']);
+      expect(sent).toEqual(['hold giant rat', 'harm giant rat']);
     });
 
     /* Two casts in flight, and the refusal names neither: it follows its own confirmation. */
@@ -3241,7 +3554,167 @@ describe('the monster table, fighting', () => {
       round(auto);
       // Not on to the round spell: the row's cap is the player's word on this
       // monster, and the attack verb carries the rest of the fight.
-      expect(sent).toEqual(['c mmis giant rat', 'a giant rat']);
+      expect(sent).toEqual(['mmis giant rat', 'a giant rat']);
     });
+  });
+});
+
+describe('a monster that protects another', () => {
+  /** `who`, as realm rows `ids`, protected by the rows in `by` (`MonsGuards`). */
+  function rows(who: RoomOccupant, ids: number[], by: number[] = []): RoomOccupant {
+    return {
+      ...who,
+      mob: {
+        ...who.mob!,
+        ids,
+        ...(by.length === 0
+          ? {}
+          : { abilities: by.map((row): [number, number] => [GUARDED_BY_ABILITY, row]) })
+      }
+    };
+  }
+
+  /** `who`, as a monster the realm says leaves this character alone. */
+  function passive(who: RoomOccupant): RoomOccupant {
+    return { ...who, disposition: 'passive', mob: { ...who.mob!, disposition: 'passive' } };
+  }
+
+  // The shaman is the one the weighing takes first ('which one to go for').
+  const shaman = (by: number[]): RoomOccupant =>
+    rows(fighter('wererat shaman', 40, [bite(10, 30, 60)]), [20], by);
+  const kobold = rows(fighter('kobold thief', 30, [bite(1, 8, 15)]), [10]);
+
+  function fightIn(occupants: RoomOccupant[], config = combat()): AutoCombat {
+    const auto = make(config);
+    auto.onCharacter(state({ room: { ...EMPTY_CHARACTER.room, occupants } }));
+    drain();
+    return auto;
+  }
+
+  /* `AttackCommand.cs`: the guard moves to protect, and the blow is its. */
+  it('goes for the guard before what it protects, whatever the weighing says', () => {
+    fightIn([kobold, shaman([10])]);
+    expect(sent).toEqual(['a kobold thief']);
+    expect(decisions.find((decision) => decision.acted)?.because).toBe(
+      'kobold thief protects wererat shaman, so it goes first'
+    );
+  });
+
+  it('weighs the room as before where nothing protects anything', () => {
+    fightIn([kobold, shaman([])]);
+    expect(sent).toEqual(['a wererat shaman']);
+  });
+
+  it('puts the guard ahead of the priority list too, since the server does', () => {
+    fightIn(
+      [kobold, shaman([10])],
+      combat({ mobRules: [{ mob: 'wererat shaman', treat: 'first' }] })
+    );
+    expect(sent).toEqual(['a kobold thief']);
+  });
+
+  /* Attacking the shaman turns the kobold on the character anyway. */
+  it('brings in a guard that would not start a fight when what it protects is attacked', () => {
+    fightIn([passive(kobold), shaman([10])]);
+    expect(sent).toEqual(['a kobold thief']);
+    expect(decisions.find((decision) => decision.acted)?.because).toBe(
+      'kobold thief protects wererat shaman, so attacking wererat shaman brings it in; it goes first'
+    );
+  });
+
+  it('leaves a guard that would not start a fight when nothing it protects is attacked', () => {
+    fightIn([passive(kobold), passive(shaman([10]))]);
+    expect(sent).toEqual([]);
+  });
+
+  /* Only some of the kobold's rows protect: the server decides, rather than
+     this client opening on a monster that may have left it alone. */
+  it('does not bring in a guard the realm is only sure of for some of its rows', () => {
+    fightIn([passive(rows(kobold, [10, 11])), shaman([10])]);
+    expect(sent).toEqual(['a wererat shaman']);
+  });
+
+  // Listed first, so its reason is the one reported.
+  it('declines what a refused guard protects, with the guard’s reason', () => {
+    fightIn(
+      [shaman([10]), kobold],
+      combat({ mobRules: [{ mob: 'kobold thief', treat: 'never' }] })
+    );
+    expect(sent).toEqual([]);
+    expect(refusals()).toContain(
+      'wererat shaman — kobold thief protects wererat shaman and is refused itself: kobold thief is set to never attack'
+    );
+  });
+
+  it('hits back at the guard first when both are swinging', () => {
+    const auto = make(combat({ engage: 'none' }));
+    auto.onCharacter(
+      state({
+        inCombat: true,
+        room: { ...EMPTY_CHARACTER.room, occupants: [kobold, shaman([10])] },
+        combat: {
+          ...EMPTY_CHARACTER.combat,
+          engaged: true,
+          attackers: ['wererat shaman', 'kobold thief']
+        }
+      })
+    );
+    drain();
+    expect(sent).toEqual(['a kobold thief']);
+  });
+
+  /* A hostile ward swings first; its guard has not landed a blow yet. */
+  it('hits back at a guard standing here that has not swung yet', () => {
+    // Hitting back is traced by the reason the command carries.
+    const said: string[] = [];
+    queue.dispose();
+    queue = new CommandQueue(automation, {
+      send: (command, intent) => {
+        sent.push(command);
+        said.push(intent.reason ?? '');
+      }
+    });
+    const auto = make(combat({ engage: 'none' }));
+    auto.onCharacter(
+      state({
+        inCombat: true,
+        room: { ...EMPTY_CHARACTER.room, occupants: [shaman([10]), passive(kobold)] },
+        combat: { ...EMPTY_CHARACTER.combat, engaged: true, attackers: ['wererat shaman'] }
+      })
+    );
+    drain();
+    expect(sent).toEqual(['a kobold thief']);
+    expect(said).toEqual([
+      'auto-combat: hitting back: kobold thief protects wererat shaman, so it goes first'
+    ]);
+  });
+
+  it('does not hit back through a guard set to never attack', () => {
+    const auto = make(
+      combat({ engage: 'none', mobRules: [{ mob: 'kobold thief', treat: 'never' }] })
+    );
+    auto.onCharacter(
+      state({
+        inCombat: true,
+        room: { ...EMPTY_CHARACTER.room, occupants: [shaman([10]), kobold] },
+        combat: { ...EMPTY_CHARACTER.combat, engaged: true, attackers: ['wererat shaman'] }
+      })
+    );
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  /* `orc warlord` ← `orc captain` ← `orc lieutenant`, the lieutenant left
+     alone: the captain cannot be fought, so neither can what it protects. */
+  it('declines the whole chain behind a refused guard', () => {
+    fightIn(
+      [
+        rows(fighter('orc warlord', 300, [bite(10, 20)]), [724], [725]),
+        rows(fighter('orc captain', 200, [bite(8, 16)]), [725], [727]),
+        rows(fighter('orc lieutenant', 150, [bite(6, 12)]), [727])
+      ],
+      combat({ mobRules: [{ mob: 'orc lieutenant', treat: 'never' }] })
+    );
+    expect(sent).toEqual([]);
   });
 });
