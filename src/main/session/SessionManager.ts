@@ -647,12 +647,6 @@ interface HuntPriced extends HuntPrice {
   rooms: HuntingRoom[];
 }
 
-/** How many times running one refused command is put back for a message's *last action failed*. */
-const MESSAGE_RETRIES = 3;
-
-/** How long a message's *don't rest, run* keeps a room from being rested in. */
-const MESSAGE_NO_REST_MS = 60_000;
-
 export class SessionManager {
   private readonly client = new TelnetClient();
   private readonly telnetLog: TelnetEvent[] = [];
@@ -4415,7 +4409,7 @@ export class SessionManager {
      * afraid, retching, a trap that went off in the hand. Put back exactly
      * as a fumble's is (`CommandQueue.resendLast`): only the command this
      * client sent, after the server's own delay, and at most
-     * `MESSAGE_RETRIES` times running, because a fear that lasts a minute
+     * `tuning.messages.retries` times running, because a fear that lasts a minute
      * would otherwise be a resend a second for that minute.
      */
     if (trigger.effects.includes('action-failed') && this.automationConfig.enabled) {
@@ -4424,7 +4418,7 @@ export class SessionManager {
         command !== null && this.messageRetries?.command === command
           ? this.messageRetries.count + 1
           : 1;
-      if (command !== null && run <= MESSAGE_RETRIES) {
+      if (command !== null && run <= tuning().messages.retries) {
         this.messageRetries = { command, count: run };
         this.tracker.noteFumbled(command);
         if (this.queue.resendLast(command)) {
@@ -4457,7 +4451,7 @@ export class SessionManager {
         if (this.restBarred?.room !== room) {
           this.sink.notice(t('session.messages.noRest', { name: trigger.name || trigger.match }));
         }
-        this.restBarred = { room, until: now + MESSAGE_NO_REST_MS };
+        this.restBarred = { room, until: now + tuning().messages.noRestMs };
         return;
       }
       case 'hang-up':

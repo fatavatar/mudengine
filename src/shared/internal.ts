@@ -1044,6 +1044,30 @@ const TUNING_DEFAULTS = {
     /** How long a proposal stays worth sending. A timed command is not urgent. */
     expiresMs: 10_000
   },
+  /** A realm's message table acted on — `MessageTriggers` and the session's actions. */
+  messages: {
+    /**
+     * The least time between two responses from one row. MegaMUD has none;
+     * this is for the row a player writes that the realm answers with its own
+     * sentence, where a response to the answer would be a command a second.
+     */
+    responseGapMs: 1_000,
+    /**
+     * How long an effect is held with no ending heard — a wear-off missed
+     * while the character was elsewhere, an ending typed wrong. MegaMUD holds
+     * one for ever; ten minutes is its own ceiling for a blessing it has not
+     * seen again, and no condition in its shipped table lasts that long.
+     */
+    effectCeilingMs: 600_000,
+    /**
+     * How many times running one refused command is put back for a message's
+     * *last action failed*. A fear that lasts a minute would otherwise be a
+     * resend a second for that minute.
+     */
+    retries: 3,
+    /** How long a message's *don't rest, run* keeps a room from being rested in. */
+    noRestMs: 60_000
+  },
   /** Walking a planned route — `Walker`. */
   walk: {
     /** How long one hold lasts before the walk tries the step again. */

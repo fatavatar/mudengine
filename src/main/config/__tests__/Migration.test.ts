@@ -4421,6 +4421,8 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     migrate();
     expect(tuning()['quests']).toEqual(DEFAULT_INTERNAL.tuning.quests);
     expect(tuning()['remotes']).toEqual(DEFAULT_INTERNAL.tuning.remotes);
+    // And the message table's clocks (2026-09-24), constants until then.
+    expect(tuning()['messages']).toEqual(DEFAULT_INTERNAL.tuning.messages);
   });
 
   /* A key this build no longer reads is a number somebody tunes and then waits
