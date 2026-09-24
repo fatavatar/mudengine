@@ -183,7 +183,8 @@ describe('normalizeConfig', () => {
         // The default: this realm's own `locate:` key is absent.
         locate: 'rm',
         database: '',
-        hangPenalties: null
+        hangPenalties: null,
+        coins: {}
       }
     ]);
   });

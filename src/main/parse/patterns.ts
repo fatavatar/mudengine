@@ -1810,10 +1810,16 @@ export const RULES: Rule[] = [
    * the item out of the pack and puts it nowhere `You notice` will list it.
    */
   { type: 'user-hides', pattern: /^You hid (?:(?<count>\d+) )?(?<item>.+)\./ },
-  /* `18 gold drop to the ground.` — the kill's coins landing on the floor. */
+  /*
+   * `18 gold drop to the ground.` — the kill's coins landing on the floor.
+   * The noun is optional: a realm that renames a coin prints its whole name
+   * here (`1 Krabby Patties drop to the ground.`, Skinny Inc), which reaches
+   * this pattern as the stock `1 runic coins` (`CoinReader.stock`).
+   */
   {
     type: 'room-coins',
-    pattern: /^(?<count>\d+) (?<coin>copper|silver|gold|platinum|runic) drops? to the ground\.$/
+    pattern:
+      /^(?<count>\d+) (?<coin>copper|silver|gold|platinum|runic)(?: [a-z]+)? drops? to the ground\.$/
   },
   {
     type: 'user-gets-coins',

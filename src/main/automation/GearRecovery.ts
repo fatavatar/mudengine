@@ -16,6 +16,7 @@ import { t } from '../app/i18n';
 import { tuning } from '../app/tuning';
 import type { SafetyDecision } from '../../shared/automation';
 import type { CharacterState } from '../../shared/character';
+import { STOCK_COIN_READER, type CoinReader } from '../../shared/coins';
 import type { MovementConfig } from '../../shared/config';
 import { restorePlan } from '../../shared/gear';
 import { sameItem } from '../../shared/items';
@@ -74,6 +75,14 @@ export class GearRecovery {
     private readonly events: RecoveryEvents = {},
     private readonly now: () => number = () => Date.now()
   ) {}
+
+  /** What this realm calls its coins; the stock names until told. */
+  private coins: CoinReader = STOCK_COIN_READER;
+
+  /** The purse is asked for by the realm's own word — see `AutoLoot.useCoins`. */
+  useCoins(reader: CoinReader): void {
+    this.coins = reader;
+  }
 
   configure(config: MovementConfig, enabled: boolean): void {
     this.config = config;
@@ -247,7 +256,7 @@ export class GearRecovery {
         for (const coin of ['runic', 'platinum', 'gold', 'silver', 'copper'] as const) {
           if (cash[coin] <= 0) continue;
           this.queue.enqueue({
-            command: `get ${coin}`,
+            command: `get ${this.coins.word(coin)}`,
             priority: 'probe',
             coalesceKey: `recover:${coin}`,
             expiresAt: this.now() + expiresMs,

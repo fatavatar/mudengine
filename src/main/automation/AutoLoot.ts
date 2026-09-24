@@ -73,6 +73,7 @@ import type { CharacterState } from '../../shared/character';
 import type { EncumbranceGate, LootConfig, SuppliesConfig } from '../../shared/config';
 import { carriedCount } from '../../shared/supplies';
 import { DENOMINATIONS, type Denomination } from '../../shared/character';
+import { STOCK_COIN_READER, type CoinReader } from '../../shared/coins';
 import { bareName, countedName } from '../../shared/items';
 import { nameAnswersTo } from '../../shared/world';
 import { wireItem, type ItemEntity } from '../../shared/entities';
@@ -207,6 +208,23 @@ export class AutoLoot {
     this.wanted.delete(name.trim());
   }
 
+  /** What this realm calls its coins; the stock names until told. */
+  private coins: CoinReader = STOCK_COIN_READER;
+
+  /**
+   * A renamed coin is read as the stock one (`CoinReader.stock`) and asked
+   * for by the realm's own word: `get runic` is `You don't see any` on a
+   * realm whose runic coin is a Krabby Patty, where `get krabby` takes it.
+   */
+  useCoins(reader: CoinReader): void {
+    this.coins = reader;
+  }
+
+  private wordFor(coin: string): string {
+    const which = DENOMINATIONS.find((name) => name === coin.toLowerCase());
+    return which === undefined ? coin.toLowerCase() : this.coins.word(which);
+  }
+
   configure(config: LootConfig, supplies: SuppliesConfig, enabled: boolean): void {
     this.config = config;
     this.supplies = supplies;
@@ -257,7 +275,9 @@ export class AutoLoot {
        * it. Refused rather than worked around, and said once — the alternative
        * is this client throwing away a piece of kit to tidy up some change.
        */
-      const clash = state.inventory.items.find((item) => matchesWord(item.name, coin));
+      const clash = state.inventory.items.find((item) =>
+        matchesWord(item.name, this.coins.word(coin))
+      );
       if (clash !== undefined) {
         if (this.saidClash.has(coin)) continue;
         this.saidClash.add(coin);
@@ -266,7 +286,7 @@ export class AutoLoot {
       }
       this.shed.set(coin, count);
       this.queue.enqueue({
-        command: `drop ${count} ${coin}`,
+        command: `drop ${count} ${this.coins.word(coin)}`,
         priority: 'probe',
         coalesceKey: `loot:shed:${coin}`,
         expiresAt: Date.now() + tuning().loot.expiresMs,
@@ -308,8 +328,10 @@ export class AutoLoot {
       const coin = block.groups['coin'];
       if (coin && this.wantsCoin(coin, state))
         this.take(
-          coin,
-          t('automation.loot.reasonCoinsDropped', { count: block.groups['count'] ?? '', coin })
+          this.wordFor(coin),
+          t('automation.loot.reasonCoinsDropped', { count: block.groups['count'] ?? '', coin }),
+          // Keyed on the denomination, which is what the pickup line reports.
+          coin
         );
       return;
     }
@@ -343,8 +365,9 @@ export class AutoLoot {
           if (this.wantsCoin(coin, state)) {
             const word = coin.toLowerCase();
             const count = found?.['count'];
+            const named = this.wordFor(word);
             this.take(
-              hidden && count !== undefined ? `${count} ${word}` : word,
+              hidden && count !== undefined ? `${count} ${named}` : named,
               t('automation.loot.reasonListed', { item }),
               // Keyed on the denomination whichever form goes out, so one
               // room asks for its copper once however many times a repeated

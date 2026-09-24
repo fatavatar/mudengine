@@ -35,6 +35,7 @@ import {
   type TabsPreference
 } from './config';
 import { DENOMINATIONS, type Denomination } from './character';
+import { asCoinNames, type CoinNames } from './coins';
 import {
   DEFAULT_ALERT_DEBOUNCE_SECONDS,
   isAlertEvent,
@@ -148,6 +149,8 @@ export interface ServerDraft {
   database: string;
   /** Whether a hang-up here is charged; null leaves it to the options file. See `Server.hangPenalties`. */
   hangPenalties: boolean | null;
+  /** What this realm calls its coins, where it renames them. See `Server.coins`. */
+  coins: CoinNames;
 }
 
 /**
@@ -708,7 +711,8 @@ export function asServerDraft(value: unknown): ServerDraft | null {
     // IPC boundary, so it is parsed rather than trusted.
     loops: asLoops(value['loops'], LOOP_LIMITS),
     database: text(value['database']).slice(0, 400),
-    hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null
+    hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
+    coins: asCoinNames(value['coins'])
   };
 }
 

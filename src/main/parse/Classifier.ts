@@ -9,6 +9,7 @@
  * every theme a colour-blind player would choose.
  */
 import { domainOf, type Block, type BlockType } from '../../shared/blocks';
+import { STOCK_COIN_READER, type CoinReader } from '../../shared/coins';
 import { commandOf } from '../../shared/commands';
 import {
   answersTo,
@@ -426,6 +427,13 @@ export class Classifier {
     }
   }
 
+  /** What this realm calls its coins; the stock names until told. */
+  private coins: CoinReader = STOCK_COIN_READER;
+
+  useCoins(reader: CoinReader): void {
+    this.coins = reader;
+  }
+
   /**
    * Classifies one line.
    *
@@ -445,7 +453,8 @@ export class Classifier {
    * the blow or lose the newer reading of the bar it changed.
    */
   classify(line: StreamLine): { block: Block; batch?: BatchBlock; tails?: Block[] } {
-    const text = line.plain;
+    // A realm's own name for a coin, read as the stock one. See `CoinReader`.
+    const text = this.coins.stock(line.plain);
     const block = this.classifyLine(line, text);
     let batch = this.feedBatch(line, text, block.type);
 

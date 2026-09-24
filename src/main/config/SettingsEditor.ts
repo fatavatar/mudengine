@@ -769,6 +769,12 @@ export class SettingsEditor {
         // options file, so null removes the key rather than writing one.
         if (draft.hangPenalties !== null) document.setIn(['hangPenalties'], draft.hangPenalties);
         else if (document.hasIn(['hangPenalties'])) document.deleteIn(['hangPenalties']);
+
+        // And what it calls its coins: only the ones it renames, and no key at
+        // all for a realm that renames none, as with `locate` above.
+        const coins = Object.entries(draft.coins).filter(([, name]) => name.length > 0);
+        if (coins.length > 0) document.setIn(['coins'], Object.fromEntries(coins));
+        else if (document.hasIn(['coins'])) document.deleteIn(['coins']);
       },
       verify: (value) => {
         const server = asServer(value, id);

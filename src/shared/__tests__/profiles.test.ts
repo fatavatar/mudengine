@@ -127,6 +127,26 @@ describe('who says a hang-up is charged', () => {
   });
 });
 
+/* What a realm calls its coins reaches every character playing there. */
+describe('a realm’s coin names', () => {
+  it('are the character’s connection’s, from the realm it plays', () => {
+    const config = {
+      servers: [
+        {
+          name: 'Skinny Inc',
+          host: 'bbs.thelucks.org',
+          port: 2424,
+          coins: { runic: 'Krabby Patties' }
+        }
+      ]
+    };
+    expect(resolve({ server: 'Skinny Inc' }, config).config.connection.coins).toEqual({
+      runic: 'Krabby Patties'
+    });
+    expect(resolve({ server: 'GreaterMUD (local)' }).config.connection.coins).toEqual({});
+  });
+});
+
 describe('resolveProfile', () => {
   it('resolves a server named in the options file', () => {
     const profile = resolve({ server: 'GreaterMUD (local)' });

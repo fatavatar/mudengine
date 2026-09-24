@@ -11,6 +11,7 @@ import {
 import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
 import { domainOf, type Block, type BlockType } from '../../../shared/blocks';
 import { wireItem } from '../../../shared/entities';
+import { coinReader } from '../../../shared/coins';
 
 const automation: AutomationConfig = {
   ...DEFAULT_CONFIG.automation,
@@ -86,6 +87,23 @@ const withRealm = (config: LootConfig): AutoLoot =>
 const drain = (): void => void vi.advanceTimersByTime(500);
 
 describe('coins on the floor', () => {
+  /*
+   * Skinny Inc's runic coin is a Krabby Patty (2026-09-24): read as runic,
+   * asked for by the realm's word, since `get runic` finds nothing there.
+   */
+  it('asks for a renamed coin by the realm’s own word', () => {
+    const auto = make(loot({ coins: true }));
+    auto.useCoins(coinReader({ runic: 'Krabby Patties' }));
+    auto.onBlock(block('room-coins', { count: '1', coin: 'runic' }), state());
+    auto.onBlock(block('room-hidden-items', { items: '14 runic coins' }), state());
+    drain();
+    expect(sent).toEqual(['get krabby']);
+    auto.onBlock(block('user-gets-coins', { count: '1', coin: 'runic coins' }), state());
+    auto.onBlock(block('room-hidden-items', { items: '14 runic coins' }), state());
+    drain();
+    expect(sent).toEqual(['get krabby', 'get 14 krabby']);
+  });
+
   it('picks up coins the moment they land', () => {
     const auto = make(loot({ coins: true }));
     auto.onBlock(block('room-coins', { count: '18', coin: 'gold' }), state());
@@ -592,6 +610,14 @@ describe('putting cash back on the floor', () => {
     auto.onCharacter(carrying({ copper: 15, gold: 3 }));
     drain();
     expect(sent).toEqual(['drop 15 copper']);
+  });
+
+  it('sheds a renamed coin by the realm’s own word', () => {
+    const auto = make(loot({ coins: true, coinKinds: ['gold'], discardKinds: ['runic'] }));
+    auto.useCoins(coinReader({ runic: 'Krabby Patties' }));
+    auto.onCharacter(carrying({ runic: 3 }));
+    drain();
+    expect(sent).toEqual(['drop 3 krabby']);
   });
 
   it('drops nothing when the list is empty, which is what ships', () => {

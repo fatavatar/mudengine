@@ -502,6 +502,7 @@ export class SessionHost {
 
     manager.configureInternal(this.options.internal());
     manager.configureMessages(this.options.messagesFor?.(id) ?? []);
+    manager.configureCoins(config.connection.coins);
     manager.configureMonsters(this.options.monstersFor?.(id) ?? []);
     const slot: SessionSlot = {
       id,
@@ -625,6 +626,7 @@ export class SessionHost {
       );
       slot.manager.configureInternal(this.options.internal());
       slot.manager.configureMessages(this.options.messagesFor?.(slot.id) ?? []);
+      slot.manager.configureCoins(config.connection.coins);
       slot.manager.configureMonsters(this.options.monstersFor?.(slot.id) ?? []);
       slot.backscroll.setLimit(config.terminal.scrollback);
     }
