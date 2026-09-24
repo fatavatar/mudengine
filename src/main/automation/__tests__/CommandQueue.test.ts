@@ -132,6 +132,31 @@ describe('coalescing', () => {
     vi.advanceTimersByTime(200);
     expect(sent[1]).toBe('look');
   });
+
+  /*
+   * One command, two askers: each hears it went (2026-09-24). A room read the
+   * session holds a walk for, folded into one auto-combat asked for, would
+   * otherwise never learn it was sent.
+   */
+  it('tells every asker of a coalesced intent that it went', () => {
+    const heard: string[] = [];
+    queue.enqueue({ command: 'x', priority: 'probe' });
+    queue.enqueue({
+      command: '',
+      priority: 'probe',
+      coalesceKey: 'read',
+      onSent: () => heard.push('a')
+    });
+    queue.enqueue({
+      command: '',
+      priority: 'probe',
+      coalesceKey: 'read',
+      onSent: () => heard.push('b')
+    });
+    vi.advanceTimersByTime(500);
+    expect(sent.filter((c) => c === '')).toHaveLength(1);
+    expect(heard).toEqual(['a', 'b']);
+  });
 });
 
 describe('cancellation', () => {

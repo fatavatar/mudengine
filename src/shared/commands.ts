@@ -744,6 +744,16 @@ export function breaksStealth(input: string): boolean {
 export const REREAD_ROOM = '';
 
 /**
+ * The queue's key for a `REREAD_ROOM` nothing but the room is waiting on — a
+ * death, an arrival or a departure, a message's *check who is in the room*,
+ * auto-combat's every-few-rounds refresh. One key, because two such reads
+ * queued together are one read answered twice (2026-09-24: four keys had let
+ * a kill and a refresh send two Enters back to back). A step's own nudge
+ * keeps `Walker`'s key, since it is the step's answer and goes with the step.
+ */
+export const ROOM_READ_KEY = 'room-read';
+
+/**
  * Commands in the table above that the **MajorMUD lineage does not have**.
  *
  * Two realms ship in this client and they are not the same server. Sending a

@@ -187,6 +187,7 @@ import {
   GREATERMUD_ONLY,
   opensStatScreen,
   REREAD_ROOM,
+  ROOM_READ_KEY,
   type CommandName
 } from '../../shared/commands';
 import { STATUS_LINE } from '../parse/patterns';
@@ -3338,7 +3339,7 @@ export class SessionManager {
    * a step or a `med` decided before the listing is decided on a room that
    * may hold what just walked in. Bounded by `roomOwedMs` after the send.
    */
-  private rereadRoom(reason: string): void {
+  private rereadRoom(reason: string, priority: 'probe' | 'combat' = 'probe'): void {
     if (!this.automationConfig.enabled) return;
     if (this.tracker.current.phase !== 'in-game') return;
     if (this.tracker.pendingMoves > 0) return;
@@ -3347,8 +3348,8 @@ export class SessionManager {
     this.roomOwed = owed;
     this.queue.enqueue({
       command: REREAD_ROOM,
-      priority: 'probe',
-      coalesceKey: 'room-reread',
+      priority,
+      coalesceKey: ROOM_READ_KEY,
       notBefore: now + tuning().combat.lookAfterKillMs,
       expiresAt: now + tuning().session.retreatPatienceMs,
       stillWanted: () => this.tracker.current.phase === 'in-game',
@@ -4433,17 +4434,14 @@ export class SessionManager {
     switch (trigger.action) {
       /*
        * *Check who is in the room*: a spawn, a summons, something arriving
-       * by a way no exit announces. The same silent re-read auto-combat asks
-       * for (`REREAD_ROOM`), because a `look` is said to everybody here.
+       * by a way no exit announces. The re-read a death or an arrival asks
+       * for (`rereadRoom`), in the combat band, and waited for the same way.
        */
       case 'look':
-        this.queue.enqueue({
-          command: REREAD_ROOM,
-          priority: 'combat',
-          coalesceKey: 'message-look',
-          expiresAt: now + tuning().session.retreatPatienceMs,
-          reason: t('session.messages.lookReason', { name: trigger.name || trigger.match })
-        });
+        this.rereadRoom(
+          t('session.messages.lookReason', { name: trigger.name || trigger.match }),
+          'combat'
+        );
         return;
       case 'run': {
         const room = this.tracker.current.room.name;
