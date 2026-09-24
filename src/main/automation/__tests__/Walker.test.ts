@@ -12,7 +12,7 @@ import {
 } from '../../../shared/character';
 import type { Block } from '../../../shared/blocks';
 import type { AutomationConfig, MovementConfig } from '../../../shared/config';
-import type { RemoteLever, Route, RouteStep } from '../../../shared/world';
+import type { Direction, RemoteLever, Route, RouteStep } from '../../../shared/world';
 import { DEFAULT_INTERNAL } from '../../../shared/internal';
 import { wireExit } from '../../../shared/entities';
 
@@ -5003,75 +5003,81 @@ describe('a way something else opens', () => {
   });
 
   /*
-   * **A lever behind a lever.** Reported 2026-09-23 in the Treetops of map 16:
-   * the way to 551 north's lever passes a hidden exit whose own lever is in a
-   * third room, and so on five deep. The walk used to refuse a second errand,
-   * turn back to the first gate and lap the same rooms until its rounds ran
-   * out. Now the second gate's errand is pushed on top of the first: fetched,
-   * the walk goes on to the first lever, and only then back through the gate
-   * it started at — and none of those arrivals is the journey's.
+   * **A lever behind a lever** (todo 807). The Treetops chain five of them: the
+   * walk met a second gate on its way to the first lever, could not start
+   * another errand, and lapped the same rooms until its rounds ran out. A gate
+   * met on an errand's way is pushed onto it, and the invariant the old single
+   * slot protected holds: no lever room's arrival is the journey's, and the
+   * inner errand's arrival is never read as the outer one's.
    */
-  it('fetches a lever that is itself behind a lever, then finishes the first errand', () => {
-    const inner: RemoteLever = { at: '1/7', roomName: 'Vine Room', say: 'pull vine' };
-    /** 1/1 -w-> 1/9 through a gate of its own. */
-    const gatedToLever: Route = {
-      ...TO_LEVER,
-      steps: [{ ...TO_LEVER.steps[0]!, requirement: GATED.steps[0]!.requirement }]
+  it('fetches a lever that is itself behind a lever, and arrives only at the end', () => {
+    const step = (from: string, to: string, direction: Direction, name: string): RouteStep => ({
+      from,
+      to,
+      direction,
+      command: direction,
+      name,
+      requirement: null,
+      dark: false
+    });
+    const route = (...steps: RouteStep[]): Route => ({ cost: steps.length, blocked: false, steps });
+    // 1/1 -e-> 1/2 is the gate; its lever is in the Guardroom, 1/1 -w-> 1/9 —
+    // and that way is shut too, by a chain in the Cellar, 1/1 -s-> 1/7.
+    const plans: Record<string, Route> = {
+      '1/1>1/9': route(step('1/1', '1/9', 'w', 'Guardroom')),
+      '1/1>1/7': route(step('1/1', '1/7', 's', 'Cellar')),
+      '1/7>1/9': route(step('1/7', '1/1', 'n', 'Inner Gate'), step('1/1', '1/9', 'w', 'Guardroom')),
+      '1/9>1/2': BACK
     };
-    /** 1/1 -s-> 1/7, where the inner lever is. */
-    const toInner: Route = {
-      cost: 1,
-      blocked: false,
-      steps: [
-        {
-          from: '1/1',
-          to: '1/7',
-          direction: 's',
-          command: 's',
-          name: 'Vine Room',
-          requirement: null,
-          dark: false
-        }
-      ]
+    const levers: Record<string, RemoteLever[]> = {
+      e: [LEVER],
+      w: [{ at: '1/7', roomName: 'Cellar', say: 'pull chain' }]
     };
-    const { walk, asked, ends, arrive } = withLevers(
-      (from, direction) => (from === '1/1' && direction === 'w' ? [inner] : [LEVER]),
-      { '1/9': gatedToLever, '1/7': toInner, '1/2': BACK }
+    const ends: Array<[boolean, string | null]> = [];
+    let here = 1;
+    const walk = new Walker(
+      { ...config, movement: { ...config.movement, openDoors: true, openTries: 1 } },
+      queue,
+      {
+        notice: (m) => notices.push(m),
+        leversFor: (_from, direction) => levers[direction] ?? [],
+        stateNow: () => at(1, here),
+        replan: (to) => plans[`1/${here}>${to}`] ?? 'no route',
+        ended: (arrived, reason) => ends.push([arrived, reason])
+      }
     );
+    const arrive = (room: number): void => {
+      here = room;
+      walk.onCharacter(at(1, room));
+      vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
+    };
+    const locked = (): void => {
+      walk.onBlock(block('direction-failed', { barrier: 'gate' }));
+      vi.advanceTimersByTime(200);
+      walk.onBlock(block('open-failed', { barrier: 'gate', reason: 'locked' }));
+      vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
+    };
+
     walk.start(GATED, at(1, 1));
-    walk.onBlock(block('direction-failed', { barrier: 'gate' }));
-    vi.advanceTimersByTime(200);
-    walk.onBlock(block('open-failed', { barrier: 'gate', reason: 'locked' }));
-    vi.advanceTimersByTime(200);
-    expect(asked).toEqual(['1/9']);
+    locked();
+    expect(moves(sent)).toEqual(['e', 'open e', 'w']);
+    // The way to the Guardroom is shut as well: fetch the chain first.
+    locked();
+    expect(moves(sent).slice(-2)).toEqual(['open w', 's']);
 
-    // The way to the lever is shut too: its own errand, on top of the first.
-    walk.onBlock(block('direction-failed', { barrier: 'gate' }));
-    vi.advanceTimersByTime(200);
-    walk.onBlock(block('open-failed', { barrier: 'gate', reason: 'locked' }));
-    vi.advanceTimersByTime(200);
-    expect(asked).toEqual(['1/9', '1/7']);
-
-    // The inner lever pulled, the walk goes on to the first lever's room...
+    // The Cellar is the inner errand's room: its chain, and back towards the
+    // Guardroom — not the outer lever, and not an arrival.
     arrive(7);
-    vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
-    expect(asked).toEqual(['1/9', '1/7', '1/9']);
-    // ...and that one pulled, on to where the journey was going.
+    expect(moves(sent).slice(-2)).toEqual(['pull chain', 'n']);
+    expect(moves(sent)).not.toContain('pull lever');
+    arrive(1);
     arrive(9);
-    vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
-    expect(asked).toEqual(['1/9', '1/7', '1/9', '1/2']);
-    expect(moves(sent)).toEqual([
-      'e',
-      'open e',
-      'w',
-      'open w',
-      's',
-      'pull vine',
-      'w',
-      'pull lever',
-      'e'
-    ]);
+    // The Guardroom is the outer errand's: its lever, then the way on.
+    expect(moves(sent).slice(-2)).toEqual(['pull lever', 'e']);
     expect(ends).toEqual([]);
+    arrive(1);
+    arrive(2);
+    expect(ends).toEqual([[true, null]]);
     walk.dispose();
   });
 

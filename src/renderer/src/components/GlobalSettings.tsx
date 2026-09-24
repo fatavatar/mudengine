@@ -188,7 +188,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'movement-stealth', label: t('settings.movement.stealthLegend') },
     { id: 'movement-light', label: t('settings.movement.lightLegend') },
     { id: 'movement-afflictions', label: t('settings.movement.afflictionsLegend') },
-    { id: 'movement-regions', label: t('settings.movement.regionsLegend') },
+    { id: 'movement-keep-out', label: t('settings.movement.keepOutLegend') },
     { id: 'movement-carry', label: t('settings.movement.carryLegend') },
     { id: 'hunting', label: t('settings.hunting.legend') }
   ],
@@ -1913,27 +1913,20 @@ export default function GlobalSettings({
               />
             </fieldset>
 
-            <fieldset className="settings-menus" data-fieldset="movement-regions">
-              <legend>{t('settings.movement.regionsLegend')}</legend>
-              <CheckField
-                checked={draft.automation.movement.useVortexes}
-                hint={t('settings.movement.useVortexesHint')}
-                label={t('settings.movement.useVortexes')}
-                name="global-use-vortexes"
-                onChange={(value) =>
-                  automation({ movement: { ...draft.automation.movement, useVortexes: value } })
-                }
-              />
-              <CheckField
-                checked={draft.automation.movement.enterNegativePlane}
-                hint={t('settings.movement.enterNegativePlaneHint')}
-                label={t('settings.movement.enterNegativePlane')}
-                name="global-enter-negative-plane"
+            <fieldset className="settings-menus" data-fieldset="movement-keep-out">
+              <legend>{t('settings.movement.keepOutLegend')}</legend>
+              <TextField
+                hint={t('settings.movement.keepOutOfHint')}
+                label={t('settings.movement.keepOutOf')}
+                name="global-keep-out-of"
                 onChange={(value) =>
                   automation({
-                    movement: { ...draft.automation.movement, enterNegativePlane: value }
+                    movement: { ...draft.automation.movement, keepOutOf: splitNames(value) }
                   })
                 }
+                placeholder={t('settings.movement.keepOutOfPlaceholder')}
+                value={joinNames(draft.automation.movement.keepOutOf)}
+                wide
               />
             </fieldset>
 

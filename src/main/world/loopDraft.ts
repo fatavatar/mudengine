@@ -256,13 +256,14 @@ function fingerprint(traveller: Traveller): string {
     traveller.level ?? '',
     traveller.strength ?? '',
     traveller.pickSkill ?? '',
-    // Which of those two the walker may spend — a switch flipped in settings
+    // Which of those two the walker may spend: a switch flipped in settings
     // changes which doors a draft can walk through.
     traveller.forcing === undefined
       ? ''
       : `${traveller.forcing.pick ? 'p' : ''}${traveller.forcing.bash ? 'b' : ''}`,
-    // And the regions the settings keep a draft out of.
-    `${traveller.vortexes === false ? '' : 'v'}${traveller.negativePlane === false ? '' : 'n'}`,
+    // And what it keeps out of: a word added changes which ways a draft walks.
+    (traveller.keepOut?.words ?? []).join('\n'),
+    (traveller.keepOut?.allowed ?? []).join('\n'),
     traveller.classId ?? '',
     traveller.raceId ?? '',
     traveller.alignment ?? ''

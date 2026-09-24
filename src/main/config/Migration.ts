@@ -256,7 +256,11 @@ function migrateAll(options: MigrationOptions): void {
   quietedTheLocateProbe(home, note);
   statedTheConfusionWait(home, note);
   statedTheFreedomCure(home, note);
-  statedTheRegions(home, note);
+  /*
+   * **After `statedTheNewAutomation`**, which writes `keepOutOf` with both
+   * words, so a switch turned on has a word to take off.
+   */
+  theRegionsBecameKeepOut(home, note);
   statedTheMonsterRows(home, note);
   /*
    * **After `statedTheMonsterRows`**, which writes `monsters: []` beside the
@@ -4300,6 +4304,16 @@ function statedTheNewAutomation(home: Home, note: (message: string) => void): vo
       if (
         addKeys(
           document,
+          ['automation', 'movement'],
+          [['keepOutOf', [...DEFAULT_CONFIG.automation.movement.keepOutOf]]],
+          KEEP_OUT_OF_COMMENT
+        )
+      ) {
+        changed = true;
+      }
+      if (
+        addKeys(
+          document,
           ['automation', 'combat'],
           [['defendAfterRounds', 2]],
           DEFEND_AFTER_ROUNDS_COMMENT
@@ -4599,6 +4613,12 @@ const FIGHT_ON_ARRIVAL_COMMENT = ` Turn auto-combat back on when a route you ask
  with it off is how you get somewhere without fighting on the way, and on
  arrival that reason is gone. Flips the switch in this file.`;
 
+const KEEP_OUT_OF_COMMENT = ` Ways and places routes keep out of, in the realm's own words: a way whose
+ script phrase says one (\`go vortex\`), or a room whose name does. A route
+ you ask for that crosses one is shown beside the way round it, and you
+ choose; a walk nobody is watching is planned round them, and refused out
+ loud where there is no way round, unless it starts or ends inside one.`;
+
 const DEFEND_AFTER_ROUNDS_COMMENT = ` With auto-combat off, or a route run with it off, being hit for this many
  rounds without moving turns it on until you next arrive in another room.
  Off means do not start fights; it never meant stand there and be killed.
@@ -4864,13 +4884,6 @@ const CONFUSION_WAIT_COMMENT = ` And confusion -- MegaMUD's Ignore Confusion, of
  Messages.md on the realm's settings page), and while it says so a route
  or a loop stands still. A confused character's commands misfire.`;
 
-/** The template's own words for the two, so the files read alike. */
-const REGIONS_COMMENT = ` The dangerous regions, kept out of route planning unless you say so --
- as MegaMUD's own paths keep out of them. The swirling vortexes (\`go
- vortex\`) lead into the Black Wasteland and on to the Negative Power
- Plane, far more dangerous than the ordinary ways between the places
- they join. A route that starts or ends on the Plane may still cross it.`;
-
 /** The template's own words for the monster rows, so the files read alike. */
 const MONSTER_ROWS_COMMENT = ` What this character does differently about particular monsters -- MegaMUD's
  Monster Details, laid one field at a time over the realm's own table
@@ -4926,7 +4939,7 @@ const SUPPLIES_COMMENT = ` Keeping the pack stocked -- MegaMUD's Must Have Minim
      - { name: torch, min: 3, max: 7, shop: General Store, at: { map: 1, room: 2147 } }`;
 
 const DOOR_FORCING_DEFAULTS: ReadonlyArray<readonly [string, boolean | number]> = [
-  ['pickLocks', true],
+  ['pickLocks', false],
   ['pickTries', 3],
   ['bashDoors', false],
   ['bashTries', 3]
@@ -4946,8 +4959,8 @@ const DOOR_FORCING_COMMENT = ` Forcing a barrier \`open\` cannot get past.
  game prints the damage in the room. A picked door is unlocked and still
  shut, so the client opens it afterwards; a bashed one is open already.
 
- Each is tried only where the character's own figure -- picklocks or
- strength, off the stat sheet -- meets what the realm records for the lock.`;
+ Both off by default. A door somebody locked is a door somebody locked,
+ and a route that forces its way through one is a decision, not a detail.`;
 
 /** The keys under `connection:` that only the anonymous session ever read. */
 const ANONYMOUS_CONNECTION_KEYS = ['autoConnect'] as const;
@@ -5983,43 +5996,50 @@ function statedTheConditionWaits(home: Home, note: (message: string) => void): v
  * whatever its value — and nothing stated is overwritten.
  */
 /**
- * The vortexes and the Negative Power Plane, 2026-09-23 — two switches, both
- * off, that keep route planning out of them unless the player says so.
+ * `useVortexes` and `enterNegativePlane` became `keepOutOf` (2026-09-24).
  *
- * Stated into every file that has a `movement:` block, for the reason
- * `statedTheConfusionWait` gives: a default nothing in the file names is a
- * setting nobody can find. Placed after `walkWhileConfused` where that key is
- * stated, at the end of the block otherwise; idempotent against somebody who
- * has since set either, and nothing stated is overwritten.
+ * This fork's two switches (2026-09-23) kept route planning out of the
+ * vortexes and the Negative Power Plane; upstream's merge (todo 806) says the
+ * same thing as a list of the realm's own words, which `statedTheNewAutomation`
+ * has already written with both words in it. A switch turned **on** said the
+ * player walks that way, so its word comes off the list; either way the two
+ * keys go, and the paragraph written with them goes with the first. Nothing
+ * else in the file is touched, and a file stating neither is left alone.
  */
-function statedTheRegions(home: Home, note: (message: string) => void): void {
+function theRegionsBecameKeepOut(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
+  const moved: string[] = [];
+  const words: Record<string, string> = {
+    useVortexes: 'vortex',
+    enterNegativePlane: 'negative power plane'
+  };
 
   for (const file of files) {
     edit(file, (document) => {
       const movement = document.getIn(['automation', 'movement'], true);
       if (!isMap(movement)) return false;
-      const missing = ['useVortexes', 'enterNegativePlane'].filter((key) => !movement.has(key));
-      if (missing.length === 0) return false;
-      const pairs = missing.map((key) => document.createPair(key, false) as Pair);
-      if (isScalar(pairs[0]!.key)) pairs[0]!.key.commentBefore = REGIONS_COMMENT;
-      const after = movement.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'walkWhileConfused'
-      );
-      if (after === -1) movement.items.push(...pairs);
-      else movement.items.splice(after + 1, 0, ...pairs);
-      stated.push(file);
+      const stated = Object.keys(words).filter((key) => movement.has(key));
+      if (stated.length === 0) return false;
+      const keepOut = movement.get('keepOutOf', true);
+      for (const key of stated) {
+        if (movement.get(key) === true && isSeq(keepOut)) {
+          keepOut.items = keepOut.items.filter(
+            (item) => !(isScalar(item) && String(item.value).toLowerCase() === words[key])
+          );
+        }
+        movement.delete(key);
+      }
+      moved.push(file);
       return true;
     });
   }
 
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
+  if (moved.length === 0) return;
+  const params = { count: moved.length, fileList: moved.join(', ') };
   note(
-    stated.length === 1
-      ? t('notices.migration.regionsStated.one', params)
-      : t('notices.migration.regionsStated.many', params)
+    moved.length === 1
+      ? t('notices.migration.regionsBecameKeepOut.one', params)
+      : t('notices.migration.regionsBecameKeepOut.many', params)
   );
 }
 
@@ -6614,6 +6634,10 @@ function theTuningBlockGainedKeys(
      * somebody who plays a realm with different pacing would want to raise.
      */
     addKey('walk', 'followSettleMs', DEFAULT_INTERNAL.tuning.walk.followSettleMs);
+    // How long an item errand waits on a summons it asked for (todo 806).
+    addKey('walk', 'errandAskMs', DEFAULT_INTERNAL.tuning.walk.errandAskMs);
+    // And how many levers-behind-levers one walk will fetch (todo 807).
+    addKey('walk', 'leverErrandDepth', DEFAULT_INTERNAL.tuning.walk.leverErrandDepth);
     /*
      * And the eight this file had fallen behind by (2026-09-23, on review).
      *
@@ -6657,8 +6681,8 @@ function theTuningBlockGainedKeys(
      * already stated their groups: which attack a `*Combat Engaged*` answers,
      * the room re-read after a death or an arrival and how long it is owed,
      * the room spell's settle before it is let go, the one heal or blessing a
-     * round, a blessing's onset settling, the errand's handover and pack
-     * checks, and how long a locate answer is waited for.
+     * round, a blessing's onset settling, how long the errand waits on a
+     * summons, and how long a locate answer is waited for.
      */
     addKey('parse', 'engageBindMs', DEFAULT_INTERNAL.tuning.parse.engageBindMs);
     addKey('combat', 'lookAfterKillMs', DEFAULT_INTERNAL.tuning.combat.lookAfterKillMs);
@@ -6669,8 +6693,13 @@ function theTuningBlockGainedKeys(
     addKey('spells', 'castRoundMs', DEFAULT_INTERNAL.tuning.spells.castRoundMs);
     addKey('spells', 'refusedWindowMs', DEFAULT_INTERNAL.tuning.spells.refusedWindowMs);
     addKey('walk', 'errandAskMs', DEFAULT_INTERNAL.tuning.walk.errandAskMs);
-    addKey('walk', 'errandPackCheckMs', DEFAULT_INTERNAL.tuning.walk.errandPackCheckMs);
     addKey('session', 'locateResolveMs', DEFAULT_INTERNAL.tuning.session.locateResolveMs);
+    /*
+     * What a key's fetch is weighed at against the way round (2026-09-23,
+     * todo 805): the one number that decides whether a locked door is offered
+     * as an errand or left to the long way.
+     */
+    addKey('world', 'keyFetchTrips', DEFAULT_INTERNAL.tuning.world.keyFetchTrips);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {
@@ -6718,6 +6747,12 @@ function theTuningBlockGainedKeys(
      * a figure.
      */
     dropKey('walk', 'searchTries');
+    /*
+     * The item errand's pack-check spacing (this fork, 2026-09-23), retired
+     * when upstream's merge read a handover off one pack listing instead
+     * (`PackAfter`, todo 806): nothing asks for the pack on a clock now.
+     */
+    dropKey('walk', 'errandPackCheckMs');
     const tallyAt = tuning.items.findIndex((item) => keyText(item) === 'tally');
     if (tallyAt !== -1) {
       tuning.items.splice(tallyAt, 1);

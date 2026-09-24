@@ -43,9 +43,10 @@ export function stepSignature(step: RouteStep): string {
       : step.deadly === true
         ? 'deadly'
         : String(Math.max(1, Math.round(step.danger * 100)));
-  // And a pull, which is something to *say* on that step, never folded away.
+  // And a pull, which is something to *say* on that step, never folded away,
+  // and the kept-out word, so a step wearing it keeps its own row (todo 806).
   const pull = step.pull?.say.join(',') ?? '';
-  return [step.name, gate, hazard, lair, pull].join('|');
+  return [step.name, gate, hazard, lair, pull, step.keptOut ?? ''].join('|');
 }
 
 /** Consecutive steps with one signature, as runs, in order. */

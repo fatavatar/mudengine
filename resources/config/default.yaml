@@ -753,14 +753,13 @@ automation:
     # game prints the damage in the room. A picked door is unlocked and still
     # shut, so the client opens it afterwards; a bashed one is open already.
     #
-    # Both are ON by default. Each is gated on the realm's own number against
-    # the character's own -- strength and picklocks off the stat sheet -- so
-    # neither is attempted against a barrier this character cannot beat, and
-    # the tries cap each at three; the alternative is a route that stops dead
-    # at a lock the character could have opened. The route planner reads these
-    # two switches as well: a door only a switched-off skill opens is planned
-    # round, or named as the wall it is.
-    pickLocks: true
+    # Bashing is ON by default and picking is off, which is not an accident.
+    # Bashing is gated on the realm's own strength number, so it is never even
+    # attempted against a barrier this character cannot beat, and bashTries caps
+    # it at three; the alternative is a route that stops dead at a lock the
+    # character was strong enough to walk through. Picking is the same decision
+    # made with a skill the client cannot check the character has.
+    pickLocks: false
     pickTries: 3
     bashDoors: true
     bashTries: 3
@@ -843,13 +842,17 @@ automation:
     # or a loop stands still. A confused character's commands misfire.
     walkWhileConfused: false
 
-    # The dangerous regions, kept out of route planning unless you say so --
-    # as MegaMUD's own paths keep out of them. The swirling vortexes (`go
-    # vortex`) lead into the Black Wasteland and on to the Negative Power
-    # Plane, far more dangerous than the ordinary ways between the places
-    # they join. A route that starts or ends on the Plane may still cross it.
-    useVortexes: false
-    enterNegativePlane: false
+
+    # Ways and places routes keep out of, in the realm's own words: a way whose
+    # script phrase says one (`go vortex`), or a room whose name does (the
+    # Negative Power Plane). A route you ask for that crosses one is shown
+    # beside the way round it, and you choose which to walk. A walk nobody is
+    # watching -- a loop's leg, an item errand, a quest run, a hunt -- is
+    # planned round them, and refused out loud where there is no way round,
+    # unless it starts or ends inside one. Empty keeps out of nothing.
+    keepOutOf:
+      - vortex
+      - Negative Power Plane
 
     # The key to the door in front of you.
     #
