@@ -4075,6 +4075,8 @@ export class SessionManager {
   private noteSent(command: string, from: 'user' | 'automation'): void {
     if (this.tracker.current.phase !== 'in-game') return;
     this.feed.sent(command, from);
+    // A heal or a blessing ends the fight it is cast into; see `AutoCombat.noteSent`.
+    this.combat.noteSent(command);
   }
 
   /**

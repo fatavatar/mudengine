@@ -70,6 +70,7 @@ import type { CommandQueue } from './CommandQueue';
 import { canPayFor } from './mana';
 import { countMobs, countThreats } from './RuleEngine';
 import { t } from '../app/i18n';
+import { HAZARD_ABILITY } from '../../shared/abilities';
 import type { EngageDecision } from '../../shared/automation';
 import type { Block } from '../../shared/blocks';
 import {
@@ -220,6 +221,18 @@ interface CastProposal {
 }
 
 /** How full the mana pool is, 0–1, or null when its maximum is unknown. */
+/** The abilities a spell hits its target with; see `attackCast`. */
+const DAMAGING = new Set<number>([
+  HAZARD_ABILITY.damage,
+  HAZARD_ABILITY.damageWithMr,
+  HAZARD_ABILITY.drain
+]);
+
+/** A command as sent and as echoed back, compared the same way. */
+function castKey(command: string): string {
+  return command.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function manaFraction(state: CharacterState): number | null {
   const { mana, manaMax } = state.vitals;
   return mana !== null && manaMax !== null && manaMax > 0 ? mana / manaMax : null;
@@ -471,6 +484,8 @@ export class AutoCombat {
    * worth saying even when it repeats the last session's.
    */
   private lastDecision: string | null = null;
+  /** Casts `noteSent` has already let the fight go for, until their `*Combat Off*`. */
+  private presumedOff: Array<{ command: string; at: number }> = [];
 
   constructor(
     private config: CombatConfig,
@@ -964,6 +979,45 @@ export class AutoCombat {
   }
 
   /**
+   * A command on the wire, the player's or automation's.
+   *
+   * A cast that is not an attack, sent into a fight, ends it: the server
+   * answers a heal or a blessing with `*Combat Off*`, whatever it was
+   * repeating. So the fight is let go *here*, the moment the cast goes out,
+   * rather than when that `*Combat Off*` is read — reading it needs the echo
+   * before it, and skinny's `aund` went out with eight probes on entering the
+   * realm, its `*Combat Off*` came back with no echo to pin it on, and he
+   * stood in thirteen war dogs healing and never attacking (2026-09-24). The
+   * `*Combat Off*` that does come back is then not about the fight opened
+   * since, and `fightBrokenBy` passes over it.
+   */
+  noteSent(command: string): void {
+    const cast = this.castIn(command);
+    if (cast === null) return;
+    if (!this.areaEngaged && this.state?.inCombat !== true) return;
+    if (this.attackCast(cast)) return;
+    this.fightBrokenBy(command);
+    this.presumedOff.push({ command: castKey(command), at: Date.now() });
+  }
+
+  /**
+   * A cast that keeps the fight going: one that does damage. Aimed at a
+   * monster is not enough — a blinding or a confusion is cast at one and is
+   * no attack (the player, 2026-09-24) — so it is the realm's answer where
+   * the realm has one, the abilities the server hits with (`Spell.cs`:
+   * `DamageNoMR`, `DamageWithMR`, `Drain`). Where it has none, the room
+   * spell, the configured round spell or its fallback, and what the fight is
+   * repeating now are the attacks this character is known to cast.
+   */
+  private attackCast(cast: { word: string; argument: string }): boolean {
+    if (this.isArea(cast.word)) return true;
+    const abilities = this.realmSpell(cast.word)?.abilities;
+    if (abilities !== undefined) return abilities.some(([id]) => DAMAGING.has(id));
+    const kept = [this.spells.attack, this.spells.attackFallback, this.combatAction ?? ''];
+    return kept.some((spell) => spell.trim().length > 0 && this.sameSpell(cast.word, spell));
+  }
+
+  /**
    * The stranger `politeAttacks` leaves this monster to, while the sighting is
    * fresh, or null. `choose` and retaliation's joiners ask the same question.
    */
@@ -1021,7 +1075,7 @@ export class AutoCombat {
       case 'mob-hits':
       case 'mob-misses':
         // A round of the room spell is a round like any: it is still going.
-        if (this.areaEngaged) this.areaSeenAt = Date.now();
+        if (this.areaEngaged && this.dealtBy(block)) this.areaSeenAt = Date.now();
         this.armRound();
         return;
 
@@ -2147,6 +2201,29 @@ export class AutoCombat {
     return true;
   }
 
+  /**
+   * A blow this character dealt, or swung and missed: the only kind that says
+   * the room spell is still being cast. A monster's blow says only that the
+   * monster is — skinny's `aund` stopped the spell on entering the realm, its
+   * `*Combat Off*` came back in a pile of probes with no echo to pin it on,
+   * and thirteen war dogs biting every round kept the spell "seen" for as
+   * long as he stood there, healing and never casting (2026-09-24). The
+   * spell's own line names nobody (`A horde of shrieking spirits ravages
+   * your foe`); a party member's names them.
+   */
+  private dealtBy(block: Block): boolean {
+    if (block.type === 'user-misses') return true;
+    if (block.type !== 'user-hits') return false;
+    const target = block.groups['target'];
+    if (target !== undefined && /^you$/i.test(target)) return false;
+    const attacker = block.groups['attacker'];
+    return (
+      attacker === undefined ||
+      /^you$/i.test(attacker) ||
+      attacker.toLowerCase() === this.state?.name?.toLowerCase()
+    );
+  }
+
   private dropArea(): void {
     this.areaEngaged = false;
     this.clearAreaTimer();
@@ -2216,6 +2293,17 @@ export class AutoCombat {
    */
   private fightBrokenBy(command: string | null): void {
     if (command === null) return;
+    // Already let go when it was sent (`noteSent`): the fight opened since is
+    // a new one, and this `*Combat Off*` is not about it.
+    const now = Date.now();
+    this.presumedOff = this.presumedOff.filter(
+      (sent) => now - sent.at < tuning().spells.castRoundMs
+    );
+    const early = this.presumedOff.findIndex((sent) => sent.command === castKey(command));
+    if (early !== -1) {
+      this.presumedOff.splice(early, 1);
+      return;
+    }
     const name = commandOf(command);
     if (name !== null && ATTACK_COMMANDS.has(name)) return;
     // A configured verb the command table does not call an attack is still one.
