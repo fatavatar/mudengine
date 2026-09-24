@@ -167,6 +167,18 @@ function chips(step: RouteStep) {
               : t('cards.route.spendsUses', { useCount: step.invoke.uses })}
         </span>
       )}
+      {/* And the lever the plan came here for (`RouteStep.pull`), said
+      before this step: the far end of a detour to open a door further on.
+      The door itself is named on hover, because the chip is on a room the
+      reader may not connect with it. */}
+      {step.pull !== undefined && (
+        <span
+          className="chip warn"
+          title={t('cards.route.pullTitle', { roomName: step.pull.opensName })}
+        >
+          {t('cards.route.pullFirst', { phrase: step.pull.say.join(', ') })}
+        </span>
+      )}
       {/* And what the room itself does to whoever stands in it. A chip
       rather than a figure per step: on a route that crosses eight hundred of
       them the number is the same eight hundred times, and the figure that
@@ -256,6 +268,13 @@ export default function RoutePanel({
   const [route, setRoute] = useState<Route | null>(null);
   const [target, setTarget] = useState<WorldRoom | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
+  /*
+   * The room a plan has been asked for and not yet answered. A route across
+   * the realm takes long enough — a second and more, with the alternatives —
+   * that a click with nothing to show for it read as a missed click
+   * (2026-09-24), so the panel says it is planning until the answer lands.
+   */
+  const [planningTo, setPlanningTo] = useState<WorldRoom | null>(null);
   /**
    * The plan main drew again, and which plan it was drawn to replace.
    *
@@ -395,12 +414,16 @@ export default function RoutePanel({
     let live = true;
     setTarget(destination);
     setRefused(null);
+    setPlanningTo(destination);
     void onRoute(destination)
       .then((plan) => {
         if (live) setRoute(plan);
       })
       .catch((error) => {
         if (live) setRefused(errorMessage(error));
+      })
+      .finally(() => {
+        if (live) setPlanningTo(null);
       });
     return () => {
       live = false;
@@ -426,6 +449,7 @@ export default function RoutePanel({
       setRoute(null);
       setTarget(null);
       setRefused(null);
+      setPlanningTo(null);
     }
   }, [open]);
 
@@ -525,12 +549,16 @@ export default function RoutePanel({
     const mine = planning.current;
     setTarget(room);
     setRefused(null);
+    setPlanningTo(room);
     void onRoute(room)
       .then((plan) => {
         if (planning.current === mine) setRoute(plan);
       })
       .catch((error) => {
         if (planning.current === mine) setRefused(errorMessage(error));
+      })
+      .finally(() => {
+        if (planning.current === mine) setPlanningTo(null);
       });
   };
 
@@ -790,7 +818,15 @@ export default function RoutePanel({
             </div>
           )}
 
-          {route !== null && shown !== null ? (
+          {/* In place of the plan on screen, which is the previous room's, and of
+            the list the room was picked from: either left standing reads as
+            the click not having landed. */}
+          {planningTo !== null ? (
+            <div aria-live="polite" className="route-planning" role="status">
+              <span aria-hidden="true" className="route-spinner" />
+              {t('cards.route.planning', { roomName: planningTo.name })}
+            </div>
+          ) : route !== null && shown !== null ? (
             <div className="route-result">
               <div className="route-head">
                 <strong>{target?.name}</strong>

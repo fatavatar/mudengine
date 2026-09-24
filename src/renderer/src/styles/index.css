@@ -2312,6 +2312,37 @@ kbd {
   padding: 4px 8px;
 }
 
+/* A plan asked for and not yet answered — see `planningTo` in RoutePanel. */
+.route-planning {
+  align-items: center;
+  color: var(--text-lo);
+  display: flex;
+  gap: 8px;
+  padding: 10px 8px;
+}
+
+.route-spinner {
+  animation: route-spin 0.8s linear infinite;
+  border: 2px solid color-mix(in srgb, var(--pending) var(--tone), transparent);
+  border-radius: 50%;
+  border-top-color: var(--pending);
+  flex: none;
+  height: 12px;
+  width: 12px;
+}
+
+@keyframes route-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-spinner {
+    animation: dot-pulse 1.6s var(--ease-inout) infinite;
+  }
+}
+
 /* The plan was drawn again from here, and why. Not the refusal's register: a
    refusal says the press did nothing, and this says the press produced a plan
    to read — so it wears the accent, which is what this palette says *look

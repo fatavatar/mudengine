@@ -1916,6 +1916,14 @@ const TUNING_DEFAULTS = {
      */
     anotherWayLonger: 0.5,
     /**
+     * The most the walk to a lever in another room may cost each way, for
+     * the router to plan it (`WorldGraph.leverErrand`). The Grand Stair's
+     * lever is two rooms and a searched wall from its door, 28 each way; a
+     * plain room is 1 and a search 26. Past this the lever is left to the
+     * walker, which fetches it when the door refuses.
+     */
+    leverDetourCost: 60,
+    /**
      * How many of a consumable a quest's plan buys against a room spell on
      * the way, where the realm says using one stops the spell.
      *

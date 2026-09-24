@@ -386,6 +386,32 @@ export interface Traveller {
    * planning a walk.
    */
   penalised?: ReadonlySet<string>;
+  /**
+   * Set on the traveller a lever detour is planned for (`leverErrand`), so a
+   * door on the way to a lever is priced as it stands rather than planned
+   * round in turn. A lever behind a lever is `Walker.fetchLever`'s errand
+   * stack, found on the wire; planning it here would recurse through every
+   * door whose lever is behind another. Never set by a caller.
+   */
+  noLeverErrands?: boolean;
+}
+
+/**
+ * The detour a door opened by a lever in another room costs, and the way
+ * there and back — `WorldGraph.leverErrand`.
+ */
+interface LeverErrand {
+  /** The room the levers are pulled in. */
+  at: RoomId;
+  /** One phrase per lever, the realm's own spelling first. */
+  say: string[];
+  /** What the step is priced at: both legs and the pulls. */
+  price: number;
+  /** The way from the door's room to the levers, and back again. */
+  out: Map<RoomId, { prev: RoomId; exit: WorldExit | PortalExit }>;
+  back: Map<RoomId, { prev: RoomId; exit: WorldExit | PortalExit }>;
+  outCost: number;
+  backCost: number;
 }
 
 /** What a caller wants beyond the plan itself. */
@@ -437,6 +463,54 @@ export interface RouteOptions {
  */
 function leverKey(room: RoomId, direction: string): string {
   return `${room}|${direction}`;
+}
+
+/**
+ * A plan with every step straight back the way it came taken out.
+ *
+ * A search never makes one — every move costs something — so the only
+ * doubling a plan holds is a lever errand's: planned from the door's room, its
+ * first leg retraces the rooms the plan walked in by. The Grand Stair's lever
+ * is off 7/148, which the plan crosses two rooms before the door, and without
+ * this the walk climbed to the door, came back down, fetched the lever and
+ * climbed again. A step that pulls, uses an item or teleports is never taken
+ * out: it does something besides move.
+ */
+function withoutDoubling(steps: readonly RouteStep[]): RouteStep[] {
+  const plain = (step: RouteStep): boolean =>
+    step.direction !== 'portal' &&
+    step.pull === undefined &&
+    step.scatter === undefined &&
+    step.invoke === undefined;
+  const kept: RouteStep[] = [];
+  for (const step of steps) {
+    const last = kept.at(-1);
+    if (
+      last !== undefined &&
+      last.from === step.to &&
+      last.to === step.from &&
+      plain(last) &&
+      plain(step)
+    ) {
+      kept.pop();
+      continue;
+    }
+    kept.push(step);
+  }
+  return kept;
+}
+
+/**
+ * A hidden exit whose levers the realm puts in another room — the shape
+ * `edgePenalty` prices flat because it reads the requirement alone, and
+ * `leverErrand` prices by the walk.
+ */
+function leveredElsewhere(requirement: Requirement | null): boolean {
+  return (
+    requirement?.kind === 'hidden' &&
+    requirement.searchable !== true &&
+    (requirement.actions?.some((act) => act.at !== undefined) ?? false)
+  );
 }
 
 /** A swirling vortex: a room script the realm has said as `go vortex`. */
@@ -1030,12 +1104,11 @@ function statedPenalty(requirement: Requirement | null, traveller: Traveller): n
        *
        * Everything else stays expensive rather than impossible, which is what
        * this line has always said. The levers are somewhere else, and this
-       * planner still does not plan the detour: `Walker.fetchLever` makes it
-       * **reactively**, when the server refuses the step, for the reason the
-       * search rung already gives — a gate found open is found open, and a lap
-       * should pay for the errand once rather than every time it plans. So the
-       * price is what the edge costs when it is already open, plus a
-       * discouragement, which is what this is.
+       * function cannot see the room they are in: `stepCost` asks
+       * `leverErrand` for the walk there and back and prices that instead
+       * where it is near enough to plan, and this is the price where it is
+       * not — `Walker.fetchLever` then makes the errand when the step is
+       * refused.
        */
       if (requirement.searchable) return 25;
       if (openableHere(requirement)) return 25 + 5 * requirement.actions!.length;
@@ -1709,6 +1782,13 @@ export class WorldGraph {
    * it *was* used is the step's own fact.
    */
   private readonly spends = new Map<PortalExit, Omit<RouteInvocation, 'at'>>();
+  /**
+   * The lever detours already planned, per traveller and per door
+   * (`leverErrand`). Per traveller because the detour is priced by what this
+   * one can walk; weakly, because every route builds its travellers afresh
+   * and a search asks the same door once per room it expands from.
+   */
+  private readonly errands = new WeakMap<Traveller, Map<string, LeverErrand | null>>();
   /**
    * Every item name the realm has, for recognising one in a line of text.
    * Empty before v11, where the console recognised only the ~100 items some
@@ -4249,31 +4329,6 @@ export class WorldGraph {
   }
 
   /**
-   * What a barrier costs when the realm names a word that opens it *here*, or
-   * null when nothing here does.
-   *
-   * One function rather than a price and a predicate beside it, because the
-   * price and the plan have to agree about what a wall is: split in two, a
-   * door the listed pack could not open after all was charged the wall by one
-   * and reported as no wall by the other.
-   *
-   * `openableHere`'s question asked of a step rather than of a requirement,
-   * because a door's levers are never on its requirement: `buildRealm` writes
-   * `Requirement.actions` only for an exit that states `Needs N Actions`, and
-   * a `Door` states nothing of the kind. So the only place the two ends are
-   * joined is the lever index, and this is the one reading of it — shared by
-   * the price (`stepCost`), the plan (`blocksAlong`) and the search for
-   * another way (`otherWay`), for the reason `openableHere` already gives:
-   * three copies of *can this be opened from here* agree exactly until one is
-   * edited.
-   *
-   * Every lever in the room the step leaves from, and the same price
-   * `edgePenalty` puts on a hidden exit in that shape, because `Walker` sends
-   * both the same way — one command per lever, then the step again. Levers
-   * somewhere else leave the wall standing: the detour is still not planned,
-   * it is made reactively by `Walker.fetchLever`.
-   */
-  /**
    * The levers that open this step **without leaving the room**, and nothing
    * where any of them is elsewhere.
    *
@@ -4286,8 +4341,8 @@ export class WorldGraph {
    */
   leversHere(from: RoomId, direction: string): readonly RemoteLever[] {
     const levers = this.leversFor(from, direction);
-    // Levers **elsewhere** leave the wall standing: this planner does not plan
-    // the detour, `Walker.fetchLever` makes it when the server refuses.
+    // Levers **elsewhere** are `leverErrand`'s: a detour, planned and priced
+    // as one, rather than a word said at the door.
     return levers.length > 0 && levers.every((lever) => lever.at === from) ? levers : NO_LEVERS;
   }
 
@@ -4313,25 +4368,180 @@ export class WorldGraph {
     };
   }
 
+  /**
+   * What a barrier costs when the realm names a word that opens it, or null
+   * when nothing this traveller can reach does.
+   *
+   * One function rather than a price and a predicate beside it, because the
+   * price and the plan have to agree about what a wall is: split in two, a
+   * door the listed pack could not open after all was charged the wall by one
+   * and reported as no wall by the other. Shared by the price (`stepCost`),
+   * the plan (`blocksAlong`) and the search for another way (`otherWay`), for
+   * the reason `openableHere` already gives: three copies of *can this be
+   * opened* agree exactly until one is edited.
+   *
+   * Every lever in the room the step leaves from is the same price
+   * `edgePenalty` puts on a hidden exit in that shape, because `Walker` sends
+   * both the same way — one command per lever, then the step again. Levers in
+   * another room are the walk there and back as well (`leverErrand`), which
+   * `buildRoute` puts on the plan.
+   */
   private leverPrice(from: RoomId, direction: string, traveller: Traveller): number | null {
     const levers = this.leversHere(from, direction);
-    if (levers.length === 0) return null;
-    /*
-     * And the pack decides, exactly as it does for a hidden exit's levers
-     * (`actionItemLacking`): `use crowbar` opens the warehouse door at 1/1104
-     * and the server answers *You don't have crowbar to use!* without one. A
-     * listed pack lacking it is the wall again — null, so every reader agrees
-     * this step is one — while a pack nobody has listed is *nobody has looked*
-     * and pays the unevaluated price on top. Todo 13 in a second spelling: a
-     * route was planned through *hold up talisman* at the cost of a free
-     * lever, by a character with no talisman.
-     */
+    if (levers.length === 0) return this.leverErrand(from, direction, traveller)?.price ?? null;
+    return this.pullPrice(levers, traveller);
+  }
+
+  /**
+   * What pulling these levers costs where the character stands, or null where
+   * the listed pack lacks what one of them wants.
+   *
+   * And the pack decides, exactly as it does for a hidden exit's levers
+   * (`actionItemLacking`): `use crowbar` opens the warehouse door at 1/1104
+   * and the server answers *You don't have crowbar to use!* without one. A
+   * listed pack lacking it is the wall again — null, so every reader agrees
+   * this step is one — while a pack nobody has listed is *nobody has looked*
+   * and pays the unevaluated price on top. Todo 13 in a second spelling: a
+   * route was planned through *hold up talisman* at the cost of a free
+   * lever, by a character with no talisman.
+   */
+  private pullPrice(levers: readonly RemoteLever[], traveller: Traveller): number | null {
     const open = 25 + 5 * levers.length;
     const wanted = levers
       .map((lever) => lever.item)
       .filter((item): item is number => item !== undefined);
     if (wanted.length === 0 || wanted.every((item) => traveller.keys?.includes(item))) return open;
     return traveller.packKnown === true ? null : open + UNEVALUATED;
+  }
+
+  /**
+   * The walk to a lever in another room and back, where that is what opens
+   * this step — or null where the realm names no such lever, or none this
+   * traveller reaches within `tuning.world.leverDetourCost` each way.
+   *
+   * Reported 2026-09-24: the Grand Stair door at 7/150 reads `Door [251
+   * picklocks/strength]`, and `pull lever` in the Guard Room two rooms back
+   * (7/152, behind a searchable wall off 7/148) opens it. The planner priced
+   * the door a wall, so the Black House way to the Fungus Forest never
+   * appeared, although `Walker.fetchLever` would have walked it the moment
+   * the door refused. Priced here, it is a door like any other: the legs and
+   * the pulls, and `buildRoute` puts both legs on the plan.
+   *
+   * **The shapes `fetchLever` acts on, and only those.** Levers spread over
+   * several rooms that the realm counts as one set (`Needs N Actions` with N
+   * levers) are a round of rooms, walked by `runLeverSet` on the wire and not
+   * planned; a lever in the door's own room is `leversHere`. Everything else
+   * names alternatives — the Inner Gate's two Guardrooms each raise it — so
+   * the cheapest room is the errand. A room holding fewer levers than the
+   * realm says are needed opens nothing and is passed over.
+   *
+   * **One level deep.** The legs are planned for a traveller that plans no
+   * errands of its own (`Traveller.noLeverErrands`): a lever behind another
+   * lever's door is the walker's errand stack, and planning it here would
+   * recurse through every such door in the realm. Kept per traveller, because
+   * a search asks the same door from every room it expands.
+   */
+  private leverErrand(from: RoomId, direction: string, traveller: Traveller): LeverErrand | null {
+    if (traveller.noLeverErrands === true) return null;
+    const levers = this.leversFor(from, direction);
+    if (levers.length === 0 || levers.some((lever) => lever.at === from)) return null;
+    const key = leverKey(from, direction);
+    let held = this.errands.get(traveller);
+    if (held === undefined) this.errands.set(traveller, (held = new Map()));
+    if (held.has(key)) return held.get(key)!;
+
+    const rooms = new Map<RoomId, RemoteLever[]>();
+    for (const lever of levers) {
+      const bucket = rooms.get(lever.at);
+      if (bucket === undefined) rooms.set(lever.at, [lever]);
+      else bucket.push(lever);
+    }
+    const needed = this.rooms.get(from)?.exits.find((exit) => exit.direction === direction)
+      ?.requirement?.actionsNeeded;
+    let best: LeverErrand | null = null;
+    if (!(rooms.size > 1 && needed !== undefined && needed === levers.length)) {
+      const walker: Traveller = { ...traveller, noLeverErrands: true };
+      const limit = tuning().world.leverDetourCost;
+      for (const [at, pulled] of rooms) {
+        if (needed !== undefined && pulled.length < needed) continue;
+        const pull = this.pullPrice(pulled, traveller);
+        if (pull === null) continue;
+        const out = this.leverLeg(from, at, walker, limit);
+        if (out === null) continue;
+        const back = this.leverLeg(at, from, walker, limit);
+        if (back === null) continue;
+        const price = out.cost + back.cost + pull;
+        if (best !== null && price >= best.price) continue;
+        best = {
+          at,
+          say: pulled.map((lever) => lever.say),
+          price,
+          out: out.cameFrom,
+          back: back.cameFrom,
+          outCost: out.cost,
+          backCost: back.cost
+        };
+      }
+    }
+    held.set(key, best);
+    return best;
+  }
+
+  /**
+   * The cheapest way between two rooms that costs no more than `limit`, or
+   * null — one leg of a lever errand.
+   *
+   * Dijkstra with a ceiling rather than `search`, because the question is
+   * *is the lever near* and an A* that cannot reach its goal walks the whole
+   * realm finding that out, once per door per traveller. The same prices and
+   * the same prunings as the plan — a draw is not a way, and the rooms and
+   * edges a traveller is kept out of stay out — so a leg is walked exactly as
+   * it was priced.
+   */
+  private leverLeg(
+    from: RoomId,
+    to: RoomId,
+    traveller: Traveller,
+    limit: number
+  ): {
+    cameFrom: Map<RoomId, { prev: RoomId; exit: WorldExit | PortalExit }>;
+    cost: number;
+  } | null {
+    const goal = this.rooms.get(to);
+    if (goal === undefined || !this.rooms.has(from)) return null;
+    const cameFrom = new Map<RoomId, { prev: RoomId; exit: WorldExit | PortalExit }>();
+    const best = new Map<RoomId, number>([[from, 0]]);
+    const settled = new Set<RoomId>();
+    const open = new MinHeap<RoomId>();
+    open.push(0, from);
+    const discount = this.discountFor(traveller);
+    const shunned = this.shunned(traveller, from, goal);
+    while (open.size > 0) {
+      const id = open.pop()!;
+      if (settled.has(id)) continue;
+      settled.add(id);
+      const cost = best.get(id)!;
+      if (id === to) return { cameFrom, cost };
+      const here = this.rooms.get(id);
+      if (here === undefined) continue;
+      for (const exit of [...here.exits, ...this.portalsFrom(id)]) {
+        if (exit.requirement?.spellEffect === 'scatters') continue;
+        const nextId = this.beyond(exit);
+        const next = this.rooms.get(nextId);
+        if (next === undefined || settled.has(nextId)) continue;
+        if (traveller.avoid?.has(nextId) === true) continue;
+        if (traveller.avoidEdges?.has(`${id}|${exit.direction}`) === true) continue;
+        if (shunned(exit, next)) continue;
+        const price = this.stepCost(id, exit, next, traveller, false, discount);
+        if (price === null) continue;
+        const tentative = cost + price;
+        if (tentative > limit || tentative >= (best.get(nextId) ?? Infinity)) continue;
+        best.set(nextId, tentative);
+        cameFrom.set(nextId, { prev: id, exit });
+        open.push(tentative, nextId);
+      }
+    }
+    return null;
   }
 
   /**
@@ -7641,9 +7851,13 @@ export class WorldGraph {
      * character is not, a listed pack lacking the lever's own item — and that
      * last one is a hidden exit, which certainly *does* have levers here.
      * `leverPrice` answering null leaves the wall exactly where it was.
+     *
+     * And a hidden exit whose levers are in another room, which `edgePenalty`
+     * prices at a flat discouragement because it cannot see the room: where
+     * the walk to them is planned (`leverErrand`), that walk is the price.
      */
     const penalty =
-      priced !== null && priced >= tuning().world.wallCost
+      priced !== null && (priced >= tuning().world.wallCost || leveredElsewhere(exit.requirement))
         ? (this.leverPrice(from, exit.direction, traveller) ?? walled)
         : walled;
 
@@ -8189,11 +8403,59 @@ export class WorldGraph {
          */
         ...drawn
       });
+      /*
+       * And the walk to the lever that opens this step, where the price was
+       * that walk (`leverErrand`): out to the lever room and back, ahead of
+       * the step, with the pull on the first step home.
+       */
+      const errand = this.errandOn(prev, exit, traveller);
+      if (errand !== null) {
+        steps.unshift(...this.errandSteps(errand, prev, destination?.name ?? '', traveller));
+      }
       cursor = prev;
     }
 
-    const hazards = this.hazardsAlong(steps, traveller);
-    return { steps, cost, blocked: false, ...(hazards.length > 0 ? { hazards } : {}) };
+    const walked = withoutDoubling(steps);
+    const hazards = this.hazardsAlong(walked, traveller);
+    return { steps: walked, cost, blocked: false, ...(hazards.length > 0 ? { hazards } : {}) };
+  }
+
+  /**
+   * The lever errand `stepCost` priced this step by, or null where it priced
+   * something else — asked in `stepCost`'s own terms, so the plan walks the
+   * detour exactly when the price included one.
+   */
+  private errandOn(
+    from: RoomId,
+    exit: WorldExit | PortalExit,
+    traveller: Traveller
+  ): LeverErrand | null {
+    if (exit.direction === 'portal' || exit.requirement?.spellEffect === 'scatters') return null;
+    const priced = edgePenalty(exit.requirement, traveller);
+    if (priced === null) return null;
+    if (priced < tuning().world.wallCost && !leveredElsewhere(exit.requirement)) return null;
+    if (this.leversHere(from, exit.direction).length > 0) return null;
+    return this.leverErrand(from, exit.direction, traveller);
+  }
+
+  /**
+   * An errand as steps: from the door's room to the levers, the pull, and
+   * back. Built by `buildRoute` itself, for the traveller the legs were
+   * priced for, so every fact a step carries — the dark, the lair, the
+   * searchable wall into the Guard Room — is on the detour as on the plan.
+   */
+  private errandSteps(
+    errand: LeverErrand,
+    door: RoomId,
+    beyond: string,
+    traveller: Traveller
+  ): RouteStep[] {
+    const walker: Traveller = { ...traveller, noLeverErrands: true };
+    const out = this.buildRoute(errand.out, errand.at, errand.outCost, walker).steps;
+    const back = this.buildRoute(errand.back, door, errand.backCost, walker).steps;
+    const [first, ...rest] = back;
+    if (first === undefined) return out;
+    return [...out, { ...first, pull: { say: errand.say, opensName: beyond } }, ...rest];
   }
 
   /**

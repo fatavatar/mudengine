@@ -2655,6 +2655,25 @@ export interface RouteStep {
    * costs nothing to walk twice and a potion is gone.
    */
   invoke?: RouteInvocation;
+  /**
+   * Levers to pull in the room this step leaves, before it goes out — the
+   * far end of a detour the router planned to a lever in another room
+   * (`WorldGraph.leverErrand`), on the first step of the way back.
+   *
+   * Carried on the step because that is the one place the walker is standing
+   * in the right room with the pull still ahead of it: the steps between here
+   * and the door are ordinary moves, and the door itself is the step that
+   * wants it open.
+   */
+  pull?: RoutePull;
+}
+
+/** What `RouteStep.pull` says, and the door it is said for. */
+export interface RoutePull {
+  /** One phrase per lever, the realm's own spelling. */
+  say: string[];
+  /** The room behind the door it opens, for the line that says why. */
+  opensName: string;
 }
 
 /**

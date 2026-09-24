@@ -265,10 +265,11 @@ export function describeObstacle(
       /*
        * A lever somewhere else is the one case with a real second half, and it
        * is the half somebody acts on: *the lever for this is in 1/1339* is a
-       * place to walk to, where *hidden* is a shrug. The router still does not
-       * plan that detour — `Walker.fetchLever` walks it when the server refuses
-       * the step — so this is what a person reads before deciding to, and it is
-       * why the exit is not written off on a refusal.
+       * place to walk to, where *hidden* is a shrug. The router plans that
+       * detour where the lever is near (`WorldGraph.leverErrand`) and
+       * `Walker.fetchLever` walks it where it is not, so this is what a
+       * person reads either way, and it is why the exit is not written off
+       * on a refusal.
        */
       case 'hidden': {
         const away = requirement.actions?.filter((act) => act.at !== undefined) ?? [];
