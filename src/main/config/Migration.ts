@@ -6487,6 +6487,9 @@ function theTuningBlockGainedKeys(
     // makes is bounded by one of these, so a run that looks stuck is diagnosed
     // from this block or not at all.
     addGroup('quests', { ...DEFAULT_INTERNAL.tuning.quests });
+    // A realm's message table acted on (2026-09-24): four clocks that were
+    // constants in the code, where nobody could reach them.
+    addGroup('messages', { ...DEFAULT_INTERNAL.tuning.messages });
 
     /** One key into a sub-block the file already states, with its paragraph. */
     const addKey = (group: string, key: string, value: number): void => {

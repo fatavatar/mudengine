@@ -34,6 +34,7 @@
  */
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
+import { tuning } from '../app/tuning';
 import type { RuleFiring } from '../../shared/rules';
 import type { StatedEffect } from '../../shared/character';
 import {
@@ -46,26 +47,6 @@ import {
   type MessageEffect,
   type MessageTrigger
 } from '../../shared/messageTriggers';
-
-/**
- * The least time between two responses from one row.
- *
- * MegaMUD has none. This exists for the row a player writes that the realm
- * answers with its own sentence: without it, `stat` in answer to a line the
- * sheet prints back is a command a second the realm is too busy to refuse.
- */
-const RESPONSE_GAP_MS = 1_000;
-
-/**
- * How long an effect is held with no ending heard.
- *
- * MegaMUD holds one until its ending arrives, which is for ever when the
- * ending never does — a wear-off missed while the character was elsewhere, a
- * row whose ending was typed wrong. Ten minutes is MegaMUD's own ceiling for a
- * blessing it has not seen again, and no condition in its shipped table lasts
- * that long.
- */
-const EFFECT_CEILING_MS = 10 * 60_000;
 
 /** How many firings the trace keeps. The card shows twelve. */
 const TRACE_LIMIT = 50;
@@ -245,7 +226,7 @@ export class MessageTriggers {
 
     if (trigger.response.length > 0) {
       const last = this.lastResponded.get(key);
-      if (last === undefined || now - last >= RESPONSE_GAP_MS) {
+      if (last === undefined || now - last >= tuning().messages.responseGapMs) {
         const steps = expandResponse(trigger.response, captures, this.random);
         if (steps.length > 0) this.lastResponded.set(key, now);
         steps.forEach((step, index) => {
@@ -307,7 +288,7 @@ export class MessageTriggers {
   private expire(now: number): void {
     const ended: MessageEffect[] = [];
     for (const [key, { entry, stated }] of [...this.held]) {
-      if (now - stated.since <= EFFECT_CEILING_MS) continue;
+      if (now - stated.since <= tuning().messages.effectCeilingMs) continue;
       this.held.delete(key);
       ended.push(...entry.trigger.effects);
       this.changed = true;

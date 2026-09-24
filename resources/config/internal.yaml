@@ -786,6 +786,26 @@ tuning:
     # How long a proposal stays worth sending. A timed command is not urgent.
     expiresMs: 10000
 
+  # A realm's message table acted on (Messages.md, imported per realm).
+  messages:
+    # The least time between two responses from one row. MegaMUD has none; this
+    # is for a row whose response the realm answers with a sentence the same row
+    # matches, which would otherwise be a command a second.
+    responseGapMs: 1000
+
+    # How long an effect is held with no ending heard -- a wear-off missed while
+    # the character was elsewhere, or an ending typed wrong. MegaMUD holds one
+    # for ever; ten minutes is its own ceiling for a blessing.
+    effectCeilingMs: 600000
+
+    # How many times running one refused command is put back for a message's
+    # "last action failed". A fear that lasts a minute would otherwise be a
+    # resend a second for that minute.
+    retries: 3
+
+    # How long a message's "don't rest, run" keeps a room from being rested in.
+    noRestMs: 60000
+
   # Walking a planned route — `Walker`.
   walk:
     # How long one hold lasts before the walk tries the step again.
