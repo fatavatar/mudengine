@@ -5,7 +5,7 @@
  * One row per monster, and every field optional: a row says only what differs
  * from how a monster nobody listed is treated. That is what makes the three
  * places a row can come from compose. A realm's table is imported once from
- * MegaMUD's `Monsters.md` (`servers/<id>/monsters.yaml`, `RealmMonsterStore`)
+ * MegaMUD's `Monsters.md` (`servers/<id>/monsters.yaml`, `RealmTableStore`)
  * and every character playing there gets it; a character's own rows
  * (`automation.combat.monsters`) are laid over it **field by field**, so a
  * shaman can name an attack spell for a monster without restating that the

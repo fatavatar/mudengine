@@ -446,6 +446,20 @@ function encumbered(exit: { note: string | null; requirement?: unknown }): boole
  * learned and says so, and knows nothing about where it is written down. The
  * implementation is `WorldMemory` in `src/main/world/`.
  */
+/** A realm's imported tables. See `RealmTableStore`. */
+export interface RealmTables {
+  messages: readonly MessageTrigger[];
+  monsters: readonly MonsterRule[];
+}
+
+/** A realm with no directory: nothing imported. */
+export const NO_REALM_TABLES: RealmTables = { messages: [], monsters: [] };
+
+/** What `configureRealm` is told: the tables, and what the realm calls its coins. */
+export interface RealmData extends RealmTables {
+  coins: CoinNames;
+}
+
 export interface RealmMemory {
   /** Records it, or returns null if this was already known. */
   learn(discovery: Discovery): Discovery | null;
@@ -4177,17 +4191,25 @@ export class SessionManager {
   }
 
   /**
-   * The realm's message table. Hot-reloaded, and separate from `configure`
-   * because it is the realm's rather than the character's: it arrives from
-   * the realm's own file, not from the options this character resolves.
+   * What this session is told about its realm beyond the options: the tables
+   * imported for it and what it calls its coins. Hot-reloaded, and separate
+   * from `configure` because it is the realm's rather than the character's —
+   * it arrives from the realm's own files. One door, because the three always
+   * arrive together.
    */
+  configureRealm(realm: RealmData): void {
+    this.messages.load(realm.messages);
+    this.useCoins(realm.coins);
+    this.useMonsters(realm.monsters);
+  }
+
   /**
    * The realm's monster table (`servers/<id>/monsters.yaml`), laid under the
    * character's own `combat.monsters`. Only the two modules handed the combat
    * settings are told again; everything else reads `automationConfig` when it
    * decides.
    */
-  configureMonsters(rows: readonly MonsterRule[]): void {
+  private useMonsters(rows: readonly MonsterRule[]): void {
     this.realmMonsters = rows;
     const automation = {
       ...this.automationConfig,
@@ -4331,15 +4353,11 @@ export class SessionManager {
    * stock names on the way in, and asked for by the realm's word on the way
    * out. See `CoinReader`.
    */
-  configureCoins(names: CoinNames): void {
+  private useCoins(names: CoinNames): void {
     const reader = coinReader(names);
     this.classifier.useCoins(reader);
     this.loot.useCoins(reader);
     this.recoverGear.useCoins(reader);
-  }
-
-  configureMessages(triggers: readonly MessageTrigger[]): void {
-    this.messages.load(triggers);
   }
 
   /**

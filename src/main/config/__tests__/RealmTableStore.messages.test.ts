@@ -4,12 +4,13 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { homeAt, type Home } from '../../app/home';
-import { RealmMessageStore } from '../RealmMessageStore';
+import { MESSAGE_TABLE, RealmTableStore } from '../RealmTableStore';
+import type { MessageTable } from '../../../shared/messageTriggers';
 import { blankTrigger } from '../../../shared/messageTriggers';
 
 let root: string;
 let home: Home;
-let store: RealmMessageStore;
+let store: RealmTableStore<MessageTable>;
 let errors: string[];
 
 beforeEach(() => {
@@ -17,7 +18,7 @@ beforeEach(() => {
   home = homeAt(root);
   fs.mkdirSync(home.server('paradigm').dir, { recursive: true });
   errors = [];
-  store = new RealmMessageStore(home, (message) => errors.push(message));
+  store = new RealmTableStore(home, MESSAGE_TABLE, (message) => errors.push(message));
 });
 
 afterEach(() => {
@@ -34,7 +35,7 @@ const confusion = {
   action: 'wait' as const
 };
 
-describe('RealmMessageStore', () => {
+describe('RealmTableStore, the message table', () => {
   it('reads a realm with no file as an empty table', () => {
     expect(store.forServer('paradigm')).toEqual({ source: null, triggers: [] });
   });

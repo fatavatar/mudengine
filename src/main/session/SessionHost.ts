@@ -25,7 +25,15 @@ import { Backscroll } from './Backscroll';
 import { SessionCapture } from './SessionCapture';
 import { SessionLog } from './SessionLog';
 import { Reconnect } from './Reconnect';
-import { BUSY_PHASES, SessionManager, type RealmFinds, type RealmMemory } from './SessionManager';
+import {
+  BUSY_PHASES,
+  NO_REALM_TABLES,
+  SessionManager,
+  type RealmData,
+  type RealmFinds,
+  type RealmMemory,
+  type RealmTables
+} from './SessionManager';
 import type { InternalConfig } from '../../shared/internal';
 import type { WorldGraph } from '../world/WorldGraph';
 import type { MobLore } from '../../shared/lore';
@@ -46,8 +54,6 @@ import type { RealmPlayers } from '../../shared/players';
 import type { RealmDestinations } from '../world/DestinationBook';
 import type { BelongingsSink } from '../../shared/belongings';
 import type { TalkSink } from './TalkLog';
-import type { MessageTrigger } from '../../shared/messageTriggers';
-import type { MonsterRule } from '../../shared/monsterRules';
 import { isTalkBlock } from '../../shared/talk';
 import { SessionDebug } from './SessionDebug';
 
@@ -127,17 +133,11 @@ export interface SessionHostOptions {
    */
   sentences?(): ShippedSentences;
   /**
-   * The message table of *this character's* realm (`servers/<id>/messages.yaml`),
-   * per session for the reason `loreFor` is. Optional: a host without one
-   * answers no sentences.
+   * The tables imported for *this character's* realm (`servers/<id>/`), per
+   * session for the reason `loreFor` is. Optional: a host without them answers
+   * no sentences and leaves every monster to the character's own rows.
    */
-  messagesFor?(id: SessionId): readonly MessageTrigger[];
-  /**
-   * The monster table of *this character's* realm (`servers/<id>/monsters.yaml`),
-   * laid under the character's own `combat.monsters` rows. Optional: a host
-   * without one leaves every monster to the character's own rows.
-   */
-  monstersFor?(id: SessionId): readonly MonsterRule[];
+  realmTablesFor?(id: SessionId): RealmTables;
   /**
    * Where what *this character* learns about the realm is kept.
    *
@@ -501,9 +501,7 @@ export class SessionHost {
     );
 
     manager.configureInternal(this.options.internal());
-    manager.configureMessages(this.options.messagesFor?.(id) ?? []);
-    manager.configureCoins(config.connection.coins);
-    manager.configureMonsters(this.options.monstersFor?.(id) ?? []);
+    manager.configureRealm(this.realmFor(id, config));
     const slot: SessionSlot = {
       id,
       manager,
@@ -615,6 +613,14 @@ export class SessionHost {
    * Each session asks for its own, because two characters can now disagree
    * about what a rule set or a vitals threshold should be.
    */
+  /** What a session is told about its realm: the imported tables and the coins' names. */
+  private realmFor(id: SessionId, config: AppConfig): RealmData {
+    return {
+      ...(this.options.realmTablesFor?.(id) ?? NO_REALM_TABLES),
+      coins: config.connection.coins
+    };
+  }
+
   reconfigure(): void {
     for (const slot of this.slots.values()) {
       const config = this.options.configFor(slot.id);
@@ -625,9 +631,7 @@ export class SessionHost {
         config.connection.locate
       );
       slot.manager.configureInternal(this.options.internal());
-      slot.manager.configureMessages(this.options.messagesFor?.(slot.id) ?? []);
-      slot.manager.configureCoins(config.connection.coins);
-      slot.manager.configureMonsters(this.options.monstersFor?.(slot.id) ?? []);
+      slot.manager.configureRealm(this.realmFor(slot.id, config));
       slot.backscroll.setLimit(config.terminal.scrollback);
     }
   }
