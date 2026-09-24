@@ -2556,6 +2556,7 @@ cards:
     walkToTooltip: Plan the way here. Nothing is walked until you read the steps and say so.
   route:
     alreadyHere: You are already here.
+    planning: 'Planning the way to {roomName}…'
     destination:
       exits: 'exits: {exitList}'
       lairChip: lair
@@ -2631,12 +2632,14 @@ cards:
       keyed: the way through, key fetched first
       another: the different way
     usedHere: 'here, in {roomName}'
+    pullFirst: 'say “{phrase}” first'
+    pullTitle: 'Opens the way to {roomName}, further on'
     spendsOnce: single use
     spendsUses: '{useCount} uses'
     spendsForever: unlimited uses
     collectFirst: Collect {itemName} first
     fetchThenWalk: Get {itemName}, then walk
-    stopShort: Stop before entering {roomName}
+    stopShort: Stop before entering
     stopShortTooltip: Walk as far as {roomName} and stop there
     stepSkipped: not walked
     alreadyBefore: You are already in the room before {roomName}.

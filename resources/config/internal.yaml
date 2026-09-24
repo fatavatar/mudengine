@@ -1449,6 +1449,13 @@ tuning:
     # and past this it is a tour rather than a choice.
     anotherWayLonger: 0.5
 
+    # The most the walk to a lever in another room may cost each way, for the
+    # router to plan it: a plain room is 1 and a searched wall 26. The Grand
+    # Stair door (7/150) opens to a lever two rooms and a searched wall away,
+    # 28 each way. Past this the lever is left to the walk, which fetches it
+    # when the door refuses.
+    leverDetourCost: 60
+
     # How many of a consumable a quest's plan buys against a room spell on the
     # way, where the realm says using one stops the spell. A waterskin is three
     # uses and its spell lasts 600 ticks, the desert crossing is 64 rooms each

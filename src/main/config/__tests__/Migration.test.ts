@@ -4380,6 +4380,7 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     expect(file['world']?.['hazardSupplyCount']).toBe(
       DEFAULT_INTERNAL.tuning.world.hazardSupplyCount
     );
+    expect(file['world']?.['leverDetourCost']).toBe(DEFAULT_INTERNAL.tuning.world.leverDetourCost);
     expect(file['walk']?.['followSettleMs']).toBe(DEFAULT_INTERNAL.tuning.walk.followSettleMs);
     // And this fork's own, into the groups the file already states.
     const { parse, combat, spells, walk } = DEFAULT_INTERNAL.tuning;

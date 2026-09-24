@@ -4782,6 +4782,40 @@ describe('a way something else opens', () => {
   });
 
   /*
+   * And the errand the router planned (`RouteStep.pull`, 2026-09-24): the
+   * detour is already on the route, so the walk goes to the Guardroom, pulls
+   * ahead of the first step home, and walks through the gate without being
+   * refused at it once — no ladder, and no route asked for on the way.
+   */
+  it('pulls a lever the plan walked to, ahead of the step home', () => {
+    const { walk, asked, ends, arrive } = withLevers([LEVER]);
+    const planned: Route = {
+      cost: 3,
+      blocked: false,
+      steps: [
+        { ...TO_LEVER.steps[0]! },
+        { ...BACK.steps[0]!, pull: { say: ['pull lever'], opensName: 'Courtyard' } },
+        { ...GATED.steps[0]! }
+      ]
+    };
+    walk.start(planned, at(1, 1));
+    vi.advanceTimersByTime(200);
+    expect(moves(sent)).toEqual(['w']);
+
+    arrive(9);
+    vi.advanceTimersByTime(200);
+    expect(moves(sent)).toEqual(['w', 'pull lever', 'e']);
+
+    arrive(1);
+    vi.advanceTimersByTime(config.pacing.ackTimeoutMs + 200);
+    expect(moves(sent)).toEqual(['w', 'pull lever', 'e', 'e']);
+    arrive(2);
+    expect(asked).toEqual([]);
+    expect(ends).toEqual([[true, null]]);
+    walk.dispose();
+  });
+
+  /*
    * And the arrival at the lever is **not** an arrival: `ended` is what a loop
    * books a leg on, and a lap that advanced to its next stop here would leave
    * the gate shut and the stop behind it never reached.

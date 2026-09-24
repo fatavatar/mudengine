@@ -6626,6 +6626,8 @@ function theTuningBlockGainedKeys(
     addKey('world', 'anotherWayPenalty', DEFAULT_INTERNAL.tuning.world.anotherWayPenalty);
     addKey('world', 'anotherWayLonger', DEFAULT_INTERNAL.tuning.world.anotherWayLonger);
     addKey('world', 'hazardSupplyCount', DEFAULT_INTERNAL.tuning.world.hazardSupplyCount);
+    // The router's reach for a lever in another room (2026-09-24).
+    addKey('world', 'leverDetourCost', DEFAULT_INTERNAL.tuning.world.leverDetourCost);
     /*
      * This fork's own clocks (2026-09-22 to 09-23), which reached no file that
      * already stated their groups: which attack a `*Combat Engaged*` answers,

@@ -43,7 +43,9 @@ export function stepSignature(step: RouteStep): string {
       : step.deadly === true
         ? 'deadly'
         : String(Math.max(1, Math.round(step.danger * 100)));
-  return [step.name, gate, hazard, lair].join('|');
+  // And a pull, which is something to *say* on that step, never folded away.
+  const pull = step.pull?.say.join(',') ?? '';
+  return [step.name, gate, hazard, lair, pull].join('|');
 }
 
 /** Consecutive steps with one signature, as runs, in order. */

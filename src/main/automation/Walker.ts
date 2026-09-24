@@ -496,6 +496,13 @@ export class Walker {
    * gate may have shut behind the character.
    */
   private detoured = new Set<string>();
+  /**
+   * The step whose planned levers (`RouteStep.pull`) have gone out, so a
+   * second fresh send of it — after a fight, or a hold let go — does not pull
+   * again: a lever pulled twice may shut what the first pull opened. By the
+   * step itself, which a new route never shares.
+   */
+  private pulledFor: RouteStep | null = null;
   /** Whether this step's unreachable levers have been reported. Said once. */
   private leverSaid = false;
   /**
@@ -2310,6 +2317,29 @@ export class Walker {
     this.barrierRounds = 0;
     this.carryOn(state);
     return true;
+  }
+
+  /**
+   * The levers the plan walked here to pull (`RouteStep.pull`), ahead of the
+   * first step home — the far end of a detour `WorldGraph.leverErrand`
+   * planned, where `fetchLever` is the same errand found on the wire.
+   *
+   * In the `movement` band, ahead of the step, as `pull` sends a lever at
+   * the door: the arbiter keeps a band in order. The door is **not** marked
+   * as fetched: a pull that did not open it leaves `fetchLever` its one try
+   * when the door refuses, which is what a walk without a planned pull had.
+   */
+  private pullPlanned(step: RouteStep): void {
+    const pull = step.pull;
+    if (pull === undefined || this.pulledFor === step) return;
+    this.pulledFor = step;
+    for (const phrase of pull.say) {
+      this.queue.enqueue({
+        command: phrase,
+        priority: 'movement',
+        reason: t('automation.walk.reasonLever', { stepName: pull.opensName, phrase })
+      });
+    }
   }
 
   /** Queues each lever in the room the character is standing in. */
@@ -4687,6 +4717,7 @@ export class Walker {
        * door still needs and which only a fresh send asks for; before the
        * sneak, which the retry asks again for itself.
        */
+      this.pullPlanned(step);
       if (this.openShutWayFirst(step, now)) return;
       /*
        * And a hidden exit whose action has not yet opened it — see
