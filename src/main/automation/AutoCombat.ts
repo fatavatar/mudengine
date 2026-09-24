@@ -79,7 +79,7 @@ import {
   type CharacterState,
   type RoomOccupant
 } from '../../shared/character';
-import { ATTACK_COMMANDS, commandOf, REREAD_ROOM } from '../../shared/commands';
+import { ATTACK_COMMANDS, commandOf, REREAD_ROOM, ROOM_READ_KEY } from '../../shared/commands';
 import {
   DEFAULT_CONFIG,
   DEFAULT_MOB_PRIORITY,
@@ -2803,20 +2803,25 @@ export class AutoCombat {
   private refresh(): void {
     const every = this.config.refreshRounds;
     if (every <= 0 || this.rounds < every) return;
-    const asked = this.queue.enqueue({
+    this.queue.enqueue({
       command: REREAD_ROOM,
       priority: 'probe',
-      coalesceKey: 'combat-refresh',
+      // Shared with every other plain re-read: one queued is enough (`ROOM_READ_KEY`).
+      coalesceKey: ROOM_READ_KEY,
       // A read that arrives after the fight is a read of a room nothing is
       // deciding anything about.
       expiresAt: Date.now() + tuning().combat.roundMs * 20,
+      /*
+       * Only a read that went out spends the count — this one, or one the
+       * session asked for that this folded into. Refused or still queued, the
+       * next round asks again, which is what *rounds between looks* means
+       * when one of them never went out.
+       */
+      onSent: () => {
+        this.rounds = 0;
+      },
       reason: t('automation.combat.reasonRefresh')
     });
-    // Only a look the arbiter agreed to carry spends the count. Refused — the
-    // stat screen has the keyboard, the player is mid-line — the next round
-    // asks again, which is what *rounds between looks* means when one of them
-    // never went out.
-    if (asked) this.rounds = 0;
   }
 
   /**

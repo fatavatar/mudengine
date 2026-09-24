@@ -17,6 +17,7 @@ import {
 } from '../../../shared/character';
 import { classifyOccupant, type AlignmentCost, type MobDisposition } from '../../../shared/mobs';
 import type { Block } from '../../../shared/blocks';
+import { REREAD_ROOM, ROOM_READ_KEY } from '../../../shared/commands';
 import type { ItemEntity, MobEntity } from '../../../shared/entities';
 import { GUARDED_BY_ABILITY } from '../../../shared/guards';
 import { WEAPON_HAND } from '../../../shared/items';
@@ -1306,6 +1307,40 @@ describe('what to swing with', () => {
     // A bare Enter, not `l`: the same block, without telling everybody in the
     // room that this character is looking around. See `REREAD_ROOM`.
     expect(sent).toEqual(['', '']);
+  });
+
+  /*
+   * One room read, whoever asks (`ROOM_READ_KEY`): a refresh due while the
+   * session's own read is queued folds into it, and that read going out
+   * spends the refresh's count (2026-09-24).
+   */
+  it('folds its refresh into a room read already queued, and counts that read', () => {
+    const auto = make(combat({ engage: 'none', refreshRounds: 2 }));
+    // The session's read, held back a second as its own `notBefore` holds it.
+    queue.enqueue({
+      command: REREAD_ROOM,
+      priority: 'probe',
+      coalesceKey: ROOM_READ_KEY,
+      notBefore: Date.now() + 1_000
+    });
+    auto.onCharacter(
+      state({
+        room,
+        inCombat: true,
+        combat: { ...EMPTY_CHARACTER.combat, engaged: true, target: 'giant rat' }
+      })
+    );
+    for (let round = 0; round < 2; round += 1) {
+      auto.onBlock(block('mob-hits'));
+      vi.advanceTimersByTime(200);
+    }
+    vi.advanceTimersByTime(1_000);
+    expect(sent.filter((command) => command === '')).toHaveLength(1);
+    // Counted from that read: one more round is not due a second.
+    auto.onBlock(block('mob-hits'));
+    vi.advanceTimersByTime(200);
+    drain();
+    expect(sent.filter((command) => command === '')).toHaveLength(1);
   });
 
   /*

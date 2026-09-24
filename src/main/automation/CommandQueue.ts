@@ -358,6 +358,17 @@ export class CommandQueue {
           if (intent.expiresAt === undefined) delete existing.expiresAt;
           else existing.expiresAt = Math.max(existing.expiresAt, intent.expiresAt);
         }
+        /*
+         * And every asker hears it go. One request is one command, but two
+         * modules may be waiting on it — a room read the session holds a
+         * walk for, folded into the one auto-combat asked for a round ago —
+         * and a memory counted in `onSent` is only true if `onSent` runs.
+         */
+        const also = intent.onSent;
+        if (also !== undefined) {
+          const first = existing.onSent;
+          existing.onSent = first === undefined ? also : () => (first(), also());
+        }
         return false;
       }
     }
