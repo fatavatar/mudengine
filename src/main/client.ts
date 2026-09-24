@@ -22,8 +22,13 @@ import { InternalStore } from './config/InternalStore';
 import { setTuning, tuning } from './app/tuning';
 import { ProfileStore, type ProfileSnapshot } from './config/ProfileStore';
 import { ServerStore } from './config/ServerStore';
-import { RealmMessageStore } from './config/RealmMessageStore';
-import { RealmMonsterStore } from './config/RealmMonsterStore';
+import {
+  MESSAGE_TABLE,
+  MONSTER_TABLE,
+  RealmTableStore,
+  type RealmTable,
+  type TableKind
+} from './config/RealmTableStore';
 import { LoopStore } from './config/LoopStore';
 import { SettingsEditor, type SettingsEditorOptions } from './config/SettingsEditor';
 import { LoopCatalogue } from './config/LoopCatalogue';
@@ -36,7 +41,7 @@ import { WorldMemory } from './world/WorldMemory';
 import { FindBook } from './world/FindBook';
 import { WorldBook } from './world/WorldBook';
 import { SplitMemory } from './world/SplitMemory';
-import type { RealmMemory } from './session/SessionManager';
+import { NO_REALM_TABLES, type RealmMemory, type RealmTables } from './session/SessionManager';
 import { RealmLore, realmKey } from './world/RealmLore';
 import { PlayerBook, realmAddress } from './world/PlayerBook';
 import { cureGates, spellServes, spellTargeting } from '../shared/spellcraft';
@@ -110,17 +115,15 @@ import { isRemoteName, REMOTE_NAMES, type RemoteGrant, type RemoteName } from '.
 import type { Profile } from '../shared/profiles';
 import {
   asMessageTriggers,
-  EMPTY_MESSAGE_TABLE,
   parseMegaMudMessages,
   type MessageImport,
-  type MessageTrigger
+  type MessageTable
 } from '../shared/messageTriggers';
 import {
   asMonsterRules,
-  EMPTY_MONSTER_TABLE,
   saysAnything,
   type MonsterImport,
-  type MonsterRule
+  type MonsterTable
 } from '../shared/monsterRules';
 import type { SessionSummary } from '../shared/ipc';
 import { EMPTY_CHARACTER } from '../shared/character';
@@ -218,10 +221,9 @@ let profiles: ProfileStore | null = null;
 let servers: ServerStore | null = null;
 /** The loops on disk, at all three scopes. See `LoopStore`. */
 let loops: LoopStore | null = null;
-/** Each realm's message table: `servers/<id>/messages.yaml`. See `RealmMessageStore`. */
-let realmMessages: RealmMessageStore | null = null;
-/** Each realm's monster table: `servers/<id>/monsters.yaml`. See `RealmMonsterStore`. */
-let realmMonsters: RealmMonsterStore | null = null;
+/** Each realm's imported tables: `servers/<id>/messages.yaml` and `monsters.yaml`. See `RealmTableStore`. */
+let realmMessages: RealmTableStore<MessageTable> | null = null;
+let realmMonsters: RealmTableStore<MonsterTable> | null = null;
 /**
  * Every realm the client has been asked for.
  *
@@ -1196,8 +1198,11 @@ function createServers(): ServerStore {
   return store;
 }
 
-function createRealmMessages(): RealmMessageStore {
-  const store = new RealmMessageStore(home, (message) => announce('messages', message));
+function createRealmTable<T extends RealmTable>(
+  kind: TableKind<T>,
+  channel: 'messages' | 'monsters'
+): RealmTableStore<T> {
+  const store = new RealmTableStore(home, kind, (message) => announce(channel, message));
   // A table imported, edited on the settings page or by hand reaches the
   // characters already playing that realm, the way a changed option does.
   store.on('change', () => host?.reconfigure());
@@ -1206,35 +1211,41 @@ function createRealmMessages(): RealmMessageStore {
 }
 
 /**
- * The message table of the realm a character plays.
+ * The imported tables of the realm a character plays.
  *
  * By the character's own realm, named in its file, and never by where the
  * socket happens to point: a realm dialled ad hoc has no directory and so no
- * table, which is the same answer its loops get.
+ * tables, which is the same answer its loops get.
  */
-function messagesFor(id: SessionId): readonly MessageTrigger[] {
+function realmTablesFor(id: SessionId): RealmTables {
   const profile = profileFor(id);
-  if (profile === undefined) return [];
-  const serverId = servers?.idFor(profile.serverName);
-  if (serverId === undefined) return [];
-  return realmMessages?.forServer(serverId).triggers ?? [];
+  const serverId = profile === undefined ? undefined : servers?.idFor(profile.serverName);
+  if (serverId === undefined) return NO_REALM_TABLES;
+  return {
+    messages: realmMessages?.forServer(serverId).triggers ?? [],
+    monsters: realmMonsters?.forServer(serverId).monsters ?? []
+  };
 }
 
-function createRealmMonsters(): RealmMonsterStore {
-  const store = new RealmMonsterStore(home, (message) => announce('monsters', message));
-  // As the message table: a change reaches the characters already playing.
-  store.on('change', () => host?.reconfigure());
-  store.watch();
-  return store;
+/**
+ * A realm's table, addressed by the realm's *name* — what the settings page
+ * holds — and resolved here to its directory, the one place the two are
+ * joined (`ServerStore.idFor`). Null for a realm with no directory.
+ */
+function tableAt<T extends RealmTable>(
+  store: RealmTableStore<T> | null,
+  realm: unknown
+): { store: RealmTableStore<T>; serverId: string } | null {
+  const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
+  return serverId === undefined || store === null ? null : { store, serverId };
 }
 
-/** The monster table of the realm a character plays, by its file's realm, as `messagesFor`. */
-function monstersFor(id: SessionId): readonly MonsterRule[] {
-  const profile = profileFor(id);
-  if (profile === undefined) return [];
-  const serverId = servers?.idFor(profile.serverName);
-  if (serverId === undefined) return [];
-  return realmMonsters?.forServer(serverId).monsters ?? [];
+/** Where an import says it came from: the file picked, or the name MegaMUD gives it. */
+function importedFrom(fileName: unknown, fallback: string): RealmTable['source'] {
+  return {
+    file: typeof fileName === 'string' && fileName.length > 0 ? fileName : fallback,
+    importedAt: new Date().toISOString()
+  };
 }
 
 function createLoops(): LoopStore {
@@ -1361,8 +1372,7 @@ function createHost(): SessionHost {
     // profiles are watched, so a captured snapshot would pin every session to
     // the values it started with.
     configFor,
-    messagesFor,
-    monstersFor,
+    realmTablesFor,
     /*
      * Whether a lost connection is dialled back, per character, read through
      * for the reason `configFor` is: profiles are watched, so switching it off
@@ -2731,22 +2741,16 @@ function registerIpc(): void {
     })
   );
 
-  /*
-   * A realm's message table. Addressed by the realm's *name*, which is what
-   * the settings page holds, and resolved here to its directory — the one
-   * place the two are joined (`ServerStore.idFor`).
-   */
+  /* A realm's message table, by the realm's name (`tableAt`). */
   handle(Invoke.loadMessages, (_caller, realm: unknown) => {
-    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-    if (serverId === undefined || realmMessages === null) return EMPTY_MESSAGE_TABLE;
-    return realmMessages.forServer(serverId);
+    const at = tableAt(realmMessages, realm);
+    return at === null ? MESSAGE_TABLE.empty : at.store.forServer(at.serverId);
   });
 
   handle(Invoke.importMessages, (_caller, realm: unknown, fileName: unknown, text: unknown) => {
-    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-    if (serverId === undefined || realmMessages === null) {
+    const at = tableAt(realmMessages, realm);
+    if (at === null)
       return { ok: false, error: t('app.servers.noSuchServer') } satisfies MessageImport;
-    }
     if (typeof text !== 'string') {
       return { ok: false, error: t('app.messages.unreadable') } satisfies MessageImport;
     }
@@ -2759,11 +2763,8 @@ function registerIpc(): void {
     if (read.triggers.length === 0) {
       return { ok: false, error: t('app.messages.nothingRead') } satisfies MessageImport;
     }
-    const result = realmMessages.write(serverId, {
-      source: {
-        file: typeof fileName === 'string' && fileName.length > 0 ? fileName : 'Messages.md',
-        importedAt: new Date().toISOString()
-      },
+    const result = at.store.write(at.serverId, {
+      source: importedFrom(fileName, 'Messages.md'),
       triggers: read.triggers
     });
     if (!result.ok) return { ok: false, error: result.error } satisfies MessageImport;
@@ -2776,44 +2777,36 @@ function registerIpc(): void {
   });
 
   handle(Invoke.saveMessages, (_caller, realm: unknown, triggers: unknown) => {
-    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-    if (serverId === undefined || realmMessages === null) return t('app.servers.noSuchServer');
+    const at = tableAt(realmMessages, realm);
+    if (at === null) return t('app.servers.noSuchServer');
     // Parsed, not trusted: the rows crossed the wire like any other payload.
-    const rows = asMessageTriggers(triggers);
-    const result = realmMessages.write(serverId, {
-      source: realmMessages.forServer(serverId).source,
-      triggers: rows
+    const result = at.store.write(at.serverId, {
+      source: at.store.forServer(at.serverId).source,
+      triggers: asMessageTriggers(triggers)
     });
     return result.ok ? null : result.error;
   });
 
   /*
-   * A realm's monster table, addressed by the realm's name as the message
-   * table is. The window decodes `Monsters.md` and hands over rows, which are
-   * parsed here like any other payload.
+   * A realm's monster table, the same way. The window decodes `Monsters.md`
+   * and hands over rows, which are parsed here like any other payload.
    */
   handle(Invoke.loadMonsters, (_caller, realm: unknown) => {
-    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-    if (serverId === undefined || realmMonsters === null) return EMPTY_MONSTER_TABLE;
-    return realmMonsters.forServer(serverId);
+    const at = tableAt(realmMonsters, realm);
+    return at === null ? MONSTER_TABLE.empty : at.store.forServer(at.serverId);
   });
 
   handle(Invoke.importMonsters, (_caller, realm: unknown, fileName: unknown, rows: unknown) => {
-    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-    if (serverId === undefined || realmMonsters === null) {
+    const at = tableAt(realmMonsters, realm);
+    if (at === null)
       return { ok: false, error: t('app.servers.noSuchServer') } satisfies MonsterImport;
-    }
     const monsters = asMonsterRules(rows).filter(saysAnything);
-    // Refused rather than written, for `importMessages`' reason: an empty
-    // table replacing a realm's is the one outcome nobody wants.
+    // Refused rather than written, for `importMessages`' reason.
     if (monsters.length === 0) {
       return { ok: false, error: t('app.monsters.noRows') } satisfies MonsterImport;
     }
-    const result = realmMonsters.write(serverId, {
-      source: {
-        file: typeof fileName === 'string' && fileName.length > 0 ? fileName : 'Monsters.md',
-        importedAt: new Date().toISOString()
-      },
+    const result = at.store.write(at.serverId, {
+      source: importedFrom(fileName, 'Monsters.md'),
       monsters
     });
     if (!result.ok) return { ok: false, error: result.error } satisfies MonsterImport;
@@ -2821,10 +2814,10 @@ function registerIpc(): void {
   });
 
   handle(Invoke.saveMonsters, (_caller, realm: unknown, rows: unknown) => {
-    const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-    if (serverId === undefined || realmMonsters === null) return t('app.servers.noSuchServer');
-    const result = realmMonsters.write(serverId, {
-      source: realmMonsters.forServer(serverId).source,
+    const at = tableAt(realmMonsters, realm);
+    if (at === null) return t('app.servers.noSuchServer');
+    const result = at.store.write(at.serverId, {
+      source: at.store.forServer(at.serverId).source,
       monsters: asMonsterRules(rows)
     });
     return result.ok ? null : result.error;
@@ -3181,8 +3174,8 @@ function build(): void {
   seedServers();
   servers = createServers();
   loops = createLoops();
-  realmMessages = createRealmMessages();
-  realmMonsters = createRealmMonsters();
+  realmMessages = createRealmTable(MESSAGE_TABLE, 'messages');
+  realmMonsters = createRealmTable(MONSTER_TABLE, 'monsters');
   publishTree();
   internal = createInternal();
   lore = createLore();

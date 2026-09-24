@@ -3,7 +3,7 @@
  * `Messages.md`, then read, switch off, edit and add rows.
  *
  * **Its own save, not the realm form's.** The form saves `server.yaml` as
- * somebody types; this table is its own file (`RealmMessageStore`), six
+ * somebody types; this table is its own file (`RealmTableStore`), six
  * hundred rows long, and a row is saved when its editor says so. Folding it
  * into the form's draft would make every keystroke in a login menu rewrite
  * the whole table.
@@ -14,10 +14,11 @@
  * browser tab the player picks the file on the computer in front of them —
  * which is where their MegaMUD is.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { CheckField, SelectField, TextField } from './FormField';
 import Icon from './Icon';
+import RealmTableBar, { importedOn, type TableStatus } from './RealmTableBar';
 import { t } from '../lib/i18n';
 import {
   blankTrigger,
@@ -47,8 +48,6 @@ interface Editing {
   draft: MessageTrigger;
 }
 
-type Status = { tone: 'ok' | 'bad'; text: string } | null;
-
 export default function RealmMessages({
   realm,
   load,
@@ -58,10 +57,9 @@ export default function RealmMessages({
   const [table, setTable] = useState<MessageTable | null>(null);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [status, setStatus] = useState<Status>(null);
+  const [status, setStatus] = useState<TableStatus>(null);
   /** A picked file waiting on *replace the table this realm has?* */
   const [pending, setPending] = useState<{ name: string; text: string } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async (): Promise<void> => {
     if (realm === null) return;
@@ -126,10 +124,7 @@ export default function RealmMessages({
     setStatus({ tone: 'ok', text: parts.join(' ') });
   };
 
-  const picked = async (list: FileList | null): Promise<void> => {
-    const file = list?.[0];
-    if (fileRef.current) fileRef.current.value = '';
-    if (!file) return;
+  const picked = async (file: File): Promise<void> => {
     let text: string;
     try {
       // MegaMUD is a Windows program and wrote the file in the Windows code
@@ -315,13 +310,32 @@ export default function RealmMessages({
 
   const chase = triggers.filter((trigger) => trigger.chase).length;
   const off = triggers.filter((trigger) => !trigger.enabled).length;
-  const importedOn = table?.source ? new Date(table.source.importedAt) : null;
+  const imported = importedOn(table?.source);
 
   return (
     <div className="realm-messages">
-      <div className="messages-bar">
-        <span className="messages-summary">
-          {table === null
+      <RealmTableBar
+        accept=".md,.txt,text/plain"
+        confirm={
+          pending === null
+            ? null
+            : {
+                text: t('settings.messages.confirmReplace', {
+                  count: triggers.length,
+                  file: pending.name
+                }),
+                replaceLabel: t('settings.messages.replace'),
+                cancelLabel: t('settings.messages.cancel'),
+                onReplace: () => void runImport(pending),
+                onCancel: () => setPending(null)
+              }
+        }
+        importLabel={t('settings.messages.import')}
+        inputId="realm-messages-file"
+        onFile={(file) => void picked(file)}
+        status={status}
+        summary={
+          table === null
             ? t('settings.messages.loading')
             : triggers.length === 0
               ? t('settings.messages.none')
@@ -331,29 +345,17 @@ export default function RealmMessages({
                     : t('settings.messages.count.many', { count: triggers.length }),
                   off > 0 ? t('settings.messages.countOff', { count: off }) : null,
                   chase > 0 ? t('settings.messages.countChase', { count: chase }) : null,
-                  table.source && importedOn && !Number.isNaN(importedOn.getTime())
+                  table.source && imported
                     ? t('settings.messages.source', {
                         file: table.source.file,
-                        date: importedOn.toLocaleDateString()
+                        date: imported.toLocaleDateString()
                       })
                     : null
                 ]
                   .filter((part): part is string => part !== null)
-                  .join(' · ')}
-        </span>
-        <input
-          accept=".md,.txt,text/plain"
-          hidden
-          id="realm-messages-file"
-          onChange={(event) => void picked(event.target.files)}
-          ref={fileRef}
-          tabIndex={-1}
-          type="file"
-        />
-        <button className="quiet" onClick={() => fileRef.current?.click()} type="button">
-          <Icon name="plus" />
-          <span>{t('settings.messages.import')}</span>
-        </button>
+                  .join(' · ')
+        }
+      >
         <button
           className="quiet"
           onClick={() => setEditing({ index: null, draft: blankTrigger() })}
@@ -362,27 +364,7 @@ export default function RealmMessages({
           <Icon name="plus" />
           <span>{t('settings.messages.add')}</span>
         </button>
-      </div>
-
-      {pending !== null && (
-        <div className="messages-confirm">
-          <span className="hint">
-            {t('settings.messages.confirmReplace', { count: triggers.length, file: pending.name })}
-          </span>
-          <button className="danger" onClick={() => void runImport(pending)} type="button">
-            {t('settings.messages.replace')}
-          </button>
-          <button className="quiet" onClick={() => setPending(null)} type="button">
-            {t('settings.messages.cancel')}
-          </button>
-        </div>
-      )}
-
-      {status !== null && (
-        <p className={`messages-status ${status.tone}`} role="status">
-          {status.text}
-        </p>
-      )}
+      </RealmTableBar>
 
       {editing !== null && editing.index === null && editor}
 

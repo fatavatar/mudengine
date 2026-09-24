@@ -61,7 +61,7 @@ import { DEFAULT_INTERNAL } from '../../shared/internal';
 import { DENOMINATIONS } from '../../shared/character';
 import { SERVER_FILE, type Home } from '../app/home';
 import { directoryNames } from './dirs';
-import { MONSTERS_FILE, MONSTERS_HEADER } from './RealmMonsterStore';
+import { MONSTER_TABLE } from './RealmTableStore';
 import { discoveryKey, type Discovery } from '../../shared/memory';
 import { realmKey } from '../world/RealmLore';
 import type { ShippedWorld } from '../../shared/worlds';
@@ -6241,7 +6241,7 @@ function theMobRulesBecameMonsterRows(home: Home, note: (message: string) => voi
       return true;
     });
     if (rules.length === 0) continue;
-    const table = path.join(home.server(id).dir, MONSTERS_FILE);
+    const table = path.join(home.server(id).dir, MONSTER_TABLE.file);
     if (fs.existsSync(table)) {
       edit(table, (document) => {
         const current = document.get('monsters', true);
@@ -6251,7 +6251,7 @@ function theMobRulesBecameMonsterRows(home: Home, note: (message: string) => voi
       });
     } else {
       const document = new Document({ source: null, monsters: fold([], rules) });
-      document.commentBefore = MONSTERS_HEADER;
+      document.commentBefore = MONSTER_TABLE.header;
       try {
         fs.writeFileSync(table, String(document), 'utf8');
       } catch {

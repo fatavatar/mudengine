@@ -11,10 +11,10 @@
  *
  * Its own save, not the realm form's, for `RealmMessages`' reason.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-import Icon from './Icon';
 import { MonsterRuleList } from './MonsterRules';
+import RealmTableBar, { importedOn, type TableStatus } from './RealmTableBar';
 import { t } from '../lib/i18n';
 import { readMegaMudMonsters } from '@shared/megamudDb';
 import {
@@ -32,8 +32,6 @@ export interface RealmMonstersProps {
   save(realm: string, monsters: MonsterRule[]): Promise<string | null>;
 }
 
-type Status = { tone: 'ok' | 'bad'; text: string } | null;
-
 export default function RealmMonsters({
   realm,
   load,
@@ -41,14 +39,13 @@ export default function RealmMonsters({
   save
 }: RealmMonstersProps): React.JSX.Element {
   const [table, setTable] = useState<MonsterTable | null>(null);
-  const [status, setStatus] = useState<Status>(null);
+  const [status, setStatus] = useState<TableStatus>(null);
   /** A decoded file waiting on *replace the table this realm has?* */
   const [pending, setPending] = useState<{
     name: string;
     rows: MonsterRule[];
     read: number;
   } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async (): Promise<void> => {
     if (realm === null) return;
@@ -82,10 +79,7 @@ export default function RealmMonsters({
     });
   };
 
-  const picked = async (list: FileList | null): Promise<void> => {
-    const file = list?.[0];
-    if (fileRef.current) fileRef.current.value = '';
-    if (!file) return;
+  const picked = async (file: File): Promise<void> => {
     let bytes: Uint8Array;
     try {
       bytes = new Uint8Array(await file.arrayBuffer());
@@ -134,55 +128,41 @@ export default function RealmMonsters({
     return refusal;
   };
 
-  const importedOn = table?.source ? new Date(table.source.importedAt) : null;
+  const imported = importedOn(table?.source);
 
   return (
     <div className="realm-messages">
-      <div className="messages-bar">
-        <span className="messages-summary">
-          {table === null
+      <RealmTableBar
+        accept=".md,.bak"
+        confirm={
+          pending === null
+            ? null
+            : {
+                text: t('settings.monsters.confirmReplace', {
+                  count: rows.length,
+                  file: pending.name
+                }),
+                replaceLabel: t('settings.monsters.replace'),
+                cancelLabel: t('settings.monsters.cancel'),
+                onReplace: () => void runImport(pending),
+                onCancel: () => setPending(null)
+              }
+        }
+        importLabel={t('settings.monsters.import')}
+        inputId="realm-monsters-file"
+        onFile={(file) => void picked(file)}
+        status={status}
+        summary={
+          table === null
             ? t('settings.monsters.loading')
-            : table.source && importedOn && !Number.isNaN(importedOn.getTime())
+            : table.source && imported
               ? t('settings.monsters.source', {
                   file: table.source.file,
-                  date: importedOn.toLocaleDateString()
+                  date: imported.toLocaleDateString()
                 })
-              : null}
-        </span>
-        <input
-          accept=".md,.bak"
-          hidden
-          id="realm-monsters-file"
-          onChange={(event) => void picked(event.target.files)}
-          ref={fileRef}
-          tabIndex={-1}
-          type="file"
-        />
-        <button className="quiet" onClick={() => fileRef.current?.click()} type="button">
-          <Icon name="plus" />
-          <span>{t('settings.monsters.import')}</span>
-        </button>
-      </div>
-
-      {pending !== null && (
-        <div className="messages-confirm">
-          <span className="hint">
-            {t('settings.monsters.confirmReplace', { count: rows.length, file: pending.name })}
-          </span>
-          <button className="danger" onClick={() => void runImport(pending)} type="button">
-            {t('settings.monsters.replace')}
-          </button>
-          <button className="quiet" onClick={() => setPending(null)} type="button">
-            {t('settings.monsters.cancel')}
-          </button>
-        </div>
-      )}
-
-      {status !== null && (
-        <p className={`messages-status ${status.tone}`} role="status">
-          {status.text}
-        </p>
-      )}
+              : null
+        }
+      />
 
       {table !== null && (
         <MonsterRuleList

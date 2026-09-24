@@ -4,12 +4,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { homeAt, type Home } from '../../app/home';
-import { RealmMonsterStore } from '../RealmMonsterStore';
-import type { MonsterRule } from '../../../shared/monsterRules';
+import { MONSTER_TABLE, RealmTableStore } from '../RealmTableStore';
+import type { MonsterRule, MonsterTable } from '../../../shared/monsterRules';
 
 let root: string;
 let home: Home;
-let store: RealmMonsterStore;
+let store: RealmTableStore<MonsterTable>;
 let errors: string[];
 
 beforeEach(() => {
@@ -17,7 +17,7 @@ beforeEach(() => {
   home = homeAt(root);
   fs.mkdirSync(home.server('paradigm').dir, { recursive: true });
   errors = [];
-  store = new RealmMonsterStore(home, (message) => errors.push(message));
+  store = new RealmTableStore(home, MONSTER_TABLE, (message) => errors.push(message));
 });
 
 afterEach(() => {
@@ -33,7 +33,7 @@ const lich: MonsterRule = {
   attack: { spell: 'turn', max: 0 }
 };
 
-describe('RealmMonsterStore', () => {
+describe('RealmTableStore, the monster table', () => {
   it('reads a realm with no file as an empty table', () => {
     expect(store.forServer('paradigm')).toEqual({ source: null, monsters: [] });
   });

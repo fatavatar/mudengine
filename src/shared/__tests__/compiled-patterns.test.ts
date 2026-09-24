@@ -34,7 +34,7 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
     because:
       "a realm's name for a coin is its own data (`server.yaml` `coins:`, Krabby Patties for " +
       'the runic coin on Skinny Inc), so each renamed one is compiled once when the realm is ' +
-      'configured (`coinReader`, from `SessionManager.configureCoins`) and held; a realm that ' +
+      'configured (`coinReader`, from `SessionManager.configureRealm`) and held; a realm that ' +
       'renames nothing compiles nothing and the per-line `stock` is a no-op'
   },
   'src/shared/messages.ts': {

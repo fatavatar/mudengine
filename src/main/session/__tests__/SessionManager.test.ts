@@ -10,6 +10,7 @@ import {
   editorInput,
   IDLE_FLUSH_MS,
   SessionManager,
+  type RealmData,
   type RealmFinds,
   type SessionSink
 } from '../SessionManager';
@@ -149,6 +150,9 @@ async function settled(hp: number): Promise<void> {
   await until(() => manager!.character.vitals.hp === hp);
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
+
+/** A realm with nothing imported and no coins renamed, for `configureRealm`. */
+const NO_REALM: RealmData = { messages: [], monsters: [], coins: {} };
 
 describe('the raw byte record', () => {
   /*
@@ -3332,15 +3336,18 @@ describe("answering the realm's messages", () => {
     const { sink } = collect();
     manager = new SessionManager(sink);
     manager.configure(answering, DEFAULT_CONFIG.connection.login);
-    manager.configureMessages([
-      {
-        ...blankTrigger(),
-        name: 'desert damage',
-        match: 'You suffer in the desert heat...',
-        response: 'drink water',
-        action: 'run'
-      }
-    ]);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'desert damage',
+          match: 'You suffer in the desert heat...',
+          response: 'drink water',
+          action: 'run'
+        }
+      ]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     const seen = wire(socket);
@@ -3358,9 +3365,12 @@ describe("answering the realm's messages", () => {
     const { sink } = collect();
     manager = new SessionManager(sink);
     manager.configure(answering, DEFAULT_CONFIG.connection.login);
-    manager.configureMessages([
-      { ...blankTrigger(), match: 'You suffer in the desert heat...', response: 'drink water' }
-    ]);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        { ...blankTrigger(), match: 'You suffer in the desert heat...', response: 'drink water' }
+      ]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     const seen = wire(socket);
@@ -3392,16 +3402,19 @@ describe("acting on the realm's messages", () => {
     const { sink } = collect();
     manager = new SessionManager(sink);
     manager.configure(acting, DEFAULT_CONFIG.connection.login);
-    manager.configureMessages([
-      {
-        ...blankTrigger(),
-        name: 'net',
-        match: 'You are entangled in a net!',
-        endsWith: 'You work yourself free.',
-        effects: ['held'],
-        action: 'wait'
-      }
-    ]);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'net',
+          match: 'You are entangled in a net!',
+          endsWith: 'You work yourself free.',
+          effects: ['held'],
+          action: 'wait'
+        }
+      ]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     socket.write('Health: 100/100 [100%]\r\n');
@@ -3419,14 +3432,17 @@ describe("acting on the realm's messages", () => {
     const { sink } = collect();
     manager = new SessionManager(sink);
     manager.configure(acting, DEFAULT_CONFIG.connection.login);
-    manager.configureMessages([
-      {
-        ...blankTrigger(),
-        name: 'Rakshasha',
-        match: 'The illusion vanishes in a flash!',
-        effects: ['ends-combat']
-      }
-    ]);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'Rakshasha',
+          match: 'The illusion vanishes in a flash!',
+          effects: ['ends-combat']
+        }
+      ]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     socket.write('Health: 100/100 [100%]\r\n');
@@ -3443,14 +3459,17 @@ describe("acting on the realm's messages", () => {
     const { sink } = collect();
     manager = new SessionManager(sink);
     manager.configure(acting, DEFAULT_CONFIG.connection.login);
-    manager.configureMessages([
-      {
-        ...blankTrigger(),
-        name: 'monster entry',
-        match: 'A skeleton arises from its place of rest',
-        action: 'look'
-      }
-    ]);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'monster entry',
+          match: 'A skeleton arises from its place of rest',
+          action: 'look'
+        }
+      ]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     const seen = wire(socket);
@@ -7203,7 +7222,10 @@ describe('monsters the table says to run from or hang up on', () => {
         }
       })
     );
-    manager.configureMonsters([{ mob: 'gigantic black ooze', relationship: 'escape' }]);
+    manager.configureRealm({
+      ...NO_REALM,
+      monsters: [{ mob: 'gigantic black ooze', relationship: 'escape' }]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     const seen = wire(socket);
@@ -7217,7 +7239,10 @@ describe('monsters the table says to run from or hang up on', () => {
   it('does nothing about a monster the table does not name', async () => {
     const { sink, notices } = collect();
     manager = new SessionManager(sink, undefined, automation());
-    manager.configureMonsters([{ mob: 'giant rat', relationship: 'escape' }]);
+    manager.configureRealm({
+      ...NO_REALM,
+      monsters: [{ mob: 'giant rat', relationship: 'escape' }]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     socket.write(OOZE_ROOM);
@@ -7242,7 +7267,10 @@ describe('monsters the table says to run from or hang up on', () => {
         }
       })
     );
-    manager.configureMonsters([{ mob: 'gigantic black ooze', relationship: 'hangup' }]);
+    manager.configureRealm({
+      ...NO_REALM,
+      monsters: [{ mob: 'gigantic black ooze', relationship: 'hangup' }]
+    });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     socket.write(OOZE_ROOM);
@@ -7358,7 +7386,7 @@ describe('a realm that renames a coin', () => {
       rules: [],
       loot: { ...DEFAULT_CONFIG.automation.loot, coins: true }
     });
-    manager.configureCoins({ runic: 'Krabby Patties' });
+    manager.configureRealm({ ...NO_REALM, coins: { runic: 'Krabby Patties' } });
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     let wire = '';
