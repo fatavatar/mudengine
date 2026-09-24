@@ -103,6 +103,8 @@ export class WebSocketConnection {
   /** A message being reassembled from fragments, or null between messages. */
   private fragments: Buffer[] | null = null;
   private fragmentBytes = 0;
+  /** Answers still queued, which the cap does not count. See `send`. */
+  private requestedBytes = 0;
   private closeSent = false;
   private closed = false;
   /** What this side said on the way out, so the end is reported as it was meant. */
@@ -124,10 +126,26 @@ export class WebSocketConnection {
     return !this.closed && !this.closeSent;
   }
 
-  send(text: string): void {
+  /**
+   * One text message. `requested` is a message the peer asked for — an
+   * answer — and is queued outside the cap: an attach snapshot carries the
+   * whole backscroll, 100,000 lines of it by default and over 11 MB, and
+   * counted against the cap it closed every tab on a link slower than
+   * loopback with the next push behind it. The cap is for the stream a peer
+   * did not ask for, and a stalled peer still reaches it behind the answer.
+   */
+  send(text: string, requested = false): void {
     if (!this.open) return;
     if (!this.roomToWrite()) return;
-    this.socket.write(frame(OPCODE.text, Buffer.from(text, 'utf8')));
+    const bytes = frame(OPCODE.text, Buffer.from(text, 'utf8'));
+    if (!requested) {
+      this.socket.write(bytes);
+      return;
+    }
+    this.requestedBytes += bytes.length;
+    this.socket.write(bytes, () => {
+      this.requestedBytes -= bytes.length;
+    });
   }
 
   /**
@@ -136,7 +154,8 @@ export class WebSocketConnection {
    * wrong, the tab simply stopped taking them.
    */
   private roomToWrite(): boolean {
-    if (this.socket.writableLength <= this.options.maxBufferedBytes) return true;
+    const unasked = this.socket.writableLength - this.requestedBytes;
+    if (unasked <= this.options.maxBufferedBytes) return true;
     this.close(1008, 'not reading');
     return false;
   }

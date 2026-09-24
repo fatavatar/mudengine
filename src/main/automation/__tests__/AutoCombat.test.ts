@@ -3337,6 +3337,87 @@ describe('the monster table, fighting', () => {
     });
 
     /*
+     * skinny, 2026-09-24: `aund` stopped the room spell on entering the
+     * realm, its `*Combat Off*` came back with no echo to pin it on, and the
+     * dogs biting every round were read as the spell still going — he stood
+     * there healing and never cast again.
+     */
+    it('does not take the monsters’ blows for the room spell still going', () => {
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 1 })
+      );
+      auto.onCharacter(state({ room: rat }));
+      drain();
+      auto.onCharacter(state({ room: rat, inCombat: true }));
+      auto.onBlock(block('combat-status', { status: 'Off' }), null);
+      auto.onCharacter(state({ room: rat, inCombat: false }));
+      for (let second = 0; second < 15; second += 1) {
+        auto.onBlock(block('mob-hits', { line: 'giant rat bites you', damage: '5' }));
+        auto.onBlock(block('mob-misses', { line: 'giant rat snaps at you' }));
+        auto.onCharacter(state({ room: rat, inCombat: false }));
+        vi.advanceTimersByTime(1_000);
+      }
+      expect(sent).toEqual(['pcloud', 'pcloud']);
+    });
+
+    /*
+     * The player, 2026-09-24: a heal or a blessing ends the fight it is cast
+     * into, so the fight is let go when it is sent — and the `*Combat Off*`
+     * that answers it later is not about the fight opened since.
+     */
+    it('lets the room spell go when a heal is sent, and opens again once', () => {
+      const auto = make(
+        combat({ refreshRounds: 0 }),
+        true,
+        spells({ areaAttack: 'pcloud', areaMinMobs: 1 })
+      );
+      auto.onCharacter(state({ room: rat }));
+      drain();
+      auto.onCharacter(state({ room: rat, inCombat: true }));
+      auto.noteSent('c mahe');
+      auto.onCharacter(state({ room: rat, inCombat: true }));
+      drain();
+      expect(sent).toEqual(['pcloud', 'pcloud']);
+      auto.onBlock(block('combat-status', { status: 'Off' }), 'c mahe');
+      auto.onCharacter(state({ room: rat, inCombat: false }));
+      drain();
+      expect(sent).toEqual(['pcloud', 'pcloud']);
+    });
+
+    /*
+     * The player, 2026-09-24: aimed at a monster is not an attack — a
+     * blinding is cast at one. The realm says which spells do damage.
+     */
+    it('keeps the fight for a damage spell, and lets it go for a blinding', () => {
+      const realm: Record<string, WorldSpell> = {
+        harm: { id: 1, name: 'harm', short: 'harm', abilities: [[1, 10]] },
+        blnd: { id: 2, name: 'blindness', short: 'blnd', abilities: [[107, 1]] }
+      };
+      const cast = (command: string): string[] => {
+        sent = [];
+        const auto = new AutoCombat(
+          combat({ refreshRounds: 0 }),
+          true,
+          queue,
+          {},
+          spells({ areaAttack: 'pcloud', areaMinMobs: 1 }),
+          (name) => realm[name] ?? null
+        );
+        auto.onCharacter(state({ room: rat }));
+        drain();
+        auto.onCharacter(state({ room: rat, inCombat: true }));
+        auto.noteSent(command);
+        auto.onCharacter(state({ room: rat, inCombat: true }));
+        drain();
+        return sent;
+      };
+      expect(cast('c harm giant rat')).toEqual(['pcloud']);
+      expect(cast('c blnd giant rat')).toEqual(['pcloud', 'pcloud']);
+    });
+
+    /*
      * `in this room` is the room spell with nothing to hit, not the spell
      * failing: read as a failure, the next room of fifteen dogs was fought
      * with the single-target spell (2026-09-23).

@@ -248,6 +248,30 @@ describe('a peer that stops reading', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(ended).toEqual({ code: 1008, reason: 'not reading' });
   });
+
+  it('does not count an answer the peer asked for against the cap', async () => {
+    // An attach snapshot is the whole backscroll: bigger than the cap on its
+    // own, and a push behind it is no sign the tab has stopped reading.
+    const { Duplex } = await import('node:stream');
+    const stalled = new Duplex({
+      read() {},
+      write(_chunk, _encoding, _callback) {
+        // Never called back: the answer is still on its way.
+      }
+    });
+    const connection = new WebSocketConnection(stalled, {
+      maxMessageBytes: 1024,
+      maxBufferedBytes: 2048
+    });
+    connection.send('x'.repeat(5000), true);
+    connection.send('x'.repeat(1500));
+    connection.send('one more');
+    expect(connection.open).toBe(true);
+    connection.send('x'.repeat(1500));
+    connection.send('one more');
+    expect(connection.open).toBe(false);
+    stalled.destroy();
+  });
 });
 
 describe('a peer that is not a browser', () => {
