@@ -243,3 +243,22 @@ describe('teardown', () => {
     expect(true).toBe(true);
   });
 });
+
+/*
+ * 2026-09-24: the BBS decides from the answer to `ESC[6n` whether to send
+ * colour. Asked with no page open, nothing answered and the realm sent plain
+ * text; the session answers it now, once.
+ */
+describe("the login's cursor question", () => {
+  it('is answered by the session, with the column the cursor stands at', async () => {
+    const server = await startServer((socket) => {
+      socket.write('Auto-sensing...\r\n    \x1b[6n\b\b\b\b\r    ');
+    });
+    const client = new TelnetClient();
+    client.resize({ cols: 80, rows: 30 });
+    await client.connect({ host: '127.0.0.1', port: server.port, encoding: 'cp437' });
+    await until(() => Buffer.concat(server.received).includes('R'));
+    expect(Buffer.concat(server.received).toString('latin1')).toContain('\x1b[30;5R');
+    client.disconnect();
+  });
+});

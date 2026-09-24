@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { consoleWriter, noticeSequence, type ConsoleTarget } from '../console';
+import { Terminal } from '@xterm/xterm';
+
+import { consoleWriter, declineQueries, noticeSequence, type ConsoleTarget } from '../console';
 
 /*
  * A notice used to open with an unconditional `\r\n`. That is right after a
@@ -178,5 +180,40 @@ describe('the one queue everything on the console goes through', () => {
 
     expect(term.written).toHaveLength(50_000);
     expect(term.written[49_999]).toBe('chunk 49999');
+  });
+});
+
+/*
+ * 2026-09-24: the BBS asks `ESC[6n` at login, the backscroll kept it, and each
+ * page opened replayed it and typed `[72;5R` into the game. Run against a real
+ * xterm, which answers without a screen.
+ */
+describe("the server's questions", () => {
+  const answers = async (bytes: string, decline: boolean): Promise<string[]> => {
+    const term = new Terminal({ allowProposedApi: true });
+    if (decline) declineQueries(term);
+    const said: string[] = [];
+    term.onData((data) => said.push(data));
+    await new Promise<void>((resolve) => term.write(bytes, resolve));
+    term.dispose();
+    return said;
+  };
+  const QUESTIONS =
+    '    \x1b[6n\b\b\b\b\r\x1b[c\x1b[>c\x1b[5n\x1b[?6n\x1b[4$p\x1bP$qm\x1b\\\x1b]11;?\x07';
+
+  it('are answered by a terminal left to itself', async () => {
+    expect(await answers(QUESTIONS, false)).toContain('\x1b[1;5R');
+  });
+
+  it('go unanswered by a console', async () => {
+    expect(await answers(QUESTIONS, true)).toEqual([]);
+  });
+
+  it('leave the screen as it was', async () => {
+    const term = new Terminal({ allowProposedApi: true, cols: 20, rows: 2 });
+    declineQueries(term);
+    await new Promise<void>((resolve) => term.write('ab\x1b[6ncd\x1b[1;31me', resolve));
+    expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('abcde');
+    term.dispose();
   });
 });

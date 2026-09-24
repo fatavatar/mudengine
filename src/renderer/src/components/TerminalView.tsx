@@ -22,7 +22,7 @@ import type {
   TerminalSize,
   InlineGlyph
 } from '@shared/types';
-import { consoleWriter, noticeSequence, type ConsoleWriter } from '../lib/console';
+import { consoleWriter, declineQueries, noticeSequence, type ConsoleWriter } from '../lib/console';
 import type { NameIndex, SpanHit } from '../lib/names';
 import type { Box } from '../lib/menu';
 import { anchorRect, type PopoverAnchor } from '../lib/popover';
@@ -392,6 +392,8 @@ export default function TerminalView({
      */
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
     term.unicode.activeVersion = '11';
+    // The server's questions are not the player's to answer; see `declineQueries`.
+    declineQueries(term);
 
     /*
      * A name the realm knows becomes clickable, the same way a web address
