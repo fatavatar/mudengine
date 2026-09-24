@@ -1183,6 +1183,26 @@ export interface Party {
 export const NO_PARTY: Party = { following: null, members: [], engaged: {}, threatened: {} };
 
 /**
+ * The members of the party this character leads whose listed health is under
+ * `below`, lowest first — MegaMUD's *Wait For Party Members*. A real member
+ * (not an invitation, not this character) with a figure the listing stated.
+ * Following, none: the leader decides when the party moves.
+ */
+export function membersBelow(state: CharacterState, below: number): PartyMember[] {
+  if (below <= 0 || state.party.following !== null) return [];
+  const me = state.name?.toLowerCase() ?? null;
+  return state.party.members
+    .filter(
+      (member) =>
+        !member.invited &&
+        member.health !== null &&
+        member.health < below &&
+        member.name.toLowerCase() !== me
+    )
+    .sort((a, b) => (a.health ?? 0) - (b.health ?? 0));
+}
+
+/**
  * A room nobody has read yet.
  *
  * A factory rather than a frozen constant because `Room` holds four arrays and

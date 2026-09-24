@@ -4702,8 +4702,8 @@ const PARTY_LEADING_DEFAULTS: ReadonlyArray<readonly [string, number | boolean]>
   ['parEverySeconds', 0],
   ['parAfterRound', false]
 ];
-const PARTY_LEADING_COMMENT = ` MegaMUD's party pacing. Leading: waitForMembersBelow stands still while a
- member's listed health is under it (0 never), waitNoLongerMinutes gives up
+const PARTY_LEADING_COMMENT = ` MegaMUD's party pacing. Leading: waitForMembersBelow pauses the loop while
+ a member's listed health is under it (0 never), waitNoLongerMinutes gives up
  on a @wait or a hurt member (0 never), ignoreWaitWhenLeading walks on
  through @wait. Following: ignorePartyWhenFollowing refuses @party. Either:
  requestPartyHealth telepaths @health to whoever joins, parEverySeconds asks

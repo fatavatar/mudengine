@@ -2294,15 +2294,14 @@ export interface PartyConfig {
    */
   askForHealBelow: number;
   /**
-   * Leading, stand the walk still while any member's health is under this
-   * share — MegaMUD's *Wait For Party Members*, whether or not they sent
-   * `@wait`. Read off the party listing (`PartyMember.health`), so how fresh
+   * Leading, pause the loop while any member's health is under this share, as
+   * a `@wait` would — MegaMUD's *Wait For Party Members*. Read off the party listing (`PartyMember.health`), so how fresh
    * it is is how often the listing is asked for (`parEverySeconds`). 0 never
    * waits. Ignored while following: the leader decides when the party moves.
    */
   waitForMembersBelow: number;
   /**
-   * Leading, the most minutes to stand still for the party — for a `@wait`
+   * Leading, the most minutes to pause for the party — for a `@wait`
    * whose `@ok` never came, or a member whose health never rose — before
    * walking on regardless: MegaMUD's *If Leading Wait No Longer Than*. 0 waits
    * as long as it takes.
@@ -2310,7 +2309,7 @@ export interface PartyConfig {
   waitNoLongerMinutes: number;
   /**
    * Leading, walk on through a follower's `@wait` — MegaMUD's *Ignore @wait If
-   * Leading*. `waitForMembersBelow` still stops the walk for a member's health.
+   * Leading*. `waitForMembersBelow` still pauses the loop for a member's health.
    */
   ignoreWaitWhenLeading: boolean;
   /**

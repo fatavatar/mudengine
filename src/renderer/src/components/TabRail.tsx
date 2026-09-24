@@ -252,10 +252,6 @@ function attention(
    * whole of a fight whose flag has not arrived yet, since `Walker` also holds
    * on a blow the tracker filed a round before `*Combat Engaged*`.
    */
-  // Leading, standing still for a member's health — `Walker.holdForParty`.
-  if (view.walk.status === 'walking' && view.walk.hold === 'party') {
-    return { level: 'info', label: t('tabs.tab.markWaitingParty') };
-  }
   if (view.walk.status === 'walking' && view.walk.hold === 'fight') {
     // `info`, the same register `inCombat` above wears: a fight is what this
     // character is doing, not a condition somebody has to come and look at.

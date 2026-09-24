@@ -1053,7 +1053,6 @@ tabs:
     markOffline: offline
     markPvp: attacked! (PvP)
     markRecovering: recovering
-    markWaitingParty: waiting for the party
     markSearching: searching
     markBlocked: blocked
     markLighting: lighting
@@ -2087,7 +2086,6 @@ cards:
       statusCondition: waiting it out
       statusOffline: offline
       statusResting: resting
-      statusWaitingParty: waiting for the party
       statusRunning: running
       statusStopped: stopped
       title: Loop
@@ -3951,8 +3949,8 @@ settings:
     restHint: Out of combat only, like every rest. Meditates only for a class with mana.
     restLabel: Rest With Leader
     waitBelowHint:
-      Leading, stand still while any member's health is under this, whether or not they sent
-      @wait. 0 never waits.
+      Leading, pause the loop while any member's health is under this, as a @wait would. 0 never
+      waits.
     waitBelowLabel: Wait For Party Members Below %
     waitMinutesHint:
       Leading, the longest to wait — for a @wait whose @ok never came, or a member whose health
@@ -4394,6 +4392,7 @@ session:
     unknownRoom: I cannot tell which room you are in.
     unknownStopName: The realm data has no room called {name}.
     pausedForRemote: '{who} asked the party to wait'
+    pausedForHurt: '{who} is at {percent}%; the party waits for them'
   # Play and stop. A character is routing, looping or stopped, so there is one
   # of each rather than one per mechanism -- see `src/shared/movement.ts`.
   # The toolbar's back button: one room back the way the character came.
@@ -5297,8 +5296,6 @@ automation:
       realm where that is.'
     manaHolding: Mana is low; meditating here before walking on.
     manaResumed: Mana is back; walking on.
-    partyHolding: '{name} is at {percent}%; waiting here for the party.'
-    partyResumed: The party is fit again; walking on.
     askingWhere: '{roomName} could be one of several rooms; asking the realm where this is.'
     landedElsewhere: '{command} put you in {roomName}, not where the route said; planning again from here.'
     trapHolding:

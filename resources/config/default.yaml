@@ -1828,19 +1828,19 @@ automation:
     # tuning.remotes.healAskAgainMs while still under it. 0 never asks.
     askForHealBelow: 0
 
-    # Leading, stand still while any member's health on the party listing is
-    # under this share -- MegaMUD's Wait For Party Members -- whether or not they
-    # sent @wait. How fresh that figure is depends on parEverySeconds below.
-    # Ignored while following. 0 never waits.
+    # Leading, pause the loop while any member's health on the party listing is
+    # under this share, as a @wait would -- MegaMUD's Wait For Party Members. How
+    # fresh that figure is depends on parEverySeconds below. Ignored while
+    # following. 0 never waits.
     waitForMembersBelow: 0
 
-    # Leading, the most minutes to stand still for the party -- a @wait whose @ok
+    # Leading, the most minutes to pause for the party -- a @wait whose @ok
     # never came, or a member whose health never rose -- before walking on:
     # MegaMUD's If Leading Wait No Longer Than. 0 waits as long as it takes.
     waitNoLongerMinutes: 0
 
     # Leading, walk on through a follower's @wait -- MegaMUD's Ignore @wait If
-    # Leading. waitForMembersBelow still stops the walk for a member's health.
+    # Leading. waitForMembersBelow still pauses the loop for a member's health.
     ignoreWaitWhenLeading: false
 
     # Following, refuse the leader's @party <command> -- MegaMUD's Ignore @party

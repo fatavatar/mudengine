@@ -4283,6 +4283,79 @@ describe('a follower pacing the loop', () => {
     await until(() => manager!.loops.progress.status === 'running');
   });
 
+  /** The party listing, with Soul at the health given. */
+  const listing = (percent: number): string =>
+    [
+      'The following people are in your travel party:',
+      '  Vaelor                        (Mystic)     [M:100%] [H:100%]  - Frontrank',
+      `  Soul Guardian                 (Warrior)             [H:${String(percent).padStart(3)}%]  - Frontrank`,
+      '[HP=100/MA=50]:'
+    ].join('\r\n') + PROMPT_REPAINT;
+
+  /*
+   * MegaMUD's Wait For Party Members (2026-09-24): a member under the line on
+   * the listing pauses the lap as a `@wait` would, and the listing putting
+   * them back over it is their `@ok`.
+   */
+  it('pauses the lap for a member under the line, and walks on when they are over it', async () => {
+    const { sink } = collect();
+    manager = pacedManager(sink, { waitForMembersBelow: 0.5 });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    await looping(socket);
+
+    socket.write(listing(30));
+    await until(() => manager!.loops.progress.status === 'stopped');
+    expect(manager.loops.progress.reason).toMatch(/Soul is at 30%/);
+
+    socket.write(listing(80));
+    await until(() => manager!.loops.progress.status === 'running');
+  });
+
+  /* A `@wait` and a hurt member are two reasons; the lap waits for both. */
+  it('walks on only once the hurt member is up and the follower has said @ok', async () => {
+    const { sink } = collect();
+    manager = pacedManager(sink, { waitForMembersBelow: 0.5 });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    await looping(socket);
+
+    socket.write('Yang telepaths: @wait\r\n');
+    await until(() => manager!.loops.progress.status === 'stopped');
+    socket.write(listing(30));
+    socket.write('Yang telepaths: @ok\r\n');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(manager.loops.progress.status).toBe('stopped');
+
+    socket.write(listing(90));
+    await until(() => manager!.loops.progress.status === 'running');
+  });
+
+  /*
+   * If Leading Wait No Longer Than, for a member who never heals: the lap
+   * walks on, and does not stop for them again until they are over the line.
+   */
+  it('walks on past a member who never heals once the limit is spent', async () => {
+    const { sink, notices } = collect();
+    manager = pacedManager(sink, { waitForMembersBelow: 0.5, waitNoLongerMinutes: 1 });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    await looping(socket);
+
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    socket.write(listing(30));
+    await until(() => manager!.loops.progress.status === 'stopped');
+    const giveUp = timers.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    timers.mockRestore();
+    (giveUp as () => void)();
+    expect(notices.some((notice) => /Waited 1 min for soul/.test(notice))).toBe(true);
+    await until(() => manager!.loops.progress.status === 'running');
+
+    socket.write(listing(25));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(manager.loops.progress.status).toBe('running');
+  });
+
   /*
    * `@ok` may only resume what `@wait` stopped. A stop the player chose from
    * the Navigation card is theirs to end, and a follower's `@ok` walking a
