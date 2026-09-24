@@ -7165,3 +7165,40 @@ describe('a talk-box line of several commands', () => {
     expect(manager!.queue.snapshot.depth).toBe(0);
   });
 });
+
+/*
+ * Skinny Inc prints its runic coin as `Krabby Patties` in the pack, on the
+ * floor and in a drop line (2026-09-24). The realm says so once, in its
+ * `coins:`, and every reader goes on reading the stock coin.
+ */
+describe('a realm that renames a coin', () => {
+  it('counts it in the purse and picks it up by the realm’s word', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      onEnterRealm: [],
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      rules: [],
+      loot: { ...DEFAULT_CONFIG.automation.loot, coins: true }
+    });
+    manager.configureCoins({ runic: 'Krabby Patties' });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    let wire = '';
+    socket.on('data', (chunk) => (wire += chunk.toString('latin1')));
+
+    socket.write(
+      '[HP=100/MA=50]:You are carrying 14 Krabby Patties, 65 platinum pieces, waterskin\r\n' +
+        'Wealth: 14650000 copper farthings\r\n' +
+        'Encumbrance: 1955/4560 - Medium [42%]\r\n[HP=100/MA=50]:'
+    );
+    await until(() => manager!.character.inventory.listedAt !== null);
+    expect(manager.character.inventory.coins.runic).toBe(14);
+    expect(manager.character.inventory.items.map((item) => item.name)).toEqual(['waterskin']);
+
+    socket.write('1 Krabby Patties drop to the ground.\r\n[HP=100/MA=50]:');
+    await until(() => wire.includes('get krabby\r\n'));
+    expect(wire).not.toContain('get runic');
+  });
+});

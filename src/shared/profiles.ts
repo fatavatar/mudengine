@@ -31,6 +31,7 @@ import {
   type LoginStep,
   type Server
 } from './config';
+import { asCoinNames, type CoinNames } from './coins';
 import { asMonsterRules, mergeMonsterRules, type MonsterRule } from './monsterRules';
 import type { ConnectionTarget } from './types';
 import { isRecord, str } from './values';
@@ -153,6 +154,7 @@ function resolveServer(
   locate: LocateMethod;
   database: string;
   hangPenalties: boolean | null;
+  coins: CoinNames;
 } | null {
   if (typeof value === 'string') {
     const found = byName(servers, value);
@@ -163,7 +165,8 @@ function resolveServer(
           login: found.login,
           locate: found.locate,
           database: found.database,
-          hangPenalties: found.hangPenalties
+          hangPenalties: found.hangPenalties,
+          coins: found.coins
         }
       : null;
   }
@@ -194,6 +197,9 @@ function resolveServer(
        */
       database: str(value['database'], ''),
       hangPenalties: null,
+      // What an inline realm calls its coins, which it may state for the
+      // reason it may state its database: there is nowhere else to say it.
+      coins: asCoinNames(value['coins']),
       target: {
         host,
         port,
@@ -380,6 +386,8 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
         // BBS gets the same answer to which locate word works, because it is a
         // fact about the BBS and not about the account.
         locate: server.locate,
+        // And what it calls its coins, for the same reason.
+        coins: server.coins,
         login: {
           enabled: credentials.username.length > 0,
           /*

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  asCoinNames,
   chargedInCopper,
+  coinReader,
   COPPER_PER,
   counterPriceInCopper,
   currencyOfCode,
@@ -88,5 +90,49 @@ describe("a counter's price", () => {
     expect(chargedInCopper(500, 70)).toBe(480);
     expect(chargedInCopper(500, 40)).toBe(510);
     expect(chargedInCopper(500, null)).toBe(550);
+  });
+});
+
+/*
+ * A realm that renames a coin: Skinny Inc's runic coin is a Krabby Patty, in
+ * the pack, on the floor, in a drop line and in a shop price (2026-09-24).
+ */
+describe('a renamed coin', () => {
+  const krabby = coinReader({ runic: 'Krabby Patties' });
+
+  it('is read as the stock coin wherever the realm prints it', () => {
+    expect(krabby.stock('You are carrying 14 Krabby Patties, 65 platinum pieces')).toBe(
+      'You are carrying 14 runic coins, 65 platinum pieces'
+    );
+    expect(krabby.stock('1 Krabby Patties drop to the ground.')).toBe(
+      '1 runic coins drop to the ground.'
+    );
+    expect(krabby.stock('runic key      1        5 Krabby Patties')).toBe(
+      'runic key      1        5 runic coins'
+    );
+  });
+
+  it('takes either number of the name, whichever the setting was written in', () => {
+    const singular = coinReader({ runic: 'Krabby Patty' });
+    expect(singular.stock('14 Krabby Patties')).toBe('14 runic coins');
+    expect(singular.stock('1 krabby patty')).toBe('1 runic coins');
+    expect(coinReader({ gold: 'dime bag' }).stock('3 dime bags')).toBe('3 gold crowns');
+  });
+
+  it('is asked for by the first word of the realm’s name', () => {
+    expect(krabby.word('runic')).toBe('krabby');
+    expect(krabby.word('gold')).toBe('gold');
+  });
+
+  it('leaves a line alone that names no renamed coin', () => {
+    expect(krabby.stock('You notice a krabby shell here.')).toBe('You notice a krabby shell here.');
+    expect(coinReader({}).stock('14 Krabby Patties')).toBe('14 Krabby Patties');
+  });
+
+  it('keeps only a named denomination from the file', () => {
+    expect(
+      asCoinNames({ runic: '  Krabby   Patties ', gold: '', lead: 'slugs', silver: 3 })
+    ).toEqual({ runic: 'Krabby Patties' });
+    expect(asCoinNames('Krabby Patties')).toEqual({});
   });
 });

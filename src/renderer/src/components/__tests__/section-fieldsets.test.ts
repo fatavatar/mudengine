@@ -33,7 +33,7 @@ function drawn(source: string): string[] {
 describe.each([
   [
     'SettingsScreen.tsx',
-    ['realm-mob-rules', 'realm-messages', 'realm-monsters', 'realm-hang-penalties']
+    ['realm-mob-rules', 'realm-messages', 'realm-monsters', 'realm-hang-penalties', 'realm-coins']
   ],
   ['GlobalSettings.tsx', [] as string[]]
 ])('%s', (file, notNavigable) => {
@@ -53,7 +53,7 @@ describe.each([
   /*
    * The other direction, minus the fieldsets that are deliberately not jump
    * targets: the Realms page has no sections at all (`sections={[]}`), so its
-   * monster-rules, messages, monsters and hang-penalty fieldsets have no
+   * monster-rules, messages, monsters, hang-penalty and coin fieldsets have no
    * rail to be listed in.
    */
   it('offers a jump target for every fieldset it tags', () => {

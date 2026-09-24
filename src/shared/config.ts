@@ -28,6 +28,7 @@ import { asLoops, mergeNamed, type Loop } from './loops';
  * `src/shared/__tests__/module-cycle.test.ts`.
  */
 import { DENOMINATIONS, type Denomination, type VitalThresholds } from './character';
+import { asCoinNames, type CoinNames } from './coins';
 import {
   DEFAULT_CONSOLE_PALETTE,
   DEFAULT_THEME,
@@ -171,6 +172,8 @@ export interface ConnectionConfig {
   login: LoginConfig;
   /** See `LocateMethod`. Resolved from the server's own setting; see `Server.locate`. */
   locate: LocateMethod;
+  /** The realm's names for its coins. Resolved from the server's own; see `Server.coins`. */
+  coins: CoinNames;
 }
 
 /**
@@ -245,6 +248,13 @@ export interface Server {
    * `HangUpConfig.penalties`.
    */
   hangPenalties: boolean | null;
+  /**
+   * What this realm calls its coins, where it renames them. See `CoinNames`.
+   *
+   * **On the realm, for the reason `locate` is.** Every character here reads
+   * the same pack and the same floor, so the name is a fact about the place.
+   */
+  coins: CoinNames;
 }
 
 export interface FontConfig {
@@ -2559,7 +2569,9 @@ export const DEFAULT_CONFIG: AppConfig = {
       ]
     },
     // Paradigm's word. A realm without it says so in its own `locate:`.
-    locate: 'rm'
+    locate: 'rm',
+    // The stock names. A realm that renames a coin says so in its own `coins:`.
+    coins: {}
   },
   /*
    * None. A realm is a directory under `realms/`, and the client seeds one
@@ -3106,7 +3118,8 @@ export function normalizeConfig(input: unknown): AppConfig {
         connection['locate'],
         ['rm', 'sys-status', 'none'],
         DEFAULT_CONFIG.connection.locate
-      )
+      ),
+      coins: asCoinNames(connection['coins'])
     },
     // Both keys, oldest last: `profiles:` was this block's name before a
     // profile came to mean a character.
@@ -3419,7 +3432,8 @@ function normalizeServer(value: unknown): Server | null {
      * reported.
      */
     database: str(value['database'], ''),
-    hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null
+    hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
+    coins: asCoinNames(value['coins'])
   };
 }
 

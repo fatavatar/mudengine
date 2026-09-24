@@ -80,7 +80,7 @@ import { ItemErrand, type ItemSources } from '../automation/ItemErrand';
 import { QuestRunner } from '../automation/QuestRunner';
 import { EquipmentManager } from '../automation/EquipmentManager';
 import { bareName, sameItem } from '../../shared/items';
-import { chargedInCopper } from '../../shared/coins';
+import { chargedInCopper, coinReader, type CoinNames } from '../../shared/coins';
 import { Wards } from '../automation/Wards';
 import { RealmMenu } from './RealmMenu';
 import { Events } from '../automation/Events';
@@ -4163,6 +4163,18 @@ export class SessionManager {
       automation.combat.monsters
     );
     this.restAway.configure(automation.health, automation.enabled, automation.combat.monsters);
+  }
+
+  /**
+   * What this realm calls its coins (`server.yaml` `coins:`): read as the
+   * stock names on the way in, and asked for by the realm's word on the way
+   * out. See `CoinReader`.
+   */
+  configureCoins(names: CoinNames): void {
+    const reader = coinReader(names);
+    this.classifier.useCoins(reader);
+    this.loot.useCoins(reader);
+    this.recoverGear.useCoins(reader);
   }
 
   configureMessages(triggers: readonly MessageTrigger[]): void {

@@ -52,6 +52,94 @@ export function quotedInCopper(quoted: string): number | null {
 }
 
 /**
+ * What a realm calls its coins, where that is not the stock name — a
+ * realm's `server.yaml` `coins:`, by denomination.
+ *
+ * The names are the realm's own text and a derivative renames them outright:
+ * captures/024 calls the runic coin a `dime bag`, and Skinny Inc prints
+ * `14 Krabby Patties` in the pack, on the floor, in a drop line, at the bank
+ * and in every shop price, singular or plural (2026-09-24). Nothing on the
+ * wire says which denomination that is — the purse total does, once — so
+ * the realm is told, once, on the realm.
+ */
+export type CoinNames = Readonly<Partial<Record<Denomination, string>>>;
+
+/** The stock nouns, as the pack lists them. What a renamed coin is read as. */
+export const STOCK_COINS: Readonly<Record<Denomination, string>> = {
+  copper: 'copper farthings',
+  silver: 'silver nobles',
+  gold: 'gold crowns',
+  platinum: 'platinum pieces',
+  runic: 'runic coins'
+};
+
+/** `coins:` as written, keeping only a name for a denomination. */
+export function asCoinNames(value: unknown): CoinNames {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const names: Partial<Record<Denomination, string>> = {};
+  for (const which of DENOMINATIONS) {
+    const name = (value as Record<string, unknown>)[which];
+    if (typeof name !== 'string') continue;
+    const trimmed = name.trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (trimmed.length > 0) names[which] = trimmed;
+  }
+  return names;
+}
+
+/**
+ * How a session reads and names the realm's coins.
+ *
+ * `stock` puts a renamed coin back as the stock noun before a line is
+ * classified, so every reader of coins — the pack, the floor, a drop, a
+ * pickup, a counter's price, the bank — goes on reading the one spelling it
+ * was written against, and none of them has to be told about the realm.
+ * `word` is the other direction: what a command calls the coin, the first
+ * word of the realm's name, which the server matches as it matches any typed
+ * name (`g k` took `1 Krabby Patties`).
+ */
+export interface CoinReader {
+  stock(text: string): string;
+  word(which: Denomination): string;
+}
+
+/**
+ * The realm's name as a pattern that takes either number of the last word:
+ * the realm prints `1 Krabby Patties`, and a player writing the setting may
+ * as well write `Krabby Patty`.
+ */
+function spelledEitherWay(name: string): string {
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const words = name.toLowerCase().split(' ');
+  const last = words.pop() ?? '';
+  const either = last.endsWith('ies')
+    ? `${escape(last.slice(0, -3))}(?:ies|y)`
+    : last.endsWith('y')
+      ? `${escape(last.slice(0, -1))}(?:y|ies)`
+      : last.endsWith('s')
+        ? `${escape(last.slice(0, -1))}s?`
+        : `${escape(last)}s?`;
+  return [...words.map(escape), either].join('\\s+');
+}
+
+export function coinReader(names: CoinNames): CoinReader {
+  const renamed = DENOMINATIONS.flatMap((which) => {
+    const name = names[which];
+    if (name === undefined) return [];
+    // Naming a coin what it is already called changes nothing.
+    if (name.toLowerCase().split(' ')[0] === which) return [];
+    return [{ which, pattern: new RegExp(`\\b${spelledEitherWay(name)}\\b`, 'gi') }];
+  });
+  return {
+    stock: (text) =>
+      renamed.reduce((line, { which, pattern }) => line.replace(pattern, STOCK_COINS[which]), text),
+    word: (which) => names[which]?.split(' ')[0]?.toLowerCase() ?? which
+  };
+}
+
+/** The stock realm's coins: nothing renamed. */
+export const STOCK_COIN_READER: CoinReader = coinReader({});
+
+/**
  * `Items.Currency` read as the coin an item's `Price` is counted in — the
  * server's own table (`BuyCommand.GetCopperValue`, `ListCommand.GetCurrencyName`):
  * 0 copper, 1 silver, 2 gold, 3 platinum, 4 runic. Anything else is unknown.

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { MessageImport, MessageTable, MessageTrigger } from '@shared/messageTriggers';
 import type { MonsterImport, MonsterRule, MonsterTable } from '@shared/monsterRules';
 import { asShippedWorld } from '@shared/worlds';
+import { DENOMINATIONS } from '@shared/character';
+import { STOCK_COINS } from '@shared/coins';
 import type { StatlineFigures } from '@shared/statline';
 import type { TerminalPalette } from '@shared/themes';
 import type { GearSet } from '@shared/gear';
@@ -37,6 +39,7 @@ import RewritesDesigner from './RewriteDesigner';
 
 import { keepFocus } from '../lib/focus';
 import { t } from '../lib/i18n';
+import { COIN_NAME } from '../lib/coins';
 import { barOf, figureOf, fractionOf, percentOf } from '../lib/form';
 import {
   begin,
@@ -1209,7 +1212,9 @@ function emptyServerForm(defaults: GlobalDraft | null): ServerDraft {
     // somebody says otherwise. There is no Global default to copy: a map is a
     // fact about one place, so there is no sensible "next realm" value for it.
     database: '',
-    hangPenalties: null
+    hangPenalties: null,
+    // The stock names until somebody says this realm renames one.
+    coins: {}
   };
 }
 
@@ -4688,6 +4693,33 @@ export default function SettingsScreen({
                         ]}
                         value={penaltiesChoice(serverForm.hangPenalties)}
                       />
+                    </div>
+                  </fieldset>
+
+                  {/*
+                    What this realm calls its coins: a fact about the place, like
+                    the ranking above (`Server.coins`). Blank is the stock name.
+                  */}
+                  <fieldset data-fieldset="realm-coins">
+                    <legend>{t('settings.realms.coinsLegend')}</legend>
+                    <p className="settings-note">{t('settings.realms.coinsNote')}</p>
+                    <div className="settings-inline">
+                      {DENOMINATIONS.map((which) => (
+                        <TextField
+                          key={which}
+                          label={COIN_NAME[which][0]}
+                          name={`realm-coin-${which}`}
+                          onChange={(value) =>
+                            setServerForm({
+                              ...serverForm,
+                              coins: { ...serverForm.coins, [which]: value }
+                            })
+                          }
+                          placeholder={STOCK_COINS[which]}
+                          spellCheck={false}
+                          value={serverForm.coins[which] ?? ''}
+                        />
+                      ))}
                     </div>
                   </fieldset>
 

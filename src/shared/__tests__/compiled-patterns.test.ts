@@ -29,6 +29,14 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
       'is only known at runtime; built once per report in `statlineMatcher`, held by ' +
       '`CharacterTracker`, and never called in a per-line path'
   },
+  'src/shared/coins.ts': {
+    count: 1,
+    because:
+      "a realm's name for a coin is its own data (`server.yaml` `coins:`, Krabby Patties for " +
+      'the runic coin on Skinny Inc), so each renamed one is compiled once when the realm is ' +
+      'configured (`coinReader`, from `SessionManager.configureCoins`) and held; a realm that ' +
+      'renames nothing compiles nothing and the per-line `stock` is a no-op'
+  },
   'src/shared/messages.ts': {
     count: 1,
     because:

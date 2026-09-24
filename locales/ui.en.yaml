@@ -3951,6 +3951,12 @@ settings:
     themeSystem: Follow the system
     usernameLabel: Username
   realms:
+    coinsLegend: Coin Names
+    coinsNote:
+      What this realm calls its coins, where it renames them — one realm prints its runic coins as
+      Krabby Patties. Write the name as the realm prints it; either singular or plural will do.
+      The client reads it as the coin it is, and picks it up or drops it by its first word. Leave a
+      coin blank if the realm uses the usual name.
     confirmRemove: Remove this realm?
     databaseBrowse: Browse…
     databaseClear: Clear
