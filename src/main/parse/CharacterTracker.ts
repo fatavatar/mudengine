@@ -84,7 +84,7 @@ import {
   wordsOf,
   type SpellLore
 } from '../../shared/spell-messages';
-import { castOf, confuses, holdsMovement, isShortIn } from '../../shared/spellcraft';
+import { castIn, confuses, holdsMovement } from '../../shared/spellcraft';
 import { afflictionOnset, PLAYER_STATUS_HEADER, STATUS_LINE } from './patterns';
 import type { Discovery } from '../../shared/memory';
 import { NO_FIGHTS, type FightSink } from '../../shared/fights';
@@ -1002,18 +1002,9 @@ export class CharacterTracker {
     });
   }
 
-  /**
-   * A command as a cast, `c` or bare (`castOf`): a bare word is a spell when
-   * this character's listing has it as a short name, or — before the listing
-   * has been read — when the realm's table does.
-   */
+  /** A command as this character's cast — `shared/spellcraft`'s `castIn`. */
   private castIn(command: string): { word: string; argument: string } | null {
-    return castOf(
-      command,
-      (word) =>
-        isShortIn(word, this.state.spellbook) ||
-        this.world?.spellNamed(word)?.short?.toLowerCase() === word.toLowerCase()
-    );
+    return castIn(command, this.state.spellbook, (word) => this.world?.spellNamed(word) ?? null);
   }
 
   /**

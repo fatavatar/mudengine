@@ -50,6 +50,7 @@
  */
 import type { CharacterState } from '../../shared/character';
 import { bareName, itemInvocation } from '../../shared/items';
+import { sameSpell } from '../../shared/spellcraft';
 import { nameAnswersTo, type WorldItem, type WorldSpell } from '../../shared/world';
 import { t } from '../app/i18n';
 import { tuning } from '../app/tuning';
@@ -65,7 +66,7 @@ export interface InvokeSources {
    * And by name, for the buff list — which carries words, not ids.
    *
    * Both sides of *is this buff already up* are resolved to the realm's own
-   * id before they are compared, which is the reading `Blessings.sameSpell`
+   * id before they are compared, which is the reading `sameSpell` (`shared/spellcraft`)
    * settled on and for its reason: the server prints a spell's whole name
    * where a configuration may hold a short one, so words alone hold a
    * configured `bles` against a recorded `bless` for ever.
@@ -165,16 +166,15 @@ export class AutoInvoke {
 
     /*
      * Already up, under its own name or any the establishing sentence could
-     * have meant. Compared by the realm's **id** rather than by words, which
-     * is what `Blessings.sameSpell` resolves to and the reason it does: the
-     * server prints a spell's whole name where a configuration may hold a
-     * short one.
+     * have meant — `sameSpell`, which compares by the realm's **id** where it
+     * can: the server prints a spell's whole name where a configuration may
+     * hold a short one.
      */
+    const named = (name: string): WorldSpell | null => this.sources.spellNamed(name);
     const held = state.buffs.some((buff) =>
-      [buff.spell, ...(buff.candidates ?? [])].some((candidate) => {
-        if (candidate.trim().toLowerCase() === spell.name.trim().toLowerCase()) return true;
-        return this.sources.spellNamed(candidate)?.id === spell.id;
-      })
+      [buff.spell, ...(buff.candidates ?? [])].some((candidate) =>
+        sameSpell(candidate, spell.name, null, named)
+      )
     );
     return held ? null : spell;
   }
