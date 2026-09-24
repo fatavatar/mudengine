@@ -44,7 +44,7 @@ const draft = (over: Partial<ProfileDraft> = {}): ProfileDraft => ({
   accent: 'cyan',
   theme: '',
   login: [],
-  hangUp: { enabled: false, belowHealth: 0.15, onlyWhenClean: true, onPlayerInRoom: false },
+  hangUp: { enabled: false, belowHealth: 0.15, penalties: null, onPlayerInRoom: false },
   retreat: {
     enabled: false,
     belowHealth: 0.3,
@@ -66,6 +66,8 @@ const draft = (over: Partial<ProfileDraft> = {}): ProfileDraft => ({
     ...DEFAULT_CONFIG.automation.train,
     wanted: { ...DEFAULT_CONFIG.automation.train.wanted }
   },
+  quests: { ...DEFAULT_CONFIG.automation.quests },
+  gear: { ...DEFAULT_CONFIG.automation.gear },
   loot: structuredClone(DEFAULT_CONFIG.automation.loot),
   drop: structuredClone(DEFAULT_CONFIG.automation.drop),
   search: { ...DEFAULT_CONFIG.automation.search },
@@ -356,7 +358,7 @@ describe('servers, one directory each', () => {
     locate: 'rm',
     loops: [],
     database: '',
-    mobPriority: [],
+    hangPenalties: null,
     ...draft
   });
 
@@ -374,6 +376,15 @@ describe('servers, one directory each', () => {
       { id: 'bearfather', name: 'Bearfather', host: 'bbs.bearfather.net' }
     ]);
     expect(fs.existsSync(home.server('bearfather').file)).toBe(true);
+  });
+
+  /* Whether a hang-up here is charged: stated when chosen, and no key when left to Global (todo 01). */
+  it('writes the realm\u2019s hang penalty only when it states one', () => {
+    editor.saveServer(null, server({ hangPenalties: true }));
+    expect(new ServerStore(home).all[0]!.server.hangPenalties).toBe(true);
+    editor.saveServer('Bearfather', server({ hangPenalties: null }));
+    expect(new ServerStore(home).all[0]!.server.hangPenalties).toBeNull();
+    expect(fs.readFileSync(home.server('bearfather').file, 'utf8')).not.toContain('hangPenalties');
   });
 
   it('updates one in place rather than adding a second', () => {
@@ -467,7 +478,7 @@ describe('servers, one directory each', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      mobPriority: []
+      hangPenalties: null
     });
     expect(servers()).toEqual([
       { id: 'greatermud-local', name: 'GreaterMUD (local)', host: '127.0.0.1' }
@@ -541,7 +552,7 @@ describe('credentials in the messages', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      mobPriority: []
+      hangPenalties: null
     });
     for (const file of fs.readdirSync(dir)) {
       if (!fs.statSync(path.join(dir, file)).isFile()) continue;
@@ -694,7 +705,7 @@ describe('what a character plays against, and what keeps it alive', () => {
     editor.saveProfile(
       'vaelor',
       draft({
-        hangUp: { enabled: true, belowHealth: 0.2, onlyWhenClean: true, onPlayerInRoom: false }
+        hangUp: { enabled: true, belowHealth: 0.2, penalties: true, onPlayerInRoom: false }
       })
     );
     const safety = (read('vaelor')['automation'] as Record<string, Record<string, unknown>>)[
@@ -703,9 +714,21 @@ describe('what a character plays against, and what keeps it alive', () => {
     expect(safety?.['hangUp']).toEqual({
       enabled: true,
       belowHealth: 0.2,
-      onlyWhenClean: true,
+      penalties: true,
       onPlayerInRoom: false
     });
+
+    // Left to the realm: no key, so the realm's own answer reaches it (todo 01).
+    editor.saveProfile(
+      'vaelor',
+      draft({
+        hangUp: { enabled: true, belowHealth: 0.2, penalties: null, onPlayerInRoom: false }
+      })
+    );
+    const again = (read('vaelor')['automation'] as Record<string, Record<string, unknown>>)[
+      'safety'
+    ];
+    expect(again?.['hangUp']).toEqual({ enabled: true, belowHealth: 0.2, onPlayerInRoom: false });
   });
 
   /*
@@ -761,7 +784,7 @@ describe('what a character plays against, and what keeps it alive', () => {
     editor.saveProfile(
       'vaelor',
       draft({
-        hangUp: { enabled: true, belowHealth: 0.2, onlyWhenClean: true, onPlayerInRoom: false }
+        hangUp: { enabled: true, belowHealth: 0.2, penalties: null, onPlayerInRoom: false }
       })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
@@ -938,7 +961,7 @@ describe('the loops a character owns', () => {
       locate: 'rm',
       loops: [arena],
       database: '',
-      mobPriority: []
+      hangPenalties: null
     });
     editor.saveProfile('vaelor', draft());
 
@@ -1019,7 +1042,7 @@ describe('filing one loop from the Loops modal', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      mobPriority: []
+      hangPenalties: null
     });
     expect(editor.addLoop('server', 'GreaterMUD (local)', sewers)).toEqual({ ok: true });
     const store = new LoopStore(home);
@@ -1143,28 +1166,28 @@ connection:
    * assertion alone.
    */
   /*
-   * The priority list is the one `automation:` list merged across scopes
+   * The monster rows are the one `automation:` list merged across scopes
    * rather than replaced, so the resolved one holds the global file's rows as
-   * well as the realm's. Seeding the form with those and saving it back would
-   * write them into this character's own file -- pinning down a ranking it was
-   * only inheriting, so a later change to the global list would silently not
-   * reach it (todo 01).
+   * well. Seeding the form with those and saving it back would write them
+   * into this character's own file -- pinning down rows it was only
+   * inheriting, so a later change to the global rows would silently not reach
+   * it (todo 01).
    */
-  it('shows a character only its own priority rows, not the ones it inherits', () => {
+  it('shows a character only its own monster rows, not the ones it inherits', () => {
     const wide = global();
-    wide.automation.combat.mobPriority = [{ mob: 'red dragon', priority: 'low' }];
+    wide.automation.combat.monsters = [{ mob: 'red dragon', priority: 'low' }];
     expect(editor.saveGlobal(wide)).toEqual({ ok: true });
     expect(editor.saveProfile('thorn', draft())).toEqual({ ok: true });
 
     const thorn = editor.snapshot().characters.find((entry) => entry.id === 'thorn');
     // Its own file states none, so its form shows none -- and a save cannot
     // write the global row into it.
-    expect(thorn?.combat.mobPriority).toEqual([]);
+    expect(thorn?.combat.monsters).toEqual([]);
     expect(
       (
         parse(fs.readFileSync(home.profile('thorn').file, 'utf8'))['automation'] as
           Record<string, Record<string, unknown>> | undefined
-      )?.['combat']?.['mobPriority']
+      )?.['combat']?.['monsters']
     ).toEqual([]);
   });
 

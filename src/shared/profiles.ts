@@ -25,15 +25,13 @@
  */
 import {
   DEFAULT_CONFIG,
-  mergeMobPriorities,
-  normalizeMobPriorities,
   normalizeConfig,
   type AppConfig,
   type LocateMethod,
   type LoginStep,
-  type MobPriority,
   type Server
 } from './config';
+import { asMonsterRules, mergeMonsterRules, type MonsterRule } from './monsterRules';
 import type { ConnectionTarget } from './types';
 import { isRecord, str } from './values';
 
@@ -154,7 +152,7 @@ function resolveServer(
   login: LoginStep[];
   locate: LocateMethod;
   database: string;
-  mobPriority: MobPriority[];
+  hangPenalties: boolean | null;
 } | null {
   if (typeof value === 'string') {
     const found = byName(servers, value);
@@ -165,7 +163,7 @@ function resolveServer(
           login: found.login,
           locate: found.locate,
           database: found.database,
-          mobPriority: found.mobPriority
+          hangPenalties: found.hangPenalties
         }
       : null;
   }
@@ -195,10 +193,7 @@ function resolveServer(
        * its map at all.
        */
       database: str(value['database'], ''),
-      // An inline address names no server directory, so there is no realm list
-      // to inherit — the character's own, over the global one, is the whole of
-      // it. Same reasoning as `login` above.
-      mobPriority: [],
+      hangPenalties: null,
       target: {
         host,
         port,
@@ -215,64 +210,86 @@ function resolveServer(
 }
 
 /**
- * Folds the realm's priority list in between the global one and the character's.
+ * The options file's monster rows laid under the character's own, field by
+ * field (`mergeMonsterRules`).
  *
- * The one setting in `automation:` that is merged across scopes rather than
+ * The one list in `automation:` that is merged across scopes rather than
  * replaced, and it has to be done **after** `normalizeConfig` rather than as
  * part of the overlay, because `overlay` is the thing being worked around: by
- * the time it has run, a character that stated its own list has already
- * replaced the global one, and the two are no longer distinguishable inside
- * the merged record.
+ * the time it has run, a character that stated its own rows has already
+ * replaced the global ones, and the two are no longer distinguishable inside
+ * the merged record. So each is read from where it is written — the base file
+ * and the character's raw mapping.
  *
- * So the three lists are read from where each is actually written — the base
- * file, the realm's `server.yaml`, and the character's own raw mapping — and
- * merged broadest-first by `mergeMobPriorities`. A character's row for a
- * monster wins over the realm's, and the realm's over the global one; a
- * monster only one scope names is kept by all three.
- *
- * Read from the *raw* profile rather than the merged config for the same
- * reason: `patch` has already flattened "stated nothing" and "stated a list"
- * into one value, and only the raw mapping still knows which happened.
+ * Merged because a row is addressed by monster, as loops are by name: a
+ * character that wants the global rows plus one of its own should not have to
+ * restate them. The realm's imported table goes under both when a session is
+ * configured (`withRealmMonsters`).
  */
-function withRealmPriorities(
+function withGlobalMonsters(
   config: AppConfig,
-  global: MobPriority[],
-  realm: MobPriority[],
+  global: MonsterRule[],
   raw: Record<string, unknown>
 ): AppConfig {
-  const own = ownMobPriority(raw);
-  /*
-   * Read from where each is actually written, not off the merged config:
-   * `overlay` has already replaced the global list with the character's where
-   * the character stated one, so by this point the merged value cannot tell
-   * the two apart. `base` is the options file as parsed, `realm` the server's
-   * own file, `own` the character's raw rows.
-   */
-  if (realm.length === 0 && own.length === 0) return config;
-  const merged = mergeMobPriorities(global, realm, own);
+  const own = ownMonsterRules(raw);
+  if (global.length === 0 || own.length === 0) return config;
   return {
     ...config,
     automation: {
       ...config.automation,
-      combat: { ...config.automation.combat, mobPriority: merged }
+      combat: { ...config.automation.combat, monsters: mergeMonsterRules(global, own) }
     }
   };
 }
 
 /**
- * The rows a character's own file states, before `overlay` flattened them.
+ * The monster rows a character's own file states, before `overlay` flattened
+ * them.
  *
  * Exported because the settings screen needs the same distinction: it seeds
  * its form from these rather than from the resolved list, or saving would
- * write the realm's and the global file's rows into this character's own.
+ * write the options file's rows into this character's own.
  */
-export function ownMobPriority(raw: Record<string, unknown>): MobPriority[] {
+export function ownMonsterRules(raw: Record<string, unknown>): MonsterRule[] {
   const automation = raw['automation'];
   if (!isRecord(automation)) return [];
   const combat = automation['combat'];
   if (!isRecord(combat)) return [];
-  const rows = combat['mobPriority'];
-  return Array.isArray(rows) ? normalizeMobPriorities(rows) : [];
+  return asMonsterRules(combat['monsters']);
+}
+
+/**
+ * The realm's answer to whether a hang-up is charged, under a character that
+ * gives none (todo 01). A character's own file is read raw for the reason
+ * `ownMonsterRules` is: after `overlay` an inherited value and a stated one look
+ * alike.
+ */
+function withRealmHangPenalties(
+  config: AppConfig,
+  realm: boolean | null,
+  raw: Record<string, unknown>
+): AppConfig {
+  if (realm === null || ownHangPenalties(raw) !== null) return config;
+  const safety = config.automation.safety;
+  return {
+    ...config,
+    automation: {
+      ...config.automation,
+      safety: { ...safety, hangUp: { ...safety.hangUp, penalties: realm } }
+    }
+  };
+}
+
+/** A character's own `penalties`, or null where its file leaves it to the realm. */
+export function ownHangPenalties(raw: Record<string, unknown>): boolean | null {
+  const automation = raw['automation'];
+  if (!isRecord(automation)) return null;
+  const safety = automation['safety'];
+  if (!isRecord(safety)) return null;
+  const hangUp = safety['hangUp'];
+  if (!isRecord(hangUp)) return null;
+  const penalties = hangUp['penalties'];
+  return typeof penalties === 'boolean' ? penalties : null;
 }
 
 /**
@@ -400,10 +417,13 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
       // Merged onto the file as written, then coerced by the same function the
       // options file goes through: one place decides what a valid value is, and
       // it runs exactly once.
-      config: withRealmPriorities(
-        normalizeConfig(overlay(baseSource, patch)),
-        base.automation.combat.mobPriority,
-        server.mobPriority,
+      config: withRealmHangPenalties(
+        withGlobalMonsters(
+          normalizeConfig(overlay(baseSource, patch)),
+          base.automation.combat.monsters,
+          raw
+        ),
+        server.hangPenalties,
         raw
       )
     }

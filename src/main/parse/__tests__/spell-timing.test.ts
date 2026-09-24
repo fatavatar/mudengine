@@ -286,7 +286,7 @@ describe('the kai powers, replayed through the real tracker and Blessings', () =
       feed('[HP=334/KAI=9]:', 'flush');
       expect(tracker.current.phase).toBe('in-game');
       blessings.onCharacter(tracker.current);
-      expect(sent).toEqual(['c pressure points']);
+      expect(sent).toEqual(['pressure points']);
 
       expect(feed('You use your knowledge of pressure points!')).toBe('spell-cast');
       // The table's own sentence for the power landing, read as one.
@@ -295,7 +295,7 @@ describe('the kai powers, replayed through the real tracker and Blessings', () =
       blessings.onCharacter(tracker.current);
       // One cast a round: the second power waits out the proposal cooldown.
       vi.advanceTimersByTime(7_000);
-      expect(sent).toEqual(['c pressure points', 'c way of the tiger']);
+      expect(sent).toEqual(['pressure points', 'way of the tiger']);
 
       expect(feed('You invoke the way of the tiger.')).toBe('spell-cast');
       expect(feed('You feel ferocious!')).toBe('spell-onset');
@@ -314,7 +314,7 @@ describe('the kai powers, replayed through the real tracker and Blessings', () =
       // The positive control — the wire ends one, and only that one is recast.
       expect(feed('You stop using pressure points.')).toBe('user-buff-expired');
       blessings.onCharacter(tracker.current);
-      expect(sent).toEqual(['c pressure points', 'c way of the tiger', 'c pressure points']);
+      expect(sent).toEqual(['pressure points', 'way of the tiger', 'pressure points']);
       vi.advanceTimersByTime(10_000);
       expect(sent).toHaveLength(3);
     } finally {
@@ -427,6 +427,34 @@ describe("Paramud's own words for its own spells", () => {
     feed('[HP=585/MA=400]:', 'flush');
     expect(feed('You are affected by a blood ritual!')).toBe('spell-onset');
     expect(held(tracker)).toEqual(['pagan ritual']);
+  });
+
+  /*
+   * This client sends the short name bare (`castWord`: a mystic's `swan` has
+   * no `c` form), and the server reads it as the cast it is — so the bare
+   * word is this character's own cast exactly as `c ritu` is, and the buff it
+   * starts is the one whose duration is measured (`ActiveBuff.cast`). A word
+   * the book does not list is not a cast, and the same sentence then names a
+   * buff nobody here is timing.
+   */
+  const castBy = (command: string): Array<{ spell: string; cast: boolean }> => {
+    const { tracker, feed, send } = feeder(shippedSpellLore(realm));
+    spellbook(feed, send);
+    send(command);
+    feed('You begin to chant an evil blood ritual.');
+    feed('As you conclude your ritual, Skinny is surrounded by a blood-red aura!');
+    feed('[HP=585/MA=400]:', 'flush');
+    feed('You are affected by a blood ritual!');
+    return tracker.current.buffs.map((buff) => ({ spell: buff.spell, cast: buff.cast === true }));
+  };
+
+  it('takes a bare short name for this character’s own cast, as `c` is', () => {
+    expect(castBy('c ritu')).toEqual([{ spell: 'pagan ritual', cast: true }]);
+    expect(castBy('ritu')).toEqual([{ spell: 'pagan ritual', cast: true }]);
+  });
+
+  it('reads no bare word the spellbook does not list as a cast', () => {
+    expect(castBy('rest')).toEqual([{ spell: 'pagan ritual', cast: false }]);
   });
 
   it('reads the flavour after a comma as flavour', () => {

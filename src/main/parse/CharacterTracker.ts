@@ -34,7 +34,7 @@ import {
   type Affliction,
   type StatedEffect,
   type KnownSpell,
-  type RealmFamily,
+  type RealmFamily as RealmWord,
   type ActiveBuff,
   type Stealth,
   ownAlignment
@@ -72,6 +72,7 @@ import type { Direction, RoomId, TrailStep, WorldRoom } from '../../shared/world
 import { mobKey, nameAnswersTo, roomAddress, roomId } from '../../shared/world';
 import type { Block } from '../../shared/blocks';
 import { NO_LORE, type MobLore } from '../../shared/lore';
+import type { RealmFamily } from '../../shared/realm';
 import {
   effectKey,
   isUnnamedEffect,
@@ -83,7 +84,7 @@ import {
   wordsOf,
   type SpellLore
 } from '../../shared/spell-messages';
-import { holdsMovement } from '../../shared/spellcraft';
+import { castOf, confuses, holdsMovement, isShortIn } from '../../shared/spellcraft';
 import { afflictionOnset, PLAYER_STATUS_HEADER, STATUS_LINE } from './patterns';
 import type { Discovery } from '../../shared/memory';
 import { NO_FIGHTS, type FightSink } from '../../shared/fights';
@@ -102,7 +103,8 @@ import { addCoins } from '../../shared/coins';
 import { observe, playerEntity, playerKey } from '../../shared/players';
 import { noteRemoteCall, noteRemoteClient, trackPlayers } from './players';
 import { trackTally } from './tally';
-import { NO_TALLY } from '../../shared/tally';
+import { NO_TALLY, settleClocks, type CombatTally } from '../../shared/tally';
+import { readStatAll, statedBasis } from '../../shared/stated';
 import {
   rosterFrom,
   withArrival,
@@ -445,6 +447,8 @@ export function looksLikeEffectSentence(text: string): boolean {
 
 export class CharacterTracker {
   private state: CharacterState = structuredClone(EMPTY_CHARACTER);
+  /** The server's lineage, as `SessionManager` read it. See `useFamily`. */
+  private serverFamily: RealmFamily | null = null;
 
   /** The room being assembled; promoted to `state.room` when exits arrive. */
   private readonly room = new RoomDraft();
@@ -519,6 +523,18 @@ export class CharacterTracker {
    * server's spelling here is already resolved from whatever was typed.
    */
   private lookedAt: string | null = null;
+  /**
+   * The direction this character's last command aimed at a door, or null.
+   *
+   * `The door is now open.` names no direction, so the exit it re-notes is
+   * the one the command named: `open nw`, `close nw`, `pi nw`, `bas nw`. One
+   * slot, cleared by any other command, because the server answers the
+   * command it was sent and a `door-changed` after `l s` is about nothing
+   * this client can place.
+   */
+  private barrierAim: Direction | null = null;
+  /** What the last `Location:` settled ahead of itself, for the session to say. See `takeSettledByLocate`. */
+  private settledByLocate: LapsedClaim[] = [];
   /**
    * This character's own most recent duration-spell cast, for learning what
    * the per-spell onset sentence that follows it is called.
@@ -852,10 +868,10 @@ export class CharacterTracker {
     }
     const same =
       afflictions === s.afflictions &&
-      held.length === s.stated.length &&
-      held.every((entry, at) => entry === s.stated[at]);
+      held.length === s.heard.length &&
+      held.every((entry, at) => entry === s.heard[at]);
     if (same) return false;
-    this.state = { ...s, afflictions, stated: held };
+    this.state = { ...s, afflictions, heard: held };
     return true;
   }
 
@@ -913,6 +929,11 @@ export class CharacterTracker {
     // `Object.hasOwn`, not a truthy lookup: every object inherits `toString`
     // and `constructor`, and `bas constructor` is not a door.
     const atBarrier = named === 'Bash' && Object.hasOwn(MOVE_COMMANDS, argument.toLowerCase());
+    // Which door the answer will be about, for the sentences that do not say.
+    this.barrierAim =
+      atBarrier || named === 'Open' || named === 'Close' || named === 'Pick'
+        ? (MOVE_COMMANDS[argument.toLowerCase()] ?? null)
+        : null;
     /*
      * And what it costs in stealth, before it goes out.
      *
@@ -929,7 +950,13 @@ export class CharacterTracker {
      * announces sets it straight again on arrival, so this can only ever be
      * early, never wrong in the reassuring direction.
      */
-    if (this.state.phase === 'in-game' && breaksStealth(trimmed)) this.breakStealth();
+    // A spell typed bare is `Cast` to the server, which breaks stealth as `c` does.
+    if (
+      this.state.phase === 'in-game' &&
+      (breaksStealth(trimmed) || (named === null && this.castIn(trimmed) !== null))
+    ) {
+      this.breakStealth();
+    }
     /*
      * And the two that ask for it back. Neither receipt is trusted (see the
      * `user-hide-initiate` case), so the send is the only moment the answer
@@ -953,17 +980,18 @@ export class CharacterTracker {
      * fight too: an attack spell cast into one re-engages it, answered by a
      * `*Combat Off*` and a `*Combat Engaged*` (captured 2026-09-23), and that
      * engagement is owed its target exactly as a re-typed `a` is. The spell
-     * is one word (`castWord`); the rest is the target.
+     * is one word (`castWord`) — behind `c`, or bare, which is how this client
+     * sends it (`castOf`); the rest is the target.
      */
-    if (named === 'Cast' && this.state.phase === 'in-game') {
-      const gap = argument.indexOf(' ');
-      const aimed = gap < 0 ? '' : argument.slice(gap + 1).trim();
+    const cast = this.state.phase === 'in-game' ? this.castIn(trimmed) : null;
+    if (cast !== null) {
+      const aimed = cast.argument.trim();
       const occupant = aimed.length === 0 ? null : this.occupantNamed(aimed);
       const monster = this.state.room.occupants.some(
         (who) => who.kind === 'mob' && who.name === occupant
       );
-      if (monster) this.fight.noteAttack(aimed, named, at);
-      else this.noteSelfCastSent(gap < 0 ? argument : argument.slice(0, gap), aimed, at);
+      if (monster) this.fight.noteAttack(aimed, 'Cast', at);
+      else this.noteSelfCastSent(cast.word, aimed, at);
     }
     return this.expect.observeCommand(command, {
       inGame: this.state.phase === 'in-game',
@@ -971,6 +999,20 @@ export class CharacterTracker {
       typedExit: (text) => this.directionOfTypedExit(text),
       occupantNamed: (typed) => this.occupantNamed(typed)
     });
+  }
+
+  /**
+   * A command as a cast, `c` or bare (`castOf`): a bare word is a spell when
+   * this character's listing has it as a short name, or — before the listing
+   * has been read — when the realm's table does.
+   */
+  private castIn(command: string): { word: string; argument: string } | null {
+    return castOf(
+      command,
+      (word) =>
+        isShortIn(word, this.state.spellbook) ||
+        this.world?.spellNamed(word)?.short?.toLowerCase() === word.toLowerCase()
+    );
   }
 
   /**
@@ -1221,6 +1263,28 @@ export class CharacterTracker {
     return this.expect.expire(now);
   }
 
+  /** The head claim to probe, marked as probed; null when none is due. See `Expectations.staleProbe`. */
+  staleProbe(now: number): string | null {
+    return this.expect.staleProbe(now);
+  }
+
+  /** The player has a half-typed line on the wire, or no longer has. See `Expectations.noteTyping`. */
+  noteTyping(partial: boolean): void {
+    this.expect.noteTyping(partial);
+  }
+
+  /** The claims a `Location:` answer proved unanswerable, taken once. */
+  takeSettledByLocate(): LapsedClaim[] {
+    const settled = this.settledByLocate;
+    this.settledByLocate = [];
+    return settled;
+  }
+
+  /** The locate word was refused (`You say "rm"`): an ordered answer all the same. */
+  locateRefused(): LapsedClaim[] {
+    return this.expect.answeredInOrder();
+  }
+
   /**
    * The last few moves the character is known to have made, oldest first.
    *
@@ -1264,6 +1328,7 @@ export class CharacterTracker {
 
   reset(): void {
     this.lastUnknown = null;
+    this.barrierAim = null;
     // A new session, not a new realm: what the realm knows about the other
     // players is seeded back in, everyone offline until this session sees them.
     this.state = {
@@ -1303,7 +1368,14 @@ export class CharacterTracker {
        * survive a restart as itself, or an unasked book reads as a character
        * the realm counts nothing for.
        */
-      abilities: this.belongings.recallAbilities()
+      abilities: this.belongings.recallAbilities(),
+      /*
+       * And what the fighting has added up to, so the Combat Stats card and
+       * its rate graph open where they were left. A reconnect within one
+       * launch hands back the tally `leaveRealm` settled; a launch hands back
+       * the file's, with any clock it left open closed at the write.
+       */
+      tally: this.recalledTally()
     };
     this.room.discard();
     this.expect.forget();
@@ -1355,8 +1427,19 @@ export class CharacterTracker {
    * on reporting vitals for a character that was gone. It only became visible
    * once the rail stopped disappearing along with the connection.
    */
-  leaveRealm(): boolean {
+  leaveRealm(at = Date.now()): boolean {
     this.expect.dropHint();
+    /*
+     * Both clocks close now: the character is in no fight and in no realm,
+     * and nothing on the wire describes the moment the socket died. The
+     * totals themselves stay — they outlive the socket and the launch.
+     */
+    const tally = settleClocks(this.state.tally, at);
+    const settled = tally !== this.state.tally;
+    if (settled) {
+      this.state = { ...this.state, tally };
+      this.belongings.rememberStats(tally);
+    }
     // The buffs go with the realm, and so does every half-learned ending.
     this.pendingStops = [];
     this.learningStarts = [];
@@ -1369,7 +1452,7 @@ export class CharacterTracker {
     this.sheetWanted = false;
     // A kill nobody read before the socket closed can no longer be acted on.
     this.deaths.clear();
-    if (this.state.phase === 'unknown' && this.state.room.name === null) return false;
+    if (this.state.phase === 'unknown' && this.state.room.name === null) return settled;
     this.state = {
       ...this.state,
       phase: 'unknown',
@@ -1381,13 +1464,8 @@ export class CharacterTracker {
       // A fight cannot continue through a closed socket, and a remembered
       // target would be the first thing a rule swung at on reconnecting.
       combat: NO_COMBAT,
-      /*
-       * And the running totals go with it. They are *this visit's* fighting:
-       * an engagement clock left open across a closed socket would count the
-       * hours the client sat disconnected as time spent in combat, and a rate
-       * would be read off marks with a night in the middle of them.
-       */
-      tally: NO_TALLY,
+      // The running totals stay, their clocks settled above: what a night
+      // disconnected must not do is count, and now it does not.
       party: NO_PARTY,
       // Nobody is sneaking through a closed socket, and "seen" would be a claim
       // about a realm this character is no longer in.
@@ -1395,7 +1473,7 @@ export class CharacterTracker {
       // And nobody is poisoned in a realm they have left; the next session says.
       afflictions: NO_AFFLICTIONS,
       // Nor confused: what a message started, a new session has not heard.
-      stated: [],
+      heard: [],
       // A buff may in fact survive a relog — nothing has measured it — but a
       // list kept across the gap would claim to know. Absence is honest, and
       // the cost of being wrong is one recast per configured blessing.
@@ -1743,7 +1821,8 @@ export class CharacterTracker {
     if (placed === undefined) return;
 
     room.shop = placed.shop === undefined ? null : (world.shop(placed.shop) ?? null);
-    room.lair = world.lair(placed);
+    // The family the wire stated, for the clock's own offset — see `lair`.
+    room.lair = world.lair(placed, this.serverFamily);
     if (placed.commands !== undefined) room.commands = placed.commands;
     room.spell = placed.spell === undefined ? null : world.spellById(placed.spell);
     if (placed.light !== undefined) room.lightLevel = placed.light;
@@ -1762,6 +1841,9 @@ export class CharacterTracker {
      */
     const at = roomAddress(room);
     room.occupants = room.occupants.map((who) => this.asRowHere(who, at));
+    // And the floor the same way: a room that places one of a shared name's
+    // rows has said which is lying here (format 42).
+    room.items = room.items.map((item) => world.itemPlacedHere(item, placed));
   }
 
   /**
@@ -2568,6 +2650,9 @@ export class CharacterTracker {
      * one the reducer produced.
      */
     const tally = trackTally(base.tally, block, base, before, proc);
+    // Written down as it moves, so the Combat Stats card opens where it was
+    // left; the record defers the write, so this costs the parse path nothing.
+    if (tally !== this.state.tally) this.belongings.rememberStats(tally);
     // Folded from the same place and for the same reason `trackPlayers` is: a
     // condition can move in any of a dozen cases, and this reads the
     // transition rather than any one of them. See `deduceCauses`.
@@ -3087,7 +3172,9 @@ export class CharacterTracker {
       return AFFLICTIONS.filter((condition) => causes[condition] === 'confirmed');
     }
     const conditions: Array<keyof Afflictions> = [];
-    if (holdsMovement(this.world?.spellNamed(name))) conditions.push('held');
+    const row = this.world?.spellNamed(name);
+    if (holdsMovement(row)) conditions.push('held');
+    if (confuses(row)) conditions.push('confused');
     const start = this.spellLore.startOf(name);
     const stated = start === null ? null : afflictionOnset(start);
     if (stated !== null && !conditions.includes(stated)) conditions.push(stated);
@@ -3224,9 +3311,16 @@ export class CharacterTracker {
    * so.
    */
   private heldByOnset(s: CharacterState, candidates: readonly string[]): CharacterState | null {
-    if (!candidates.some((name) => holdsMovement(this.world?.spellNamed(name)))) return null;
-    this.expect.shiftHeldMove();
-    return afflicted(s, 'held', 'yes');
+    const rows = candidates.map((name) => this.world?.spellNamed(name));
+    let next: CharacterState | null = null;
+    if (rows.some(holdsMovement)) {
+      this.expect.shiftHeldMove();
+      next = afflicted(s, 'held', 'yes');
+    }
+    // A confusion landing refuses nothing by itself — the fumbles come later,
+    // one command at a time — so the flag is set and no claim is taken.
+    if (rows.some(confuses)) next = afflicted(next ?? s, 'confused', 'yes') ?? next;
+    return next;
   }
 
   private withBuff(s: CharacterState, buff: ActiveBuff): CharacterState {
@@ -3476,6 +3570,26 @@ export class CharacterTracker {
    */
   useRealm(players: RealmPlayers): void {
     this.players = players;
+    // A different realm may be a different lineage, and carrying the last
+    // one's answer forward would be worse than having none. See `useFamily`.
+    this.serverFamily = null;
+  }
+
+  /**
+   * Which lineage's arithmetic the *server* runs — `SessionManager`'s reading,
+   * handed over.
+   *
+   * Told rather than worked out here, because the reading is `familyToldBy`'s
+   * and it is a fold over three positive tells (`shared/realm.ts`), none of
+   * which is the `[MAJORMUD]:` menu prompt this file reads into
+   * `CharacterState.realm`. Those are two different facts and they have two
+   * different unions: `paradigm` is a *database*, and there is no Paradigm
+   * arithmetic. The one thing this decides is the lair's respawn clock, whose
+   * only reading outside the realm's own column is GreaterMUD's thirty-second
+   * offset (`WorldGraph.lair`); null is unknown and takes the nominal figure.
+   */
+  useFamily(family: RealmFamily | null): void {
+    this.serverFamily = family;
   }
 
   /**
@@ -3487,22 +3601,45 @@ export class CharacterTracker {
    * at `reset()`, which every connection runs.
    */
   /**
-   * Re-seeds only the four fields the belongings record supplies, because the
+   * Re-seeds only the fields the belongings record supplies, because the
    * record has just been thrown away.
    *
    * `reset()` beside it does this and everything else — the room, the roster,
    * the phase, the trail — which is right for a new connection and wrong here:
    * the character is standing somewhere, and what changed is a *file*. So this
-   * is the same four lines as `reset()`'s seeding, applied in place.
+   * is the same lines as `reset()`'s seeding, applied in place.
    */
-  forgetBelongings(): void {
+  forgetBelongings(at = Date.now()): void {
     this.state = {
       ...this.state,
       banks: this.belongings.recallBanks().map((bank) => ({ ...bank })),
       loadout: this.belongings.recallLoadout().map((worn) => ({ ...worn })),
       spellbook: this.belongings.recallSpellbook()?.map((spell) => ({ ...spell })) ?? null,
-      abilities: this.belongings.recallAbilities()
+      abilities: this.belongings.recallAbilities(),
+      // And the totals, which were somebody gone's. The character is standing
+      // in the realm, so the clocks that were running start again now.
+      tally:
+        this.state.phase === 'in-game'
+          ? {
+              ...NO_TALLY,
+              since: at,
+              at,
+              onlineSince: at,
+              engagedSince: this.state.inCombat ? at : null
+            }
+          : NO_TALLY
     };
+  }
+
+  /**
+   * The totals as the record last kept them, with any clock it left open
+   * closed at the moment it was written: a launch that ended without the
+   * socket closing left `onlineSince` running, and the write is the last
+   * moment the client is known to have been in the realm.
+   */
+  private recalledTally(): CombatTally {
+    const kept = this.belongings.recallStats();
+    return kept === null ? NO_TALLY : settleClocks(kept.tally, kept.savedAt);
   }
 
   useBelongings(belongings: BelongingsSink): void {
@@ -3611,7 +3748,7 @@ export class CharacterTracker {
    * which are the character's *record* rather than its state and are keyed on
    * disk by character and realm anyway.
    */
-  private forgetCharacter(realm: RealmFamily | null): CharacterState {
+  private forgetCharacter(realm: RealmWord | null): CharacterState {
     const s = this.state;
     this.room.discard();
     // Nothing outstanding can be answered from the menu, and a room arriving
@@ -3768,6 +3905,16 @@ export class CharacterTracker {
          * changes here beyond remembering that it was asked for. The menu
          * prompt is the only sure sign of having left, and it is read below.
          */
+        if (s.phase === 'in-game') this.expect.askedToLeave();
+        return null;
+
+      case 'user-exit-interrupted':
+        this.expect.stayed();
+        return null;
+
+      // MajorMUD's word that the exit completed: the menu prompt behind it is
+      // the way out, whether or not the request was read.
+      case 'user-left-realm':
         if (s.phase === 'in-game') this.expect.askedToLeave();
         return null;
 
@@ -4084,6 +4231,9 @@ export class CharacterTracker {
         const map = int(g['map']);
         const number = int(g['room']);
         if (map === null || number === null) return null;
+        // `rm`'s answer, and an ordered one: every step still unanswered from
+        // before it was answered by nothing (todo 10).
+        this.settledByLocate.push(...this.expect.answeredInOrder());
         // The one source that is not inference: the game said so.
         const located = this.world ? resolveFromCoordinates(this.world, map, number) : null;
         return {
@@ -4529,6 +4679,16 @@ export class CharacterTracker {
          * realm.
          */
         const movedSomehow = expectation?.kind === 'move';
+
+        /*
+         * And the count of arrivals, moved by the same fact and published so
+         * that something other than this file can tell an arrival from a
+         * reprint — see `Room.arrival`. Here, above every return, for the
+         * reason `stealth` and `combat` below are: the room object is rebuilt
+         * from the draft and a count left off one route out of this case is a
+         * count that silently stops moving.
+         */
+        room.arrival = s.room.arrival + (movedSomehow ? 1 : 0);
 
         /*
          * And whether the character is still unseen, computed here for the
@@ -5510,6 +5670,17 @@ export class CharacterTracker {
         this.notePack(block.seq, item, false, hidden);
         return withoutItem(s, item, hidden);
       }
+      /*
+       * The cleanup took a `Remove@Maint` item out of the pack: one instance
+       * (`GMUDServer.DoCleanup` removes the stack an item at a time and prints
+       * once per item), onto no floor — the server poofs it.
+       */
+      case 'user-item-returned': {
+        const item = g['item'];
+        if (!item) return null;
+        this.notePack(block.seq, item, false, 1);
+        return withoutItem(s, item, 1);
+      }
 
       /*
        * Worn, wielded or lit — the item was already carried and has moved from
@@ -5727,9 +5898,39 @@ export class CharacterTracker {
        * `Sneaking...` from before the door would otherwise be spent on the
        * move after it.
        */
-      case 'door-changed':
-        if (g['already'] !== undefined) return null;
-        return this.stealthBroke(s);
+      case 'door-changed': {
+        /*
+         * The door the command named stands as the server now says, whether
+         * or not it did anything: `The door was already open.` is as much a
+         * statement of the door as `is now open.` A pick leaves a shut door
+         * shut, so `unlocked` re-notes nothing.
+         */
+        const state = g['state'];
+        const barrier = g['barrier'];
+        const noted =
+          this.barrierAim !== null &&
+          barrier !== undefined &&
+          (state === 'open' || state === 'closed')
+            ? doorNoted(s, this.barrierAim, barrier, state)
+            : null;
+        if (g['already'] !== undefined) return noted;
+        return this.stealthBroke(noted ?? s) ?? noted;
+      }
+      /*
+       * A door this character did not touch: the exit the room listed is
+       * re-noted in the server's own words (`closed door`), so `Walker.shutAhead`
+       * reads it as it would off a reprint. Only an exit the list printed — a
+       * room whose exits were never read proves nothing, and a door the wire
+       * never listed is not invented from a sentence about it.
+       */
+      case 'door-swings': {
+        const direction = MOVE_COMMANDS[g['direction']?.trim().toLowerCase() ?? ''];
+        const barrier = g['barrier'];
+        const state = g['state'];
+        if (direction === undefined || barrier === undefined) return null;
+        if (state !== 'opened' && state !== 'closed') return null;
+        return doorNoted(s, direction, barrier, state === 'opened' ? 'open' : 'closed');
+      }
       case 'skill-failed':
         return this.stealthBroke(s);
 
@@ -5752,6 +5953,12 @@ export class CharacterTracker {
         return afflicted(s, 'held', 'yes');
       case 'user-held-ends':
         return afflicted(s, 'held', 'no');
+      case 'user-confused':
+        return afflicted(s, 'confused', 'yes');
+      // A command thrown away is the one proof of confusion that needs no
+      // table: `CheckConfusion` prints it only on a hit.
+      case 'command-fumbled':
+        return afflicted(s, 'confused', 'yes');
 
       /*
        * A cast confirmation naming this character as the recipient is the one
@@ -6122,6 +6329,16 @@ export class CharacterTracker {
         // client that asks again every launch.
         this.belongings.rememberAbilities(abilities);
         return { ...s, abilities };
+      }
+
+      /*
+       * `stat all` — the server's own arithmetic, kept with what it was
+       * computed from, so `statedNow` can drop each figure the moment its
+       * inputs move rather than on a clock.
+       */
+      case 'user-stat-all': {
+        const stated = readStatAll(rows ?? [], statedBasis(s));
+        return stated === null ? null : { ...s, stated };
       }
 
       /*
@@ -6826,6 +7043,31 @@ function threatenedBy(
     party: {
       ...s.party,
       threatened: { ...s.party.threatened, [member.name]: { target: mob, at } }
+    }
+  };
+}
+
+/**
+ * The room's listed exit that way, re-noted as the server now says the door
+ * stands — `closed door`, `open gate` — in the words `parseExit` would have
+ * read off a reprint, so `Walker.shutAhead` and the Room card need no second
+ * reading. Null when the list never printed that exit, or the note already
+ * says so.
+ */
+function doorNoted(
+  s: CharacterState,
+  direction: Direction,
+  barrier: string,
+  state: 'open' | 'closed'
+): CharacterState | null {
+  const note = `${state} ${barrier}`;
+  const listed = s.room.exits.find((exit) => exit.direction === direction);
+  if (listed === undefined || listed.note === note) return null;
+  return {
+    ...s,
+    room: {
+      ...s.room,
+      exits: s.room.exits.map((exit) => (exit === listed ? { ...exit, note } : exit))
     }
   };
 }

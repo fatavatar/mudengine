@@ -147,6 +147,65 @@ describe('combat', () => {
     expect(g['attacker']).toBe('huge cave rat');
   });
 
+  /*
+   * The three blows whose tail carries a comma (todo 02).
+   *
+   * `…swings at you, but you dodge out of the way!` was read the whole time
+   * and `…hits you, but the swing glances off!` was read as nothing, and the
+   * only difference between them is a second `you` for the lazy head to eat.
+   * The cost of the gap: `*Combat Off*` had just cleared the fight — this
+   * client's own blessing cast produced it — the glance was the only evidence
+   * the sandworm was still swinging, `combat.attackers` stayed empty, and the
+   * walker spent its three beats and stepped out of the fight
+   * (`logs/2026-09-22_08-02-35_festus.mudcap.jsonl`, the glance at t=620598
+   * and `sw` at t=624061).
+   *
+   * The article is optional on the glance because the wire carries lowercase
+   * monsters (`quickling lord jabs you, …`) and because a player's blow is
+   * the same sentence.
+   */
+  it('reads a blow whose clause after "you" carries a comma', () => {
+    const glance = expectType(
+      'The big sandworm hits you, but the swing glances off!',
+      'mob-misses'
+    );
+    expect(glance['line']).toBe('big sandworm hits you');
+    expect(classify('quickling lord jabs you, but the swing glances off!').type).toBe('mob-misses');
+
+    const missed = expectType(
+      'The mermex hunter swings at you with its claws, but misses!',
+      'mob-misses'
+    );
+    expect(missed['line']).toBe('mermex hunter swings at you with its claws');
+
+    expect(
+      expectType('The orc rogue slashes at you, but your armour deflects the blow!', 'mob-misses')[
+        'line'
+      ]
+    ).toBe('orc rogue slashes at you');
+  });
+
+  /*
+   * And what the frame must not swallow, which is why the tail class was not
+   * simply given a comma instead: replaying the corpus that way moved 46
+   * lines and 16 of them were **deaths** becoming misses. A death read as a
+   * miss leaves the corpse standing in the room for ever, and it is
+   * irreversible — `asDeathSentence` returns early on a block a rule has
+   * already typed, so no table gets a second look at it.
+   *
+   * These are the realm's own death sentences, so the rules leave them for
+   * that table; what this asserts is that they do not become a blow.
+   */
+  it('leaves a death whose sentence mentions this character to the death table', () => {
+    for (const line of [
+      'The bandit eyes you evilly, and dies.',
+      'The minotaur chieftain curses at you spitefully, and dies!',
+      'The fire ant soldier snaps at you, stumbles, and is still!'
+    ]) {
+      expect(classify(line).type).not.toBe('mob-misses');
+    }
+  });
+
   /* Speech is not a swing, and a name that merely starts with "you" is not you. */
   it('does not read an ordinary sentence as a blow', () => {
     expect(classify('The shopkeeper says "I have nothing for you!"').type).not.toBe('mob-misses');
@@ -580,6 +639,21 @@ describe('conversation, movement, items', () => {
     expectType('You are typing too quickly - command ignored', 'command-ignored');
     // Every death with a life left prints this after `You have been killed!` (Player.cs:1467).
     expectType('But, due to a miracle, you have been saved.', 'user-saved');
+    // The nightly cleanup, all four announcements (the user's own log, 2026-08-25).
+    expect(expectType('A new day begins to approach.', 'realm-cleanup')['phase']).toBe(
+      'begins to approach'
+    );
+    expect(expectType('A new day is fast approaching.', 'realm-cleanup')['phase']).toBe(
+      'is fast approaching'
+    );
+    expect(expectType('A new day is imminent.', 'realm-cleanup')['phase']).toBe('is imminent');
+    expect(expectType('A new day has come!', 'realm-cleanup')['phase']).toBe('has come');
+    // And what it prints for a `Remove@Maint` item in the pack (`GMUDServer.cs:445`, no full stop).
+    expect(
+      expectType('Your black star key has been returned to its proper place', 'user-item-returned')[
+        'item'
+      ]
+    ).toBe('black star key');
     expectType("Why don't you slow down for a few seconds?", 'slow-down');
   });
 
@@ -1517,6 +1591,22 @@ describe('combat, anchored on the frame', () => {
     expect(expectType('Kaylon kneels to meditate.', 'player-rests')['player']).toBe('Kaylon');
   });
 
+  /*
+   * MajorMUD tells the fallen character the room's sentence (bearfather,
+   * `logs/2026-09-18_21-00-32_soul.mudcap.jsonl`: `Soul drops to the ground!`
+   * at `[HP=-1/KAI=0]`, then every command refused as mortally wounded).
+   */
+  it('reads this character’s own name dropping as this character going down', () => {
+    const as = (self: string | null) => new Classifier({ ...NAMES, self: () => self });
+    const type = (classifier: Classifier, plain: string) =>
+      classifier.classify(line(plain)).block.type;
+    expect(type(as('Soul'), 'Soul drops to the ground!')).toBe('user-mortally-wounded');
+    // Somebody else, the other sentence of the rule, and a name nobody has said.
+    expect(type(as('Soul'), 'Trickster drops to the ground!')).toBe('player-dies');
+    expect(type(as('Soul'), 'Soul is dead.')).toBe('player-dies');
+    expect(type(as(null), 'Soul drops to the ground!')).toBe('player-dies');
+  });
+
   it('reads damage with no attacker', () => {
     expect(
       expectType('You take 1 damage for bashing the door!', 'user-takes-damage')
@@ -1815,12 +1905,22 @@ describe('the cheap eight', () => {
     expect(expectType('You successfully unlocked the door.', 'door-changed')['state2']).toBe(
       'unlocked'
     );
+    // A door nobody here touched, from `Door.cs`: the timer and the far side
+    // both compose it, and it is the one door sentence naming the direction.
+    expect(expectType('The door to the northwest just closed.', 'door-swings')).toMatchObject({
+      barrier: 'door',
+      direction: 'northwest',
+      state: 'closed'
+    });
+    expect(expectType('The gate to the south just opened.', 'door-swings')['state']).toBe('opened');
     expect(expectType('Rend went west from here.', 'user-tracks')).toMatchObject({
       player: 'Rend',
       direction: 'west'
     });
     expectType('Your tracking skills fail you this time.', 'user-tracks-failed');
     expectType('You are now resting.', 'user-rests');
+    // MajorMUD's `confusion` and `song of dazzling` land with this (captures/001, 037, 092).
+    expectType('You are confused!', 'user-confused');
   });
 });
 
@@ -2441,6 +2541,105 @@ describe('the ability listing', () => {
 });
 
 /*
+ * `stat all`, verbatim from the wire: the user's own paste (Festus on
+ * Paradigm, 2026-09-18), with the attack rows of two sheets run against a
+ * monster (Festus, 2026-09-06 and 2026-09-07) beside it below.
+ */
+const STAT_ALL = [
+  'Name: Festus                                     Illu:           25',
+  'HP Regen:   6/18       AC vs Evil:  68           Cold Resist:     0',
+  'MA Regen:   3/3        Shadow:       0           Water Resist:    0',
+  'Max HP:    45          Party:        0           Fire Resist:    10',
+  'Max Mana:   5          Prev:        10           Stone Resist:    0',
+  'Encum:      0          Prgd:         0           Lit Resist:      0',
+  '                       vs Good:     58           Dodge:          13',
+  '                                                 Crits:           3',
+  '                                                 Spell Damage:    0',
+  'Attacks:',
+  'Type        Swings   Accy   Min   Max   QnD(Total)   Avg/Rnd(+xtra)',
+  'Attack       3.584    105     8    25     0(3)            65(67)  ',
+  'Bash         1.792    105    22    82                     93(94)  ',
+  '',
+  'Spells:                               ',
+  'Short Name   Casts   Diff   Min   Max                Avg/Rnd',
+  '                 1    100     5    25                     15',
+  'mace             1    100     1     3                      2'
+];
+
+describe('the stat all sheet', () => {
+  const feed = (lines: string[]) => {
+    const c = new Classifier(NAMES);
+    const seen: string[] = [];
+    let batch;
+    for (const text of lines) {
+      const out = c.classify(line(text));
+      seen.push(out.block.type, ...(out.tails ?? []).map((tail) => tail.type));
+      if (out.batch) batch = out.batch;
+    }
+    return { batch, seen };
+  };
+
+  it('reads both regeneration lines and the plain round, and nothing it does not use', () => {
+    const { batch } = feed([...STAT_ALL, '[HP=259/259,MA=49/49]:']);
+    expect(batch?.type).toBe('user-stat-all');
+    expect(batch?.rows).toEqual([
+      { healthRegen: '6', restingRegen: '18' },
+      { baseManaRegen: '3', manaRegen: '3' },
+      { section: 'Attacks' },
+      // No `QnD(Total)` on a bash, and `(+xtra)` on both: optional columns.
+      { swings: '3.584', accuracy: '105', min: '8', max: '25' },
+      { section: 'Spells' }
+    ]);
+  });
+
+  it('is found behind the prompt it was typed at', () => {
+    const [first, ...rest] = STAT_ALL;
+    const { batch } = feed([`[HP=156/MA=13]:${first}`, ...rest, '[HP=156/MA=13]:']);
+    expect(batch?.type).toBe('user-stat-all');
+  });
+
+  it('names the monster a sheet was run against', () => {
+    const { batch } = feed([
+      ...STAT_ALL.slice(0, 9),
+      'Attacks against <black orc captain>:',
+      'Type        Swings   Accy   Min   Max   QnD(Total)   Avg/Rnd(+xtra)',
+      'Attack        2.32     86     5    22     0(2)            25(26)  ',
+      'Bash          1.16     83    19    79                     39      ',
+      '[HP=156/MA=13]:'
+    ]);
+    expect(batch?.rows).toContainEqual({ section: 'Attacks', against: 'black orc captain' });
+    expect(batch?.rows).toContainEqual({ swings: '2.32', accuracy: '86', min: '5', max: '22' });
+  });
+
+  it('reads a sheet without the extra column, and a negative figure', () => {
+    const { batch } = feed([
+      ...STAT_ALL.slice(0, 9),
+      'Attacks against <Mother Ungol>:',
+      'Type        Swings   Accy   Min   Max   QnD(Total)   Avg/Rnd',
+      'Attack       2.817     79     0     0     0(-2)            0      ',
+      '[HP=148/MA=13]:'
+    ]);
+    expect(batch?.rows).toContainEqual({ swings: '2.817', accuracy: '79', min: '0', max: '0' });
+  });
+
+  /* Walking into a room called `Attacks` is the failure the abilities listing had. */
+  it('reads no line of it as a room', () => {
+    const { batch, seen } = feed([...STAT_ALL, '[HP=259/259,MA=49/49]:']);
+    expect(batch?.type).toBe('user-stat-all');
+    expect(seen).not.toContain('room-name');
+    expect(seen).not.toContain('room-description');
+  });
+
+  it('is not the stat sheet', () => {
+    const { batch } = feed([
+      'Name: Festus Marcus                  Lives/CP:      9/0',
+      '[HP=259/259,MA=49/49]:'
+    ]);
+    expect(batch?.type).not.toBe('user-stat-all');
+  });
+});
+
+/*
  * The `sp` / `pow` listings, captured live from both sides (`npm run
  * probe:spellbook`, 2026-09-01, orohost) — one grammar under two headers,
  * with the column header consumed and the status line terminating. Before
@@ -2985,6 +3184,39 @@ describe("the server's message table", () => {
     expect(block.groups).toMatchObject({ caster: 'kobold thief', spell: 'curse', target: 'you' });
   });
 
+  /*
+   * `You retch uncontrollably!` is row 72, the `ConfuseMsg` of six spells on
+   * the shipped realm — `ActionFigure.CheckConfusion` printing it means the
+   * command was thrown away (todo 05). The character's own line is the
+   * fumble; the room's line is somebody else's and stays explained.
+   */
+  it("reads the character's line of a confusion row as a fumbled command", () => {
+    const rows = MessageBook.fromRows(
+      parseMessagesCsv(
+        [
+          'number,kind,line1,line2,line3',
+          '72,spell,"You retch uncontrollably!","%s retches uncontrollably!","You feel nauseous!"'
+        ].join('\n')
+      )
+    );
+    const confused = (plain: string) =>
+      new Classifier(
+        NAMES,
+        undefined,
+        undefined,
+        undefined,
+        (text) => rows.match(text),
+        (row) => row === 72
+      ).classify(line(plain)).block;
+    expect(confused('You retch uncontrollably!').type).toBe('command-fumbled');
+    expect(confused('Soul retches uncontrollably!').type).toBe('realm-message');
+    // And a realm that names no such row explains the line and decides nothing.
+    const plain = new Classifier(NAMES, undefined, undefined, undefined, (text) =>
+      rows.match(text)
+    ).classify(line('You retch uncontrollably!')).block;
+    expect(plain.type).toBe('realm-message');
+  });
+
   it('explains any other row by its number and role, and decides nothing', () => {
     const block = read('You are healed of 12 damage!');
     expect(block.type).toBe('realm-message');
@@ -2994,5 +3226,68 @@ describe("the server's message table", () => {
   it('never overrules a frame', () => {
     expect(read('You have been killed!').type).toBe('user-dies');
     expect(read('[HP=74/MA=66]:').type).toBe('status-line');
+  });
+});
+
+/**
+ * How the line ended reaches the block.
+ *
+ * `LoginAutomator` is the reader, and it is the only one: a script row that
+ * sends the account may answer a prompt and must not answer a notice, and on a
+ * BBS whose prompts this client has never met both arrive as `unknown` with
+ * nothing else to tell them apart. A regression here is silent in both
+ * directions — `newline` where the server flushed stops an unknown realm
+ * answering its login, `flush` where it did not removes the gate — so the
+ * producer is asserted as well as the consumer.
+ */
+describe('the terminator reaches the block', () => {
+  function framed(plain: string, terminator: StreamLine['terminator']) {
+    seq += 1;
+    return new Classifier(NAMES).classify({
+      seq,
+      at: 1_700_000_000_000 + seq,
+      text: plain,
+      plain,
+      terminator
+    });
+  }
+
+  it('carries what the tokenizer framed, whichever it was', () => {
+    // The login prompt: no newline, released by the idle flush.
+    expect(framed('Please enter your password:', 'flush').block.terminator).toBe('flush');
+    expect(framed('Please enter your password:', 'newline').block.terminator).toBe('newline');
+    // The status line's own repaint, which is how this stream frames at all.
+    expect(framed('[HP=33/33]:', 'repaint').block.terminator).toBe('repaint');
+  });
+
+  it('carries it for a line no rule claimed', () => {
+    // The case the gate turns on: an unrecognised BBS's prompt is `unknown`.
+    const block = framed('Login ID: ', 'flush').block;
+    expect(block.type).toBe('unknown');
+    expect(block.terminator).toBe('flush');
+  });
+
+  /*
+   * A batch is several lines and only the last one has a terminator to carry,
+   * so it takes the terminator of the line that *closed* it — here the status
+   * line the server moved on with.
+   */
+  it('gives a batch the terminator of the line that closed it', () => {
+    const classifier = new Classifier(NAMES);
+    const feed = (plain: string, terminator: StreamLine['terminator']) => {
+      seq += 1;
+      return classifier.classify({
+        seq,
+        at: 1_700_000_000_000 + seq,
+        text: plain,
+        plain,
+        terminator
+      });
+    };
+    feed('You are carrying a rope and grapple, 6 torch.', 'newline');
+    feed('You have no keys.', 'newline');
+    const closed = feed('[HP=33/33]:', 'flush');
+    expect(closed.batch?.type).toBe('user-inventory');
+    expect(closed.batch?.terminator).toBe('flush');
   });
 });

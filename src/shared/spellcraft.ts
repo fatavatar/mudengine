@@ -28,6 +28,7 @@
  */
 
 import { HAZARD_ABILITY } from './abilities';
+import { commandOf } from './commands';
 import type { WorldSpell } from './world';
 
 /**
@@ -156,6 +157,44 @@ export function castWord(
   return realmShort(wanted) ?? wanted;
 }
 
+/**
+ * A command read as a cast: the spell's word and whatever follows it, or null.
+ *
+ * Two spellings reach the wire. `c <short> [target]` is the `Cast` command,
+ * and the short name typed bare is the other — what this client sends
+ * (`castWord`), because a mystic's `swan` has no `c` form, and what the
+ * server reads as a cast either way: healbot's `rsto stat` was answered `You
+ * may not cast that spell on a user!` (2026-09-22). A bare word is a cast only
+ * when it is no command of the table's and `isSpellWord` owns it — the
+ * character's listing, the realm's shorts — so `look` is never read as one.
+ */
+export function castOf(
+  command: string,
+  isSpellWord: (word: string) => boolean
+): { word: string; argument: string } | null {
+  const words = command.trim().split(/\s+/);
+  const first = words[0] ?? '';
+  if (first.length === 0) return null;
+  const named = commandOf(first);
+  if (named === 'Cast') {
+    const word = words[1];
+    return word === undefined ? null : { word, argument: words.slice(2).join(' ') };
+  }
+  if (named !== null || !isSpellWord(first)) return null;
+  return { word: first, argument: words.slice(1).join(' ') };
+}
+
+/** Whether a word is the short name of a spell in this book, case-insensitively. */
+export function isShortIn(
+  word: string,
+  spellbook: ReadonlyArray<CastableSpell> | null | undefined
+): boolean {
+  const needle = word.trim().toLowerCase();
+  return (
+    needle.length > 0 && (spellbook ?? []).some((spell) => spell.short?.toLowerCase() === needle)
+  );
+}
+
 /** `Abil-n` ids, as `abilities.ts` names them. */
 const CURE_POISON = 20;
 const DISPELL_MAGIC = 73;
@@ -270,6 +309,16 @@ export function cureGates(spells: ReadonlyArray<AbilityPairs | undefined>): Cure
  */
 export function holdsMovement(spell: Pick<WorldSpell, 'abilities'> | null | undefined): boolean {
   return (spell?.abilities ?? []).some(([id]) => id === HAZARD_ABILITY.holdPerson);
+}
+
+/**
+ * Whether a spell confuses — `ActionFigure.CheckConfusion` tests one
+ * ability, `Confusion` (71), on every effect up, and a hit throws the
+ * command away. `holdsMovement`'s shape, for the same reason: the sentences
+ * are message data, the ability is the realm's own word (todo 05).
+ */
+export function confuses(spell: Pick<WorldSpell, 'abilities'> | null | undefined): boolean {
+  return (spell?.abilities ?? []).some(([id]) => id === HAZARD_ABILITY.confusion);
 }
 
 /**

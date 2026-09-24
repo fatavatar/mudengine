@@ -9,7 +9,10 @@ import {
   type ReactNode
 } from 'react';
 
-import CommandPalette, { type Command } from './components/CommandPalette';
+import CommandPalette, { type Command, type Found } from './components/CommandPalette';
+import { entryWord, flattenLookup, entryNumber } from './components/ReferenceDetail';
+import type { IconName } from './components/Icon';
+import { entityNumber } from '@shared/entities';
 import AutomationCard from './components/AutomationCard';
 import LinkCard from './components/LinkCard';
 import MapCard from './components/MapCard';
@@ -71,6 +74,7 @@ import LoopBuilderCard, {
 import ToolbarCard from './components/ToolbarCard';
 import { TOOLBAR_ACTIONS, type ToolbarSubject } from './lib/toolbar';
 import { useToolbarPins } from './hooks/useToolbarPins';
+import { recallStatsBase, rememberStatsBase } from './hooks/useRemembered';
 import NavigationCard from './components/NavigationCard';
 import { type TerminalHandle } from './components/TerminalView';
 import { useConfig } from './hooks/useConfig';
@@ -141,7 +145,12 @@ import { movementOf, type MovementConfirm } from '@shared/movement';
 import type { CombatTally } from '@shared/tally';
 import { EMPTY_AUTOMATION, type AutomationSnapshot } from '@shared/automation';
 import { EMPTY_ROOM_VERDICT, type RoomVerdict } from '@shared/verdict';
-import type { QuestWatched, RoomAsk } from '@shared/quests';
+import {
+  IDLE_QUEST_RUN,
+  type QuestRunProgress,
+  type QuestWatched,
+  type RoomAsk
+} from '@shared/quests';
 import type { Block } from '@shared/blocks';
 import { isTalkBlock } from '@shared/talk';
 import type { Discovery } from '@shared/memory';
@@ -168,6 +177,7 @@ import {
 } from '@shared/notifications';
 import {
   asRoomReference,
+  roomAddress,
   roomId,
   type LoopDraft,
   type RoomId,
@@ -300,6 +310,8 @@ interface SessionView {
    * typed at an asker, `stepKilled` for the monster a step is owned by.
    */
   questSaid: QuestWatched;
+  /** How a run of a quest's plan is going, or how the last one ended. */
+  questRun: QuestRunProgress;
 }
 
 /**
@@ -343,6 +355,19 @@ const NO_SESSIONS: SessionSummary[] = [];
 /** A character whose file names no supplies. One list, so a card's props hold still. */
 const NO_SUPPLIES: SupplyItem[] = [];
 
+/**
+ * The totals as they stand, written down as the Combat Stats card's baseline.
+ *
+ * The one writer for the button and the lap alike, so neither has to be
+ * compared against the other — and written down beside the layout, because
+ * main's totals outlive the launch and the reading they are subtracted from
+ * has to as well, or a launch silently undid the last press or the lap.
+ */
+function rebased(session: SessionId, view: SessionView): CombatTally {
+  rememberStatsBase(session, view.character.tally);
+  return view.character.tally;
+}
+
 const EMPTY_VIEW: SessionView = {
   state: INITIAL_STATE,
   character: EMPTY_CHARACTER,
@@ -359,7 +384,8 @@ const EMPTY_VIEW: SessionView = {
   unseen: { critical: 0, warning: 0, latest: null },
   learned: [],
   finds: [],
-  questSaid: {}
+  questSaid: {},
+  questRun: IDLE_QUEST_RUN
 };
 
 /**
@@ -483,8 +509,13 @@ interface CardContext {
    * character is standing and is priced against what it can get through.
    */
   loadErrand(block: number): ReturnType<IpcApi['questErrand']>;
+  /** The plan to reach one step, from where this character stands — addressed, like the errand. */
+  loadPlan(block: number, marked: number | null): ReturnType<IpcApi['questPlan']>;
+  /** Run that plan (todo 102), and stop it. Addressed like the plan. */
+  runPlan(block: number, marked: number | null): ReturnType<IpcApi['questRun']>;
+  stopRun(): void;
   /** Where to hunt from where this character stands — addressed, like the book. */
-  loadHunting(): ReturnType<IpcApi['huntingGrounds']>;
+  loadHunting(measure: string | null): ReturnType<IpcApi['huntingGrounds']>;
   /**
    * Walks a loop the Hunting card built, filed nowhere or under this
    * character — the builder's own save, offered for the *shown* character
@@ -547,6 +578,9 @@ interface CardContext {
   /** The tab's own name for the character, for the Self card before the sheet prints. */
   profileName: string;
   onSend?(line: string): void;
+  /** A talk-box line of several commands, and dropping what is left of one; addressed. */
+  onMacro(line: string): void;
+  dropMacro(): void;
 }
 
 /** What the loop builder needs of the client, built once per character and kept. */
@@ -580,7 +614,10 @@ interface AddressedActions {
   lookupName(query: string): ReturnType<IpcApi['lookup']>;
   loadQuests(): ReturnType<IpcApi['questBook']>;
   loadErrand(block: number): ReturnType<IpcApi['questErrand']>;
-  loadHunting(): ReturnType<IpcApi['huntingGrounds']>;
+  loadPlan(block: number, marked: number | null): ReturnType<IpcApi['questPlan']>;
+  runPlan(block: number, marked: number | null): ReturnType<IpcApi['questRun']>;
+  stopRun(): void;
+  loadHunting(measure: string | null): ReturnType<IpcApi['huntingGrounds']>;
   startMoving(loop: string | null): void;
   stopMoving(): void;
   /** Re-base the Combat Stats card to this character's totals as they stand. */
@@ -593,6 +630,8 @@ interface AddressedActions {
   setGangpath(on: boolean): void;
   setSupplies(items: SupplyItem[]): void;
   send(line: string): void;
+  macro(line: string): void;
+  dropMacro(): void;
 }
 
 /**
@@ -831,6 +870,7 @@ function cardElement(id: CardId, ctx: CardContext): ReactNode {
           character={character}
           inspect={ctx.inspect}
           onSelect={ctx.selectPlayer}
+          verdict={view.verdict}
         />
       );
     }
@@ -889,6 +929,17 @@ function cardElement(id: CardId, ctx: CardContext): ReactNode {
           */
           carrying={packRows(character.inventory)}
           /*
+            And where it stands, so an open plan is asked again from wherever
+            the character has walked to since it was drawn. Null is unplaced,
+            which the plan says as itself.
+          */
+          here={roomAddress(character.room)}
+          /*
+            And whether a walk or a lap is moving it, so an open plan holds its
+            ground until the walk ends rather than being asked at every room.
+          */
+          moving={movementOf(view.walk, view.loop).moving}
+          /*
             The realm's own count of each quest counter, where the realm has a
             command that prints one. It outranks the marks the player has left
             on the track, which is why it is handed to the card rather than
@@ -918,6 +969,14 @@ function cardElement(id: CardId, ctx: CardContext): ReactNode {
             is one this character may not be able to take.
           */
           loadErrand={ctx.loadErrand}
+          loadPlan={ctx.loadPlan}
+          /*
+            And the run of that plan (todo 102): pressed on the card, carried
+            by main, drawn from the progress main pushes for this character.
+          */
+          run={view.questRun}
+          runPlan={ctx.runPlan}
+          stopRun={ctx.stopRun}
           loadQuests={ctx.loadQuests}
           onName={ctx.chooseOnMap === null ? null : ctx.inspect}
           realmAt={ctx.realmAt}
@@ -991,6 +1050,11 @@ function cardElement(id: CardId, ctx: CardContext): ReactNode {
           // offline character is a box that silently does nothing, and the
           // backlog is still worth reading without one.
           onSend={ctx.inGame ? ctx.onSend : undefined}
+          onMacro={ctx.inGame ? ctx.onMacro : undefined}
+          macroQueued={
+            view.automation.queue.pending.filter((intent) => intent.typed === true).length
+          }
+          onDropMacro={ctx.dropMacro}
           onSelect={ctx.selectPlayer}
           // The `original` layout quotes the realm's whole sentence, so the
           // names in it are found the way the Alerts card finds them — through
@@ -1994,10 +2058,12 @@ export default function App() {
          * Carried, not reset. A snapshot is this window attaching to a session
          * that was already running, and main's totals are the same monotonic
          * ones the baseline was taken from — so a reading this window had
-         * survives the attach. A baseline older than the *session* is a
-         * different matter and is discarded by the card's own `stale` test.
+         * survives the attach — and one written down before the launch is
+         * read back here, since main's totals outlive the launch too. A
+         * baseline older than the *totals* is a different matter and is
+         * discarded by the card's own `stale` test.
          */
-        statsBase: was.statsBase,
+        statsBase: was.statsBase ?? recallStatsBase(id),
         lines: snapshot.lines.slice(-tuning().lineLogLimit),
         telnet: snapshot.telnet.slice(-tuning().telnetLogLimit),
         // The conversation log's tail: main keeps what was said on disk, so a
@@ -2010,7 +2076,8 @@ export default function App() {
         unseen: { critical: 0, warning: 0, latest: null },
         learned: snapshot.learned,
         finds: snapshot.finds,
-        questSaid: snapshot.questSaid
+        questSaid: snapshot.questSaid,
+        questRun: snapshot.questRun
       }));
     },
     [patchView]
@@ -2261,7 +2328,7 @@ export default function App() {
            */
           statsBase:
             payload.lapBegunAt !== null && payload.lapBegunAt !== v.loop.lapBegunAt
-              ? v.character.tally
+              ? rebased(id, v)
               : v.statsBase
         }))
       ),
@@ -2271,6 +2338,9 @@ export default function App() {
       api.onFinds(({ session: id, payload }) => patchView(id, (v) => ({ ...v, finds: payload }))),
       api.onQuestSaid(({ session: id, payload }) =>
         patchView(id, (v) => ({ ...v, questSaid: payload }))
+      ),
+      api.onQuestRun(({ session: id, payload }) =>
+        patchView(id, (v) => ({ ...v, questRun: payload }))
       ),
       // Not folded into a view: it is a question about a character rather than
       // a fact about one, and it is answered once.
@@ -2711,6 +2781,9 @@ export default function App() {
     setFocusedPane(Math.max(0, paneAt - 1));
   }, [paneAt, panes]);
 
+  /** The banner's Stop, addressed at the pane's own character; one function for every pane. */
+  const stopRunFor = useCallback((sid: SessionId) => void api.questStop(sid), [api]);
+
   const focusPane = useCallback(
     (id: SessionId) => {
       const at = panes.indexOf(id);
@@ -2889,6 +2962,8 @@ export default function App() {
       // And what the realm says would serve each condition, for the potion
       // rule list's suggestions.
       loadServing: (session: SessionId) => api.itemsServing(session),
+      // And the realm's own rules of the same kind, for the rows under it.
+      loadWards: (session: SessionId) => api.wards(session),
       // And the monsters the realm names, for the priority list's picker.
       loadMobNames: (session: SessionId) => api.mobNames(session)
     }),
@@ -2965,11 +3040,14 @@ export default function App() {
     (query: string) => api.searchRooms(session, query),
     [api, session]
   );
-  const walkRoute = useCallback((route: Route) => api.walkRoute(session, route), [api, session]);
+  const walkRoute = useCallback(
+    (route: Route, run: boolean) => api.walkRoute(session, route, run),
+    [api, session]
+  );
   /** *Collect it first*, from the route panel's alternative that needs one (todo 07). */
   const collectThenWalk = useCallback(
-    (items: Array<{ id: number; name: string }>, route: Route) =>
-      api.collectThenWalk(session, items, route),
+    (items: Array<{ id: number; name: string }>, route: Route, run: boolean) =>
+      api.collectThenWalk(session, items, route, run),
     [api, session]
   );
 
@@ -3140,6 +3218,74 @@ export default function App() {
       setAsked({ name, anchor });
     },
     [dismissPeek]
+  );
+
+  /**
+   * What the realm knows by a name typed into the palette: a monster, an item,
+   * a spell, offered as rows that open the same quick view a clicked name does.
+   *
+   * The palette lists commands and never the realm's population — but that
+   * rule is about the *shelf*: a row per monster while browsing is a wall. A
+   * typed query is a different question, and these rows exist only for as
+   * long as it does (`transient`), under their own heading below the rooms.
+   * Choosing one puts the panel where the palette stood, because the name it
+   * answers for was never drawn anywhere else on screen.
+   */
+  const findInRealm = useCallback(
+    async (query: string): Promise<Command[]> => {
+      const entries = flattenLookup(await api.lookup(session, query));
+      return entries.slice(0, tuning().paletteFoundRows).map((entry, index) => {
+        const kindWord = entryWord(entry);
+        const number = entityNumber(entryNumber(entry));
+        const icon: IconName =
+          entry.kind === 'mob'
+            ? 'sword'
+            : entry.kind === 'spell'
+              ? 'bolt'
+              : entry.kind === 'item'
+                ? 'bag'
+                : 'users';
+        return {
+          // Position, not name: the realm holds two `maelstrom` rows and four
+          // `void sphere` rows, and a keyed list handed a duplicate keeps a corpse.
+          id: `lookup:${entry.kind}:${index}`,
+          icon,
+          transient: true,
+          label: t('palette.navigate.lookupLabel', { name: entry.name }),
+          hint:
+            number === null
+              ? kindWord
+              : t('palette.navigate.lookupNumberHint', { kindWord, number: String(number) }),
+          run: (from?: PopoverAnchor) => {
+            // A hotkey has no box to hand over; the palette always does.
+            inspectAt(
+              entry.name,
+              from ?? {
+                box: {
+                  top: 0,
+                  right: window.innerWidth / 2,
+                  bottom: 0,
+                  left: window.innerWidth / 2
+                },
+                within: document.body
+              }
+            );
+          }
+        };
+      });
+    },
+    [api, session, inspectAt]
+  );
+  /** Both answers to a typed query, rooms first: Enter on a room query means what it did. */
+  const findFromPalette = useCallback(
+    async (query: string): Promise<Found[]> => {
+      const [rooms, realm] = await Promise.all([findRooms(query), findInRealm(query)]);
+      return [
+        { key: 'rooms', label: t('palette.groups.found'), items: rooms },
+        { key: 'realm', label: t('palette.groups.realm'), items: realm }
+      ];
+    },
+    [findRooms, findInRealm]
   );
 
   /**
@@ -3435,7 +3581,7 @@ export default function App() {
    *
    * **The Map card's, the loop builder's, one panel with one button** (todo
    * 2026-09-14). The builder's was given `act: null` first, on the argument
-   * that a click there is a pick and *Walk to* opens a dialog over the float
+   * that a click there is a pick and *Plan route* opens a dialog over the float
    * being drawn on. That was wrong twice over: it left the builder's rooms
    * with the way-there offered nowhere at all — the `<title>` still said
    * *Route to …*, which is the affordance a button is supposed to be — and a
@@ -3470,7 +3616,7 @@ export default function App() {
    * the head. The same panel, with the route list's own action where the room
    * is a step of the plan: *walk here* — the plan is already on screen, and
    * stopping short at a room is what picking one of its steps already means.
-   * A neighbour the plan does not pass through gets the map's *walk to*,
+   * A neighbour the plan does not pass through gets the map's *plan route*,
    * which re-plans by name, in the open, rather than nothing: the picture is
    * there to be read, and a room on it that answers for itself but cannot be
    * gone to would be the one room on the screen that is.
@@ -4809,7 +4955,7 @@ export default function App() {
    * either, which is what makes both safe.
    */
   const resetStats = useCallback(
-    (sid: SessionId) => patchView(sid, (v) => ({ ...v, statsBase: v.character.tally })),
+    (sid: SessionId) => patchView(sid, (v) => ({ ...v, statsBase: rebased(sid, v) })),
     [patchView]
   );
   const resetStatsRef = useRef(resetStats);
@@ -4839,7 +4985,10 @@ export default function App() {
         lookupName: (query) => api.lookup(sid, query),
         loadQuests: () => api.questBook(sid),
         loadErrand: (block) => api.questErrand(sid, block),
-        loadHunting: () => api.huntingGrounds(sid),
+        loadPlan: (block, marked) => api.questPlan(sid, block, marked),
+        runPlan: (block, marked) => api.questRun(sid, block, marked),
+        stopRun: () => void api.questStop(sid),
+        loadHunting: (measure) => api.huntingGrounds(sid, measure),
         startMoving: (loop) => startMovingRef.current(sid, loop, null),
         stopMoving: () => void api.stopMoving(sid),
         // Through a ref like `selectPlayer` beside it: this one changes state
@@ -4857,7 +5006,9 @@ export default function App() {
         setGangpath: (on) => void api.setRemoteGangpath(sid, on),
         setSupplies: (items) =>
           void api.setSupplies(sid, items).then((refused) => sayRefusalRef.current(sid)(refused)),
-        send: (line) => void api.input(sid, `${line}\r`)
+        send: (line) => void api.input(sid, `${line}\r`),
+        macro: (line) => api.macro(sid, line),
+        dropMacro: () => api.dropMacro(sid)
       };
       boundCache.current.set(sid, bound);
       return bound;
@@ -4955,6 +5106,9 @@ export default function App() {
         goToRoom,
         loadQuests: bound.loadQuests,
         loadErrand: bound.loadErrand,
+        loadPlan: bound.loadPlan,
+        runPlan: bound.runPlan,
+        stopRun: bound.stopRun,
         loadHunting: bound.loadHunting,
         runHunt: shown ? runHunt : null,
         createHunt: shown ? createHunt : null,
@@ -5037,7 +5191,9 @@ export default function App() {
         toolbarPinned: toolbarPins.pinned,
         pinToolbarButton: toolbarPins.toggle,
         nameIndex: nameIndexes[sid] ?? null,
-        onSend: shown ? sayOnChannel : bound.send
+        onSend: shown ? sayOnChannel : bound.send,
+        onMacro: bound.macro,
+        dropMacro: bound.dropMacro
       };
     },
     [
@@ -5502,6 +5658,13 @@ export default function App() {
                   // laid out, so it stays measurable, and out of the tab order.
                   pane={at >= 0 ? at : paneAt}
                   palette={consolePalette}
+                  // The run banner over this pane: the push main addresses at
+                  // this character, whichever pane is being read.
+                  run={views[entry.id]?.questRun ?? IDLE_QUEST_RUN}
+                  // And how far through the walk the run is on, for the step
+                  // count beside the node it is heading for (todo 03).
+                  walk={views[entry.id]?.walk ?? null}
+                  onStopRun={stopRunFor}
                   session={entry.id}
                   settings={config.terminal}
                   shown={at >= 0}
@@ -5775,7 +5938,7 @@ export default function App() {
 
       <CommandPalette
         commands={commands}
-        find={findRooms}
+        find={findFromPalette}
         onClose={closePalette}
         onTogglePin={pins.toggle}
         open={paletteOpen}
@@ -5912,6 +6075,7 @@ export default function App() {
         loadTrainers={settingsApi.loadTrainers}
         loadBanks={settingsApi.loadBanks}
         loadServing={settingsApi.loadServing}
+        loadWards={settingsApi.loadWards}
         loadMobNames={settingsApi.loadMobNames}
         revealProfiles={settingsApi.revealProfiles}
         saveProfile={settingsApi.saveProfile}

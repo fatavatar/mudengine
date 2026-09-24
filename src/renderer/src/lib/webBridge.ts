@@ -159,6 +159,8 @@ export function createWebBridge(): IpcApi {
 
     clientReady: () => send(Send.clientReady),
     input: (session, data) => send(Send.input, session, data),
+    macro: (session, line) => send(Send.macro, session, line),
+    dropMacro: (session) => send(Send.dropMacro, session),
     resize: (session, size) => send(Send.resize, session, size),
     diagnostics: (on) => send(Send.diagnostics, on),
     debugFeed: (on) => send(Send.debugFeed, on),
@@ -172,10 +174,10 @@ export function createWebBridge(): IpcApi {
     saveDebug: (session) => invoke(Invoke.saveDebug, session),
     getCharacter: (session) => invoke(Invoke.getCharacter, session),
     routeTo: (session, map, room) => invoke(Invoke.routeTo, session, map, room),
-    walkRoute: (session, route) => invoke(Invoke.walkRoute, session, route),
+    walkRoute: (session, route, run) => invoke(Invoke.walkRoute, session, route, run),
     startMoving: (session, loop, confirmed) => invoke(Invoke.startMoving, session, loop, confirmed),
-    collectThenWalk: (session, items, route) =>
-      invoke(Invoke.collectThenWalk, session, items, route),
+    collectThenWalk: (session, items, route, run) =>
+      invoke(Invoke.collectThenWalk, session, items, route, run),
     stopMoving: (session) => invoke(Invoke.stopMoving, session),
     stepBack: (session, confirmed) => invoke(Invoke.stepBack, session, confirmed),
     listLoops: (session) => invoke(Invoke.listLoops, session),
@@ -270,12 +272,16 @@ export function createWebBridge(): IpcApi {
     worldInfo: (session) => invoke(Invoke.worldInfo, session),
     questBook: (session) => invoke(Invoke.questBook, session),
     questErrand: (session, block) => invoke(Invoke.questErrand, session, block),
+    questPlan: (session, block, marked) => invoke(Invoke.questPlan, session, block, marked),
+    questRun: (session, block, marked) => invoke(Invoke.questRun, session, block, marked),
+    questStop: (session) => invoke(Invoke.questStop, session),
     localMap: (session, map, room, radius) => invoke(Invoke.localMap, session, map, room, radius),
     roomBrief: (session, map, room) => invoke(Invoke.roomBrief, session, map, room),
-    huntingGrounds: (session) => invoke(Invoke.huntingGrounds, session),
+    huntingGrounds: (session, measure) => invoke(Invoke.huntingGrounds, session, measure),
     trainers: (session) => invoke(Invoke.trainers, session),
     banks: (session) => invoke(Invoke.banks, session),
     itemsServing: (session) => invoke(Invoke.itemsServing, session),
+    wards: (session) => invoke(Invoke.wards, session),
     draftLoop: (session, rooms) => invoke(Invoke.draftLoop, session, rooms),
     wearer: (session) => invoke(Invoke.wearer, session),
     lookup: (session, query) => invoke(Invoke.lookup, session, query),
@@ -308,6 +314,7 @@ export function createWebBridge(): IpcApi {
     onFinds: (handler) => subscribe(Push.finds, handler),
     onCharacterReset: (handler) => subscribe(Push.characterReset, handler),
     onQuestSaid: (handler) => subscribe(Push.questSaid, handler),
+    onQuestRun: (handler) => subscribe(Push.questRun, handler),
     onConfig: (handler) => subscribe(Push.config, handler),
     onInternal: (handler) => subscribe(Push.internal, handler)
   };

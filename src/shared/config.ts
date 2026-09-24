@@ -19,6 +19,7 @@
 import { PRIORITY } from './automation';
 import { bool, int, isRecord, str } from './values';
 import { asEvents, type ScheduledEvent } from './events';
+import { GEAR_WHENS, type GearSet, type GearWhen } from './gear';
 import { asLoops, mergeNamed, type Loop } from './loops';
 /*
  * `DENOMINATIONS` is the one *value* this module takes from `character.ts`, and
@@ -78,6 +79,26 @@ export interface LoginStep {
   when: string;
   /** What to send. May be empty, for a bare Enter. */
   send: string;
+  /**
+   * Whether this row answers its prompt every time it arrives.
+   *
+   * Off by default, because *once per connection* is what a menu wants: a menu
+   * that comes back means the answer was refused, and answering again loops.
+   *
+   * A **pager** is the other kind of prompt, and the rule above reads it
+   * wrongly. `(N)onstop, (Q)uit, or (C)ontinue?` is asked once per screenful,
+   * so a BBS printing three screens asks three times and every answer works;
+   * `Q` stopped the pager the first time and the sequence then sat at the
+   * second one for ever, because the row was spent. The two are not
+   * distinguishable from the prompt's own text -- both are a line ending in a
+   * question -- so the realm's script is where it is said.
+   *
+   * **Never on a row that sends a credential.** The account's *once per
+   * connection* is what stops an automated client retrying a password into a
+   * lockout, and it is keyed on the credential rather than on the row for
+   * exactly that reason. `LoginAutomator` ignores this flag there.
+   */
+  repeat?: boolean;
 }
 
 /**
@@ -219,19 +240,11 @@ export interface Server {
    */
   database: string;
   /**
-   * The realm's own ranking of its monsters, merged under every character's.
-   *
-   * **On the realm, because a monster is.** `mobPriority` names things by the
-   * name this realm's data spells them, so a ranking written for one realm
-   * means nothing on another — and every character playing here wants the same
-   * answer to *which of these is worth killing first*. Stating it per character
-   * would be the same list written out once per character, which is what
-   * `login` and `database` above are on the realm to avoid.
-   *
-   * Merged rather than replaced: see `mergeMobPriorities`. A character's own
-   * row for a monster wins, and a monster only the realm names still counts.
+   * Whether a hang-up here is charged, for every character playing here that
+   * does not say for itself; null leaves it to the options file. See
+   * `HangUpConfig.penalties`.
    */
-  mobPriority: MobPriority[];
+  hangPenalties: boolean | null;
 }
 
 export interface FontConfig {
@@ -603,21 +616,22 @@ export interface HangUpConfig {
   /** Fraction of maximum health below which hanging up is considered. */
   belowHealth: number;
   /**
-   * Refuse while the client can see a reason the disconnect would be penalised.
+   * Whether this realm charges for a hang-up at all (todo 01).
    *
-   * **On by default, and turning it off is a decision about a character.** The
-   * client can see four of the five conditions; with this off it will hang up
-   * anyway, into a penalty it can often predict. Off is for a realm where PvP
-   * is disabled or the penalty is not configured, which the client cannot
-   * detect and the player can know.
+   * Where it does, hanging up is refused while the client can see a reason it
+   * would be charged; where it does not, it hangs up below `belowHealth`.
+   * **Off by default**: a PvE realm charges nothing. Paradigm's realm menu
+   * states it (`Hang Penalties 25%`), and what it said outranks this; a
+   * realm's own `server.yaml` (`hangPenalties`) outranks the options file,
+   * and a character's own file outranks its realm.
    */
-  onlyWhenClean: boolean;
+  penalties: boolean;
   /**
    * Also hang up when a player is in the room, at any health.
    *
    * Off by default. It is the PvP panic button, and it is also the one most
-   * likely to fire during the five-minute window — so it is the setting that
-   * most needs `onlyWhenClean` left on.
+   * likely to fire during the five-minute window, which is where a realm's
+   * penalty bites.
    */
   onPlayerInRoom: boolean;
 }
@@ -845,6 +859,15 @@ export interface CombatConfig {
    */
   retaliate: boolean;
   /**
+   * Lend auto-combat to a character hit for this many rounds without moving,
+   * while it is off or the journey declined it. 0 never does.
+   *
+   * *Off* means do not open fights; it never meant stand there and be killed.
+   * `CombatLease` turns the switch on in the character's file and hands it
+   * back on the next arrival in another room (todo 00, 2026-09-23).
+   */
+  defendAfterRounds: number;
+  /**
    * Leave alone a monster somebody **outside the party** is already fighting.
    *
    * MegaMUD's *PoliteAttacks*, in MegaMUD's own direction and under its own
@@ -869,20 +892,6 @@ export interface CombatConfig {
    */
   maxMobs: number;
   /**
-   * Do not open on a monster whose fight is expected to cost more than this
-   * share of **current** health. 0 never refuses.
-   *
-   * The one preference docs/mudplay/05 leaves to the player — *how hard a
-   * fight am I willing to take* — read against the same `Verdict` the cards
-   * draw and the ranking orders on, so the card, the engine and this refusal
-   * cannot disagree. The cost is a bound (`prowess.swing`), so a monster is
-   * declined when its *at most* figure reaches the share. An unknown cost is
-   * not a high one: refusing it would make auto-combat useless on a lineage
-   * whose arithmetic the client does not have. Hitting back ignores this, as
-   * it ignores every other limit here.
-   */
-  maxFightCost: number;
-  /**
    * Re-read the room every this many rounds of a fight. 0 never does.
    *
    * MegaMUD's *rescan room*. A fight is the one situation where the room list
@@ -898,43 +907,28 @@ export interface CombatConfig {
    */
   refreshRounds: number;
   /**
-   * Monsters never attacked automatically, by name.
-   *
-   * Matched the way the wire spells them: lowercased, leading article stripped.
-   * The place for the thing that is technically hostile and reliably fatal.
-   */
-  avoid: string[];
-  /**
-   * The order monsters are attacked in, by name — MegaMUD's *Attack Priority
-   * List*, as five bands rather than one flat list.
-   *
-   * **This replaces the weighing rather than ranking against it.** Where the
-   * room holds a listed monster, the band decides and `src/shared/menace.ts`
-   * is not consulted: somebody who writes *shamans first* means first, not
-   * first unless the arithmetic disagrees, and a ranking that the realm's own
-   * numbers could overturn is one nobody can predict from reading it. Within
-   * one band the room's own listing order decides, which is the order that
-   * was there before any weighing existed.
-   *
-   * A monster no row names is in `default`, so the list is somewhere to add
-   * the one monster that matters and never a ranking of the whole realm.
-   * Every refusal — `avoid`, the evil-point cost, the health and experience
-   * caps, the disposition gate — still applies **first**: a band says which of
-   * the monsters worth attacking to attack, never that one is worth attacking.
-   *
-   * Merged across the three scopes by monster, narrowest winning, unlike
-   * every other list here — see `mergeMobPriorities`.
-   */
-  mobPriority: MobPriority[];
-  /**
    * What this character says about particular monsters — MegaMUD's *Monster
    * Details*: relationship, band, rest and backstab flags, and a spell to
    * fight each with (`MonsterRule`).
    *
-   * Laid **field by field** over the realm's imported table
-   * (`servers/<id>/monsters.yaml`) when a session is configured, so a row here
-   * need state only what this character does differently — a shaman's attack
-   * spell for a monster the realm marks Flee keeps the Flee.
+   * **The one list about named monsters** (2026-09-24). Upstream's
+   * `mobRules` — `never` and five bands — said two of these fields, in a
+   * second panel beside this one: `never` is a Friend (never attacked, even
+   * when it swings first) and a band is `priority`. Folded in by
+   * `theMobRulesBecameMonsterRows`.
+   *
+   * **A band replaces the weighing rather than ranking against it.** Where the
+   * room holds a monster with a priority, the band decides and
+   * `src/shared/menace.ts` is not consulted: somebody who writes *shamans
+   * first* means first. Every refusal still applies first — a band says
+   * which of the monsters worth attacking to attack, never that one is.
+   *
+   * Laid **field by field**: the realm's imported table
+   * (`servers/<id>/monsters.yaml`) under the options file's rows, and those
+   * under the character's own (`withGlobalMonsters`, `withRealmMonsters`) —
+   * so a row need state only what it does differently, and a shaman's
+   * attack spell for a monster the realm marks Flee keeps the Flee. The
+   * player's own words, either file, outrank a table imported from MegaMUD.
    */
   monsters: MonsterRule[];
   /**
@@ -1068,9 +1062,9 @@ export interface RemotesConfig {
   /**
    * Remotes anybody who has **joined this character's party** may use.
    *
-   * The one grant that ships non-empty, and the two names on it are the two
-   * that survive the test: **they say nothing the party listing does not
-   * already say, and they do nothing to this character.**
+   * The one grant that ships non-empty, and the first two names on it survive
+   * the test: **they say nothing the party listing does not already say, and
+   * they do nothing to this character.**
    *
    * - `@health` is the absolute figures behind the percentage the listing
    *   already shows — the same fact, to more decimal places, and the one
@@ -1079,6 +1073,11 @@ export interface RemotesConfig {
    * - `@bless-expired` is a member telling this character their blessing ran
    *   out. It sends nothing; what to do about it is `Blessings`' decision,
    *   made against this character's own configuration.
+   * - `@heal` (2026-09-19) does do something: one party heal, for a member the
+   *   thresholds had not reached. Nothing while `healParty` or `healBelow` is
+   *   off; while on, what it adds is that a member — the uninvited follower
+   *   below included — can spend this character's mana down to `minMana`, one
+   *   cast per `healCooldownMs`, by asking. A `deny` by name takes it back.
    *
    * **Four more were on this list and were taken off** (2026-09-02, review),
    * because the sentence that justified them was false:
@@ -1115,7 +1114,8 @@ export interface RemotesConfig {
    * `invite` before every join and one that starts mid-session — and
    * `npm run probe:party -- --pair soul,yang` is where to ask. Until it
    * answers, the defence is the list above being two facts about this
-   * character's own body, rather than the membership test.
+   * character's own body and one heal bounded by the heal's own limits,
+   * rather than the membership test.
    */
   party: RemoteName[];
   /**
@@ -1551,6 +1551,24 @@ export interface HealthConfig {
    * changes is that a player who wants it can now say it.
    */
   potions: PotionRule[];
+  /**
+   * Use what the pack carries against a room's own spell — the realm's half
+   * of the list above (todo 105; moved here and turned on, todo 02).
+   *
+   * Every row of `potions` is *use this item when that is true*, and this is
+   * the same sentence written by the realm instead of by the player: it says
+   * which spell stops a room's effect (`avoidedBySpell`) and which item's use
+   * casts it, so before a step into such a room, and again whenever the spell
+   * lapses while standing in one, the item is used. One rule in each shipped
+   * realm — the waterskin against the desert spell, 945 rooms of it.
+   *
+   * **On by default, which is `AutoLight`'s argument and not a new one**: a
+   * rule cannot see the step ahead, the desert takes 13 a tick from a
+   * character who has the answer in the pack, and the charge it spends costs
+   * 25 copper. It was off and under Movement until a player crossed the
+   * desert drinking by hand.
+   */
+  useWards: boolean;
 }
 
 /**
@@ -1589,30 +1607,44 @@ export const POTION_VERBS = ['drink', 'use'] as const;
 export type PotionVerb = (typeof POTION_VERBS)[number];
 
 /**
- * One monster, and where it sits in the order things are attacked in.
+ * One monster, and how the automation treats it.
  *
- * The row shape of the priority list. `mob` is a `mobKey` — lowercased, the
+ * The row shape of the monster list. `mob` is a `mobKey` — lowercased, the
  * leading article stripped — because that is the one spelling the wire ever
- * uses and the same normalisation `avoid` has always applied.
+ * uses and the same normalisation the old flat `avoid` list always applied.
  */
-export interface MobPriority {
+export interface MobRule {
   /** The monster, keyed the way the wire spells it. */
   mob: string;
-  /** Which band it is attacked in. See `MOB_PRIORITIES`. */
-  priority: MobPriorityBand;
+  /** Left alone, or the band it is attacked in. See `MOB_TREATMENTS`. */
+  treat: MobTreatment;
 }
 
 /**
  * The five bands, ordered exactly as they are attacked.
  *
  * The array's order **is** the ranking — `MOB_PRIORITIES.indexOf` is what
- * sorts a room — so these are never reordered for readability. `default` is
- * the middle on purpose: `high` and `low` are defined against it, and a
- * monster nobody listed is in it, which is what makes the list something you
- * add one row to rather than a ranking of every monster in the realm.
+ * sorts a room — so these are never reordered for readability, and nothing
+ * that is not a rank ever joins them. `default` is the middle on purpose:
+ * `high` and `low` are defined against it, and a monster nobody listed is in
+ * it, which is what makes the list something you add one row to rather than a
+ * ranking of every monster in the realm.
  */
 export const MOB_PRIORITIES = ['first', 'high', 'default', 'low', 'last'] as const;
 export type MobPriorityBand = (typeof MOB_PRIORITIES)[number];
+
+/**
+ * What a row may say: leave it alone, or where it comes in the order.
+ *
+ * Two kinds of fact in one closed union, deliberately — a refusal and a rank —
+ * because they are answers to one question a player asks about one monster,
+ * and because holding them apart is what made *never attack* a second list
+ * that merged by different rules. `never` is first because it is read first:
+ * `AutoCombat.choose` declines on it before anything is ranked at all. It is
+ * **not** in `MOB_PRIORITIES`, so no ranking can ever sort on it.
+ */
+export const MOB_TREATMENTS = ['never', ...MOB_PRIORITIES] as const;
+export type MobTreatment = (typeof MOB_TREATMENTS)[number];
 
 /** Where an unlisted monster sits: the middle band, and the reason it exists. */
 export const DEFAULT_MOB_PRIORITY: MobPriorityBand = 'default';
@@ -1782,6 +1814,15 @@ export interface MovementConfig {
    */
   walkWhileBlind: boolean;
   /**
+   * Turn auto-combat back on when a route the player asked for arrives (todo
+   * 11). The ordinary reason to walk with it off is to get somewhere without
+   * fighting on the way; on arrival the reason is gone. Only a route the
+   * player asked for — a loop's leg and an errand are not journeys with an
+   * arrival in them. The switch flips the character's own file, so the
+   * toolbar shows it.
+   */
+  fightOnArrival: boolean;
+  /**
    * Walk on while poisoned. Off, the walk waits the poison out — MegaMUD's
    * `IgnorePoison` default. A cure under `spells.cures` ends the wait sooner.
    * Disease is not a movement matter and has no switch.
@@ -1928,19 +1969,20 @@ export interface SpellsConfig {
   /**
    * The spell to attack with. Blank casts nothing.
    *
-   * Sent as `c <short> <target>` — the realm's own `Cast` command, which
-   * answers to `c`, `ca`, `cas` and `cast`, reads exactly **one word** as the
-   * spell, and that word is the listing's short name, not a prefix of the
-   * name (measured 2026-09-01: `c pressure points` answers `You do not know
-   * how to cast pressure.`). The configured value stays the readable whole
-   * name, or an abbreviation; `castWord` resolves it when the cast goes out.
+   * Sent as `<short> <target>` — the listing's short name is itself the
+   * command (`swan`, `mihe giant rat` on the wire: captures/083, 092) and
+   * never goes behind `c`, since a mystic's kai powers have no `c` form
+   * (2026-09-17). Nor is it a prefix of the name (measured 2026-09-01:
+   * `c pressure points` answers `You do not know how to cast pressure.`).
+   * The configured value stays the readable whole name, or an
+   * abbreviation; `castWord` resolves it when the cast goes out.
    */
   attack: string;
   /**
    * The spell to attack the whole room with, when the fight is crowded enough
    * — MegaMUD's MultAttack. Blank casts nothing.
    *
-   * Cast bare (`c <spell>`, no target): the wire shows an area spell cast
+   * Cast bare (`<spell>`, no target): the wire shows an area spell cast
    * with no target answering `You cast poison cloud on the room!`
    * (captures/131, `pclo` typed at the prompt). A named target on a room
    * spell has never been seen on the wire, so it is not sent.
@@ -2113,6 +2155,15 @@ export interface SpellsConfig {
    * speaks on another player's telepath channel unasked.
    */
   notifyPartyOnWearOff: boolean;
+  /**
+   * Whether the blessings below are cast unasked at all.
+   *
+   * The toolbar's *Auto-Bless* switch (todo 04): somebody who wants the
+   * mana for healing turns it off for the fight and back on after, without
+   * emptying the list. Off, `Blessings` proposes nothing; the list, the
+   * cures and the heal are untouched.
+   */
+  autoBless: boolean;
 }
 
 /** Whom a blessing is cast on: this character, or every listed party member. */
@@ -2231,6 +2282,13 @@ export interface PartyConfig {
    * follower a lair finds alone. Out of combat only, like every rest.
    */
   restWithLeader: boolean;
+  /**
+   * Say `@heal` in the room below this share of maximum health, while in a
+   * party — MegaMUD's *Ask For Healing* (`PartyAskHeal%`). 0 never asks. Said
+   * once on the crossing and again every `tuning.remotes.healAskAgainMs` while
+   * still under it; a party member running either client answers with a heal.
+   */
+  askForHealBelow: number;
 }
 
 /**
@@ -2254,7 +2312,10 @@ export interface AutomationConfig {
    * vocabulary — see `./rules.ts` for why it is not `tproxy`'s DSL.
    */
   rules: Rule[];
-  /** Master switch. With this off, only what the player types is ever sent. */
+  /**
+   * Master switch. With this off, only what the player types is ever sent, bar
+   * the keep-alive (`idle`), which keeps the connection rather than acting.
+   */
   enabled: boolean;
   /**
    * Sent once on entering the realm, to populate the HUD from an otherwise
@@ -2332,6 +2393,59 @@ export interface AutomationConfig {
   /** Spending character points on the stat screen. */
   hunting: HuntingAutomationConfig;
   train: TrainConfig;
+  /** Carrying a quest's plan through the arbiter. See `QuestsConfig`. */
+  quests: QuestsConfig;
+  /** Which kit to be in, and when. See `GearConfig`. */
+  gear: GearConfig;
+}
+
+/**
+ * Running a quest's plan — the Quest card's *Run it* (todo 102).
+ *
+ * Off, like everything automated: a run walks across the realm, buys, hunts
+ * and fights for as long as the chain takes, and a character left overnight
+ * should do that only where somebody said so. The card's press refuses out
+ * loud while this is off and names the switch.
+ */
+export interface QuestsConfig {
+  enabled: boolean;
+}
+
+/**
+ * The equipment manager — which kit to be in, and when (todo 00).
+ *
+ * The gear buttons this sits beside are presses: *put back what was on*,
+ * *wear everything*. What they cannot say is *these boots while walking and
+ * those while fighting*, which is a decision rather than an action, and one
+ * the client is in a position to make because it already knows which of the
+ * two is happening.
+ *
+ * Off, like everything automated: a set the player has not finished writing
+ * would otherwise start swapping kit mid-fight. Empty by default for the
+ * same reason `health.potions` is — nothing is worn unasked.
+ */
+export interface GearConfig {
+  enabled: boolean;
+  /** The kits, most general first. See `GearSet`. */
+  sets: GearSet[];
+  /** The off-round weapon invocation. See `OffRoundConfig`. */
+  offRound: OffRoundConfig;
+}
+
+/**
+ * `use <item> <target>` between rounds — todo 00's nexus spear.
+ *
+ * **It costs the round.** The item has to be in hand before `use` will take
+ * it (`UseCommand` answers *You do not have <item> equipped.*), so a
+ * two-handed one is six commands — off-hand off, spear on, use, weapon
+ * back, off-hand back — against a window of three. `everyRounds` is the
+ * floor under that, and 0 is off, which is where it ships.
+ */
+export interface OffRoundConfig {
+  /** The item to invoke. Blank is off, whatever `everyRounds` says. */
+  item: string;
+  /** At most one invocation this many rounds. 0 never invokes. */
+  everyRounds: number;
 }
 
 export interface AppConfig {
@@ -2425,14 +2539,23 @@ export const DEFAULT_CONFIG: AppConfig = {
        * What Paradigm asks, in the order it asks it. Anything else is a BBS
        * somebody adds rows for — matched rather than sequenced, so a row that
        * never matches costs nothing.
+       *
+       * The account is two rows like any other, filled in from the character's
+       * own file (`src/shared/login.ts`). Every BBS asks for it and every BBS
+       * words the question differently, which is the whole reason it is here
+       * rather than keyed on a block type the classifier has to recognise.
        */
       steps: [
+        { when: 'Please enter your username', send: '{user}' },
+        { when: 'Please enter your password', send: '{password}' },
         { when: 'Please enter your selection', send: 'P' },
         { when: 'Please select a realm', send: '1' },
         { when: 'Please select a character', send: '1' },
         { when: '[PARADIGM]', send: 'E' },
         { when: 'Accept these realm rules to continue', send: '1' },
-        { when: '(N)onstop, (Q)uit, or (C)ontinue?', send: '' }
+        // A pager, asked once per screenful: see `LoginStep.repeat`. Without
+        // the flag the first one is answered and the login sits at the second.
+        { when: '(N)onstop, (Q)uit, or (C)ontinue?', send: '', repeat: true }
       ]
     },
     // Paradigm's word. A realm without it says so in its own `locate:`.
@@ -2562,7 +2685,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       hangUp: {
         enabled: false,
         belowHealth: 0.15,
-        onlyWhenClean: true,
+        penalties: false,
         onPlayerInRoom: false
       },
       retreat: {
@@ -2595,12 +2718,10 @@ export const DEFAULT_CONFIG: AppConfig = {
       hideForOpener: false,
       engage: 'hostile',
       retaliate: true,
+      defendAfterRounds: 2,
       politeAttacks: false,
       maxMobs: 0,
-      maxFightCost: 0,
       refreshRounds: 3,
-      avoid: [],
-      mobPriority: [],
       monsters: [],
       maxTargetHealth: 0,
       minMobs: 0,
@@ -2608,7 +2729,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     },
     // Off, like everything automated. A client that sits down on its own is one
     // deciding when a fight is over.
-    party: { assistLeader: false, defendParty: false, restWithLeader: false },
+    party: { assistLeader: false, defendParty: false, restWithLeader: false, askForHealBelow: 0 },
     health: {
       /*
        * The figures `loopPauseBelow` / `loopResumeAt` shipped with, inherited
@@ -2630,7 +2751,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       restBeforeTraps: 0.45,
       meditateBelow: 0,
       meditateTo: 0,
-      potions: []
+      potions: [],
+      useWards: true
     },
     loot: {
       coins: false,
@@ -2658,12 +2780,11 @@ export const DEFAULT_CONFIG: AppConfig = {
       gangpath: false,
       gang: [],
       /*
-       * The one grant that ships non-empty, and it is two names: see
-       * `RemotesConfig.party` for the four that were on it and are not. Both
-       * are facts about this character's own body that the party listing
-       * already states more coarsely, and neither does anything to it.
+       * The one grant that ships non-empty, and it is three names: see
+       * `RemotesConfig.party` for why these and for the four that were on it
+       * and are not.
        */
-      party: ['health', 'bless-expired'],
+      party: ['health', 'bless-expired', 'heal'],
       players: {}
     },
     loops: [],
@@ -2688,6 +2809,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       walkWhileConfused: false,
       useVortexes: false,
       enterNegativePlane: false,
+      fightOnArrival: true,
       collectKeys: true
     },
     hunting: {
@@ -2700,6 +2822,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       levels: false,
       trainer: 0
     },
+    quests: { enabled: false },
+    gear: { enabled: false, sets: [], offRound: { item: '', everyRounds: 0 } },
     spells: {
       autoChoose: false,
       attack: '',
@@ -2719,7 +2843,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       minMana: 0.15,
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
-      notifyPartyOnWearOff: false
+      notifyPartyOnWearOff: false,
+      autoBless: true
     }
   }
 };
@@ -2751,10 +2876,11 @@ export const DEFAULT_CONFIG: AppConfig = {
  * number and belongs on the settings screen; a list is a list.
  */
 export const AUTOMATION_SWITCHES = {
-  /** The master switch. Off, only what the player types is ever sent. */
+  /** The master switch. Off, only what the player types is sent, bar the keep-alive. */
   automation: ['enabled'],
   combat: ['combat', 'enabled'],
   retaliate: ['combat', 'retaliate'],
+  autoBless: ['spells', 'autoBless'],
   retreat: ['safety', 'retreat', 'enabled'],
   fleeGoto: ['safety', 'fleeGoto', 'enabled'],
   hangUp: ['safety', 'hangUp', 'enabled'],
@@ -2775,7 +2901,9 @@ export const AUTOMATION_SWITCHES = {
   restWithLeader: ['party', 'restWithLeader'],
   remotes: ['remotes', 'enabled'],
   gangpath: ['remotes', 'gangpath'],
-  lookAtPlayers: ['talk', 'lookAtPlayers']
+  lookAtPlayers: ['talk', 'lookAtPlayers'],
+  quests: ['quests', 'enabled'],
+  gear: ['gear', 'enabled']
 } as const satisfies Record<string, readonly string[]>;
 
 export type AutomationSwitch = keyof typeof AUTOMATION_SWITCHES;
@@ -3218,7 +3346,12 @@ function readLoginSteps(value: unknown): LoginStep[] | null {
     const when = str(entry['when'], '');
     if (when.length === 0) continue;
     // `send` may legitimately be empty: several menus want a bare Enter.
-    steps.push({ when, send: typeof entry['send'] === 'string' ? entry['send'] : '' });
+    // `repeat` is written only when stated, so an ordinary row stays two keys.
+    steps.push({
+      when,
+      send: typeof entry['send'] === 'string' ? entry['send'] : '',
+      ...(entry['repeat'] === true ? { repeat: true } : {})
+    });
   }
   return steps;
 }
@@ -3286,7 +3419,7 @@ function normalizeServer(value: unknown): Server | null {
      * reported.
      */
     database: str(value['database'], ''),
-    mobPriority: normalizeMobPriorities(value['mobPriority'])
+    hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null
   };
 }
 
@@ -3609,8 +3742,47 @@ function normalizeAutomation(value: unknown): AutomationConfig {
     movement: normalizeMovement(raw['movement']),
     spells: normalizeSpells(raw['spells']),
     hunting: normalizeHuntingAutomation(raw['hunting']),
-    train: normalizeTrain(raw['train'])
+    train: normalizeTrain(raw['train']),
+    quests: normalizeQuests(raw['quests']),
+    gear: normalizeGear(raw['gear'])
   };
+}
+
+/**
+ * The kits, parsed at the boundary like every other list here: a set with no
+ * name or nothing to wear is dropped (a kit naming nothing dresses nobody), a
+ * `when` the table does not know is dropped — the closed union's runtime
+ * half — and a blank `mob` is *any monster* rather than a refusal.
+ */
+export function normalizeGear(value: unknown): GearConfig {
+  const raw = isRecord(value) ? value : {};
+  const d = DEFAULT_CONFIG.automation.gear;
+  const offRound = isRecord(raw['offRound']) ? raw['offRound'] : {};
+  return {
+    enabled: bool(raw['enabled'], d.enabled),
+    sets: (Array.isArray(raw['sets']) ? raw['sets'] : []).flatMap((entry): GearSet[] => {
+      if (!isRecord(entry)) return [];
+      const name = str(entry['name'], '');
+      const when = str(entry['when'], '') as GearWhen;
+      if (name.length === 0 || !GEAR_WHENS.includes(when)) return [];
+      const wear = (Array.isArray(entry['wear']) ? entry['wear'] : [])
+        .map((each) => str(each, ''))
+        .filter((each) => each.length > 0);
+      if (wear.length === 0) return [];
+      return [{ name, when, mob: str(entry['mob'], ''), wear }];
+    }),
+    offRound: {
+      item: str(offRound['item'], ''),
+      // Bounded low: a floor of twenty rounds is a fight that has ended.
+      everyRounds: int(offRound['everyRounds'], d.offRound.everyRounds, 0, 20)
+    }
+  };
+}
+
+/** One switch, off unless the file says on. */
+export function normalizeQuests(value: unknown): QuestsConfig {
+  const raw = isRecord(value) ? value : {};
+  return { enabled: bool(raw['enabled'], DEFAULT_CONFIG.automation.quests.enabled) };
 }
 
 /**
@@ -3655,7 +3827,8 @@ function normalizeHealth(value: unknown): HealthConfig {
       const to = fraction(raw['meditateTo'], d.meditateTo);
       return to === 0 ? 0 : Math.max(to, meditateBelow);
     })(),
-    potions: normalizePotionRules(raw['potions'])
+    potions: normalizePotionRules(raw['potions']),
+    useWards: bool(raw['useWards'], d.useWards)
   };
 }
 
@@ -3862,6 +4035,7 @@ function normalizeMovement(value: unknown): MovementConfig {
     walkWhileConfused: bool(raw['walkWhileConfused'], d.walkWhileConfused),
     useVortexes: bool(raw['useVortexes'], d.useVortexes),
     enterNegativePlane: bool(raw['enterNegativePlane'], d.enterNegativePlane),
+    fightOnArrival: bool(raw['fightOnArrival'], d.fightOnArrival),
     collectKeys: bool(raw['collectKeys'], d.collectKeys)
   };
 }
@@ -3999,7 +4173,8 @@ function normalizeSpells(value: unknown): SpellsConfig {
     minMana: fraction(raw['minMana'], d.minMana),
     cures: normalizeCures(raw['cures']),
     blessings: normalizeBlessings(raw['blessings']),
-    notifyPartyOnWearOff: bool(raw['notifyPartyOnWearOff'], d.notifyPartyOnWearOff)
+    notifyPartyOnWearOff: bool(raw['notifyPartyOnWearOff'], d.notifyPartyOnWearOff),
+    autoBless: bool(raw['autoBless'], d.autoBless)
   };
 }
 
@@ -4024,7 +4199,8 @@ function normalizeParty(value: unknown): PartyConfig {
   return {
     assistLeader: bool(raw['assistLeader'], d.assistLeader),
     defendParty: bool(raw['defendParty'], d.defendParty),
-    restWithLeader: bool(raw['restWithLeader'], d.restWithLeader)
+    restWithLeader: bool(raw['restWithLeader'], d.restWithLeader),
+    askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow)
   };
 }
 
@@ -4092,16 +4268,14 @@ function normalizeCombat(value: unknown): CombatConfig {
     hideForOpener: bool(raw['hideForOpener'], d.hideForOpener),
     engage: ENGAGE_POLICIES.includes(engage as EngagePolicy) ? (engage as EngagePolicy) : d.engage,
     retaliate: bool(raw['retaliate'], d.retaliate),
+    defendAfterRounds: int(raw['defendAfterRounds'], d.defendAfterRounds, 0, 20),
     politeAttacks: bool(raw['politeAttacks'], d.politeAttacks),
     // Capped where the retreat guard is, for the same reason: a room holding more
     // than twenty things is not a number anybody is tuning against.
     maxMobs: int(raw['maxMobs'], d.maxMobs, 0, 20),
-    maxFightCost: fraction(raw['maxFightCost'], d.maxFightCost),
     // Capped low on purpose: every round is a fraction of a second, so a client
     // asked to look every round would spend most of a fight looking.
     refreshRounds: int(raw['refreshRounds'], d.refreshRounds, 0, 20),
-    avoid: mobNames(raw['avoid']),
-    mobPriority: normalizeMobPriorities(raw['mobPriority']),
     monsters: asMonsterRules(raw['monsters']),
     minMobs: int(raw['minMobs'], d.minMobs, 0, 99),
     maxMonsterExperience: int(raw['maxMonsterExperience'], d.maxMonsterExperience, 0, 100_000_000),
@@ -4112,86 +4286,37 @@ function normalizeCombat(value: unknown): CombatConfig {
 }
 
 /**
- * Monster names, keyed the way the wire spells them.
+ * Monster rows, keyed the way the wire spells the name.
  *
- * Normalised here rather than at every comparison, so `Giant Rat`, `giant rat`
- * and `the giant rat` in a config file are one entry and match the one thing
- * the stream ever calls it. Bounded, because a list this long is a rule file
+ * Keyed here rather than at every comparison, so `Giant Rat`, `giant rat` and
+ * `the giant rat` in a config file are one row and match the one thing the
+ * stream ever calls it. Bounded at 64, because a list this long is a rule file
  * written in the wrong place.
- */
-function mobNames(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  for (const entry of value) {
-    const name = mobKey(String(entry));
-    if (name.length > 0) seen.add(name);
-    if (seen.size >= 64) break;
-  }
-  return [...seen];
-}
-
-/**
- * Priority rows, keyed and de-duplicated the way `mobNames` keys `avoid`.
  *
  * A row naming no monster is dropped rather than defaulted, as a potion rule
- * and a supply row are: it could only ever match nothing. A band the table
- * does not know is dropped too — the runtime half of a closed union — rather
- * than falling back to `default`, which would silently turn a typo into a row
- * that reads as deliberate and does nothing.
+ * and a supply row are: it could only ever match nothing. A treatment the
+ * table does not know is dropped too — the runtime half of a closed union —
+ * rather than falling back to `default`, which would silently turn a typo into
+ * a row that reads as deliberate and does nothing. A typo in `never` is the
+ * case that argues hardest for dropping it: defaulted, it would read as *leave
+ * this alone* and attack it.
  *
- * The **first** row for a monster wins, where `mobNames` keeps the last: these
- * rows are merged across three scopes by `mergeMobPriorities` before they get
- * here, so by this point the narrowest scope's row is already in front and
- * anything behind it is the broader scope it overrode.
+ * The **first** row for a monster wins. Read now only by the migration that
+ * folds these rows into `monsters` (`theMobRulesBecameMonsterRows`).
  */
-export function normalizeMobPriorities(value: unknown): MobPriority[] {
-  const rows: MobPriority[] = [];
+export function normalizeMobRules(value: unknown): MobRule[] {
+  const rows: MobRule[] = [];
   if (!Array.isArray(value)) return rows;
   const seen = new Set<string>();
   for (const entry of value) {
     if (!isRecord(entry)) continue;
     const mob = mobKey(String(entry['mob'] ?? ''));
     if (mob.length === 0 || seen.has(mob)) continue;
-    const band = str(entry['priority'], DEFAULT_MOB_PRIORITY).trim() as MobPriorityBand;
-    if (!MOB_PRIORITIES.includes(band)) continue;
+    const treat = str(entry['treat'], DEFAULT_MOB_PRIORITY).trim() as MobTreatment;
+    if (!MOB_TREATMENTS.includes(treat)) continue;
     seen.add(mob);
-    rows.push({ mob, priority: band });
+    rows.push({ mob, treat });
     if (rows.length >= 64) break;
-  }
-  return rows;
-}
-
-/**
- * One priority list from several scopes, with the narrower winning per monster.
- *
- * The one list in `automation:` that is merged rather than replaced, and the
- * exception is deliberate. `overlay` replaces an array wholesale because a
- * character that restates `automation.rules` means *those* rules — but a
- * priority list is addressed by monster, exactly as loops are addressed by
- * name, so the same argument that made `mergeLoops` additive applies: a
- * character that wants the realm's ranking plus one row of its own should not
- * have to restate the realm's, and would have no way to keep the copy in step.
- *
- * Removing a broader scope's row is therefore done by **overriding** it —
- * naming the monster again at `default`, which is what "follow the game logic"
- * already means — rather than by deleting it, which is the trade `mergeNamed`
- * makes everywhere else it is used.
- *
- * Lists are given broadest first; the first row for a monster wins, so callers
- * pass global, then realm, then character.
- */
-export function mergeMobPriorities(...lists: readonly (readonly MobPriority[])[]): MobPriority[] {
-  const rows: MobPriority[] = [];
-  const seen = new Set<string>();
-  // Reversed: the narrowest scope is stated last and has to arrive first, so
-  // that `normalizeMobPriorities`' first-wins rule keeps it.
-  for (const list of [...lists].reverse()) {
-    for (const row of list) {
-      const mob = mobKey(row.mob);
-      if (mob.length === 0 || seen.has(mob)) continue;
-      seen.add(mob);
-      rows.push({ mob, priority: row.priority });
-    }
   }
   return rows;
 }
@@ -4227,13 +4352,7 @@ function normalizeSafety(value: unknown): SafetyConfig {
     hangUp: {
       enabled: bool(hangUp['enabled'], d.enabled),
       belowHealth: fraction(hangUp['belowHealth'], d.belowHealth),
-      /*
-       * Defaults to *true* whatever the file says is missing, and that
-       * asymmetry is deliberate: every other boolean here defaults to the
-       * cautious value because caution is cheap, and this one defaults to the
-       * cautious value because the alternative can cost a character.
-       */
-      onlyWhenClean: bool(hangUp['onlyWhenClean'], d.onlyWhenClean),
+      penalties: bool(hangUp['penalties'], d.penalties),
       onPlayerInRoom: bool(hangUp['onPlayerInRoom'], d.onPlayerInRoom)
     },
     pvp: {

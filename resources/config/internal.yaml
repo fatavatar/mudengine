@@ -113,6 +113,9 @@ toolbar:
     - automation
     - combat
     - retaliate
+    # Keeping the blessings up, on the row: the switch somebody flips for one
+    # fight to keep the mana for healing, and back after.
+    - autoBless
     - loot
     # Searching every room, on the row rather than in the kebab: it costs a
     # command per room, so it is the kind of switch somebody turns on for one
@@ -321,6 +324,17 @@ tuning:
     # short enough that a fight is still a fight when it lapses.
     staleMoveMs: 8000
 
+    # A step unanswered this long is probed: `rm` goes out behind it, and its
+    # answer is an ordered one -- the server answers in the order it was asked
+    # -- so a `Location:` arriving with the step still unanswered proves the
+    # step produced nothing and it is dropped at once, while a probe still
+    # unanswered proves the server is slow and the step waits, up to
+    # staleMoveMaxMs. Three seconds is two movement rounds; thirty is a link
+    # that has gone, not a server that is slow.
+    staleProbeMs: 3000
+
+    staleMoveMaxMs: 30000
+
     # Pack changes held against a listing that has not finished arriving. A
     # listing takes about a second; this covers what a person or a fight can
     # do in one, and no more.
@@ -328,6 +342,13 @@ tuning:
 
     # Possible rooms kept for the resolution trace.
     maxRoomCandidates: 8
+
+    # How often the experience total is sampled for the Combat Stats card's
+    # rate graph, and how many samples are kept: a minute, and a day of them.
+    # The newest sample is updated in place until its minute is spent.
+    statsSampleMs: 60000
+
+    statsSamplesKept: 1440
 
     # The band a line has to be inside to be read as a room's name.
     #
@@ -473,6 +494,18 @@ tuning:
     # outweighing every round of blows before it.
     deathOverRounds: 5
 
+    # The room's fight, run: how many times, how long a fight may run before
+    # it is called, and the shares of fights survived that read as safe and as
+    # merely risky — under riskyAbove is deadly. Three hundred runs of a long
+    # fight are a millisecond or two; the figures move a point between seeds.
+    survivalTrials: 300
+
+    survivalRoundCap: 120
+
+    survivalSafeAbove: 0.95
+
+    survivalRiskyAbove: 0.6
+
   # Casting on the character's behalf — `AutoHeal`, `Cures`, `Blessings`.
   spells:
     # How sure one cast has to be of finishing the monster before the cheapest
@@ -484,6 +517,10 @@ tuning:
 
     # Long enough for the next status line to say whether the heal worked.
     healCooldownMs: 6000
+
+    # How long a party member's @heal stands waiting for a cast. Past one
+    # healCooldownMs, so a request arriving just after a heal still gets its own.
+    healRequestMs: 10000
 
     # How long a cure proposal stays worth sending.
     cureExpiresMs: 3000
@@ -564,9 +601,13 @@ tuning:
   # GreaterMUD's regen adds before comparing with a room's delay (its author
   # calls it a kept bug), so a lair comes back that much sooner there;
   # `backstabMultiplier` what the opening backstab is worth in swings
-  # (measured 4.1×); `maxLoopRooms` and `maxSpots` bound the suggestions;
-  # `betterSpotRadius` is how far the lap's low-experience stop looks for a
-  # better lair. `maxDamageShare` leaves out a lair whose one cycle takes
+  # (measured 4.1×); `maxLoopRooms` bounds a loop, and `maxSpots` is how many
+  # of the best are measured properly -- every other lair is still listed, on
+  # the first estimate. `measuredFightsMin` is how many of the character's own
+  # opened fights price a kill where the realm's arithmetic is not known (off
+  # the GreaterMUD lineage): its measured damage a round against the
+  # monster's health. `betterSpotRadius` is how far the lap's low-experience
+  # stop looks for a better lair. `maxDamageShare` leaves out a lair whose one cycle takes
   # more than that share of the bar; `trivialShare` leaves out one that could
   # not take that share off an unarmoured character, the bar read
   # `trivialLevelMargin` lower; `clusterRadius` is how far apart a loop's own
@@ -586,6 +627,7 @@ tuning:
     backstabMultiplier: 4
     maxLoopRooms: 8
     maxSpots: 24
+    measuredFightsMin: 30
     betterSpotRadius: 80
     maxDamageShare: 0.5
     trivialShare: 0.1
@@ -675,6 +717,27 @@ tuning:
     # worth in steps of going out of the way — 4.01 two minutes off the road
     # beats 3.99 twenty-five minutes off it. Zero lets the detour decide alone.
     dearerSteps: 20
+    # Copper withdrawn over a purchase's price when the purse is short and a
+    # bank on record holds it; zero withdraws exactly the shortfall.
+    cashBuffer: 1000
+
+  # Carrying a quest's plan through the arbiter — `QuestRunner`. `replyMs` is
+  # how long an act has to move the counter before its silence is a refusal;
+  # `rollTries` how many times a step that rolls is asked again; `waitForMs`
+  # how long to wait at a step's room for its asker or its monster.
+  quests:
+    replyMs: 12000
+    rollTries: 12
+    listingAsks: 3
+    waitForMs: 600000
+    maxLegs: 6
+    # A setback -- a walker refusing while a move is unanswered, an escape, a
+    # corridor busy with monsters -- stands the run still for this long and it
+    # tries again, giving up only after this many in a row with nothing
+    # achieved between them.
+    retryMs: 20000
+    setbacks: 20
+    expiresMs: 8000
 
   # Shedding named junk — `AutoDrop`.
   drop:
@@ -730,6 +793,29 @@ tuning:
 
     # How many holds run back to back before it walks on regardless.
     maxHolds: 3
+
+    # How long a walk stands in the room it has just arrived in before
+    # stepping out of it again, where the room it left held a monster.
+    #
+    # The server works the follow out inside the move (`Exits.cs:165`: every
+    # mob in the room whose target is this character rolls against
+    # `FollowPercent` and is moved with the player), so the arrival sentences
+    # are composed after the room block and `Also here:` is absent from a room
+    # block about to hold five monsters — which is what the walk read before it
+    # stepped out and dragged them on.
+    #
+    # A margin over that window and only that window. Across every session log
+    # on this machine, 28 monsters arrived from the direction the character had
+    # just come naming something the departure room's own listing held: 22 are
+    # that synchronous follow, none later than 39ms, four of them a socket read
+    # behind the room block rather than in it; one straggler at 330ms. Raising
+    # this buys a slower walk rather than more safety — the other five arrived
+    # 959-1,670ms on, and those are `Mob.CheckFollow` chasing on the monster's
+    # own clock, which no settle can cover.
+    #
+    # Paid only where something could follow: a room the character left empty
+    # settles for nothing.
+    followSettleMs: 350
 
     # How far the character may have wandered from what it was walking before
     # pressing play asks about it first.
@@ -1031,6 +1117,10 @@ tuning:
     # clients to capture. Revisit with a capture.
     replyMs: 30000
 
+    # How often a character still under party.askForHealBelow says @heal again.
+    # MegaMUD re-reads the party listing every 15s in a fight (ParPeriod).
+    healAskAgainMs: 15000
+
   # How many commands one press or one `@` may spend.
   #
   # One budget, because it is one budget: each `wear`, `get` or `drop` comes
@@ -1064,6 +1154,11 @@ tuning:
     # Framed lines retained; the terminal keeps the real backscroll.
     lineLogLimit: 500
 
+    # The most commands one talk-box line may stand for: `s;n;2d,6s` is ten.
+    # The line is paced by the prompt, so this is not the realm's flood limit;
+    # it is what `99s` typed for `9s` would cost before anyone could stop it.
+    macroCommands: 40
+
     # How long a prompt that has opened its bracket and not closed it may keep
     # arriving before the client stops waiting for the rest. The bearfather BBS
     # writes its prompt in two pieces about a tenth of a second apart (median
@@ -1072,6 +1167,17 @@ tuning:
     # on the wire until it ends. This is only what paints a prompt the server
     # never finishes.
     promptHoldMs: 1000
+
+    # How long a tail that is NOT a prompt may keep arriving before the client
+    # frames it anyway. The 150ms quiet period releases a prompt, and over the
+    # internet that is not long enough to mean an ordinary sentence ended: the
+    # bearfather BBS paused 178ms in the middle of a room name, and the half in
+    # hand was read as a room and learned as a place that does not exist.
+    # Measured over 670 sessions: 25 server sentences cut in half (room exits, a
+    # monster's arrival, who rows split mid-name); 700ms covers 22. The rest are
+    # a banner nothing parses and one 33-second stall, where waiting is worse
+    # than splitting. Only text the server appends after a prompt waits on this.
+    sentenceHoldMs: 700
 
     # How long the lines of a listing the client redraws (ui.rewrites) wait for
     # the status line that ends the listing before they are painted as sent.
@@ -1166,8 +1272,22 @@ tuning:
     # How many it holds if a flush never happens.
     talkHeld: 500
 
+    # How long painted console output waits before it is written down.
+    backscrollFlushMs: 2000
+
+    # Rewrite the backscroll file once it holds this many times what is kept,
+    # rather than appending for ever: it is read whole at launch, and a cap on
+    # the lines kept is not a cap on a file that only grows.
+    backscrollRewriteAt: 2
+
     # How long a balance change waits before it is written.
     belongingsWriteDelayMs: 2000
+
+    # How long the running totals wait before the record is written. Longer
+    # than a balance, because they move on every blow and the record is
+    # rewritten whole; a crash costs at most this much of them, and a quit
+    # writes them exactly.
+    statsWriteDelayMs: 30000
 
     # Vaults kept for one character. The shipped realm has seven banks; a file
     # past this is one being fed something that is not a bank name.
@@ -1278,6 +1398,18 @@ tuning:
     # preferred while there is. One is *expected to die there*.
     deadlyShare: 1
 
+    # The most of the bar a pass *nobody can say will happen* may be priced at,
+    # however bad it would be if it did. A monster's disposition can be
+    # conditional — one that hates the evil opens on an Outlaw and leaves a
+    # Saint alone — so a character whose standing the client has not read meets
+    # *nobody can say*, and such a monster is counted in rather than out,
+    # because unknown is never the reassuring answer. Counted in at its full
+    # share it reaches `deadlyShare`, and a fact nobody has read then walls a
+    # corridor: a tenth of the bar is about twenty plain steps, enough to
+    # prefer a way round that exists and never enough to justify a map.
+    # `deadlyShare` or above restores the wall; zero says *safe*.
+    unsureShare: 0.1
+
     # What one pass through a room whose spell this client cannot read is
     # priced at, as a share of the bar.
     #
@@ -1303,6 +1435,26 @@ tuning:
     # without one is 88 steps against 107 and worth a choice; a way two steps
     # shorter is the same way with a corner cut.
     alternativeMinSteps: 10
+
+    # What a step along the plan costs while the router is asked for a way that
+    # differs from it: the plan's own edges are priced this many times over and
+    # the search asked again, so it leaves the plan wherever a detour costs less
+    # than this much of what it replaces. 1 finds the plan again and offers
+    # nothing.
+    anotherWayPenalty: 3
+
+    # How much longer than the plan a different way may be and still be
+    # offered, as a share of the plan's steps: 0.5 is half again as long. A way
+    # that differs is expected to be dearer — that is why it was not the plan —
+    # and past this it is a tour rather than a choice.
+    anotherWayLonger: 0.5
+
+    # How many of a consumable a quest's plan buys against a room spell on the
+    # way, where the realm says using one stops the spell. A waterskin is three
+    # uses and its spell lasts 600 ticks, the desert crossing is 64 rooms each
+    # way, and the plan cannot know how many times the walk will stop: two is
+    # one spare. A thing that is not spent is fetched once whatever this says.
+    hazardSupplyCount: 2
 
     # How many rounds of a lair's blows one pass through the room is priced at.
     # In and out is one round from whatever attacks on sight; two prices every
@@ -1457,6 +1609,10 @@ tuning:
     # live edge resumes at once and does not wait, and the "jump to latest"
     # button is there for the whole of the hold.
     talkFollowResumeMs: 45000
+    # How long the quest run banner stays over the console saying how the run
+    # ended before it takes itself down; the stream and the Quest card keep the
+    # record, and the banner covers the console's top rows while it stands.
+    questRunLingerMs: 30000
 
     # Lines the Talk composer remembers for its Up arrow. A short list on
     # purpose: this is the shell's history, not the card's backlog — what it is
@@ -1645,6 +1801,15 @@ tuning:
     # long a loop has been going. A second, because that is the unit shown.
     clockTickMs: 1000
 
+    # How much restored backscroll a console is handed per write at launch.
+    # xterm parses one write in one go, so a whole restored backscroll was a
+    # second-long freeze per character; slices this size keep each short.
+    restoreSliceChars: 65536
+
+    # How long after a plain Enter the shown console must have turned it into
+    # input before the console says it did not, and where the caret was.
+    enterTakenMs: 250
+
     # How long a room search waits after the last keystroke, and the shortest
     # query worth running.
     #
@@ -1655,6 +1820,16 @@ tuning:
     roomSearchDebounceMs: 150
 
     roomSearchMinChars: 2
+
+    # How many of the realm's own things — monsters, items, spells — a palette
+    # query lists beneath the rooms it found. The lookup answers a dozen per
+    # kind with the name-prefix matches first, so the cap trims the substring
+    # tail; typing one more letter is how the list narrows, not scrolling.
+    paletteFoundRows: 12
+
+    # How many bars or points the Combat Stats card's rate graph draws across
+    # its window, whatever the window is.
+    statsGraphBins: 24
 
     # How long a pointer rests on a room before its quick view opens, and how
     # long the panel stays after the pointer has left both it and the room.

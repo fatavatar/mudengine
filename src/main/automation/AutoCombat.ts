@@ -82,8 +82,8 @@ import { ATTACK_COMMANDS, commandOf, REREAD_ROOM } from '../../shared/commands';
 import {
   DEFAULT_MOB_PRIORITY,
   type CombatConfig,
-  type MobPriority,
   type MobPriorityBand,
+  type MobRule,
   type PartyConfig,
   type SpellsConfig
 } from '../../shared/config';
@@ -96,7 +96,8 @@ import {
 } from '../../shared/monsterRules';
 import type { MobEntity } from '../../shared/entities';
 import { WEAPON_HAND } from '../../shared/items';
-import { weighRoom, type HazardKind, type Menace } from '../../shared/menace';
+import { guardsFirst, inTheFight, protects } from '../../shared/guards';
+import { protectionOf, weighRoom, type HazardKind, type Menace } from '../../shared/menace';
 import {
   prowessSheetOf,
   rankByPriority,
@@ -107,14 +108,15 @@ import {
   type Verdict
 } from '../../shared/verdict';
 import type { RealmFamily } from '../../shared/realm';
+import { dodge } from '../../shared/prowess';
 import { attacksOnSight } from '../../shared/mobs';
-import { resolveSpell, spellCost } from '../../shared/spellcraft';
+import { castOf, isShortIn, resolveSpell, spellCost } from '../../shared/spellcraft';
 import {
   chooseAttackSpell,
   type SpellChoice,
   type SpellChoiceRefusal
 } from '../../shared/spellchoice';
-import { mobKey, type WorldSpell } from '../../shared/world';
+import { mobKey, nameAnswersTo, type WorldSpell } from '../../shared/world';
 import { tuning } from '../app/tuning';
 
 export interface AutoCombatEvents {
@@ -148,6 +150,16 @@ export interface AutoCombatEvents {
    * Avoid row for `rogue` is not about an `orc rogue`. See `ruleFor`.
    */
   knownMob?(key: string): boolean;
+  /**
+   * A round of a fight this character is in has come round (todo 00).
+   *
+   * Raised rather than acted on, because the round clock is this module's and
+   * the decisions taken on it are not all: the equipment manager's off-round
+   * invocation is one item used between swings, which is a *gear* decision
+   * riding a *combat* beat. A second clock in that module would drift from
+   * this one and spend a use count doing it.
+   */
+  round?(state: CharacterState): void;
 }
 
 /**
@@ -330,6 +342,19 @@ export class AutoCombat {
    */
   private readonly opened = new Map<string, number>();
 
+  /**
+   * The monster this fight is committed to, by key, until it leaves the room.
+   *
+   * Set by every attack this module proposes and by the player's own; cleared
+   * when nothing here answers to it, by a `break`, and by `reset`. The
+   * cooldown only bounds how often one monster is *asked*, so once it lapsed
+   * each new attacker's first swing — the tracker files the newest first, and
+   * equal verdicts tie in that order — re-opened on it: `aa saracen raider`,
+   * `aa small saracen raider`, `aa fat saracen raider`, every round, the
+   * three engagements cancelling one another (todo 00, 2026-09-23).
+   */
+  private focus: string | null = null;
+
   /** True once this fight's opener has been spent. */
   private openerSpent = false;
   /** Whether the held-backstab sentence has been said. See `sayOpenerNeedsStealth`. */
@@ -395,6 +420,15 @@ export class AutoCombat {
    */
   private travelling = false;
   private declined = false;
+  /** True while a quest run has the character; fights as a journey does. See `noteQuesting`. */
+  private questing = false;
+  /** True while the character is under a timed spell it must walk out from. See `noteMoveOnly`. */
+  private moveOnly = false;
+  /**
+   * Monsters a quest run wants dead, by `mobKey` — session-scoped, never the
+   * file, and taken off again the moment the step is done. See `alsoFight`.
+   */
+  private readonly wanted = new Set<string>();
   /** Until when a typed `break` keeps this from fighting. See the constant. */
   private standDownUntil = 0;
   /** Whether a step is outstanding, as of the last line. See `movePending`. */
@@ -417,8 +451,8 @@ export class AutoCombat {
    *
    * Kept across `endFight` for the same reason: the per-kill `*Combat Off*`
    * is not the spell stopping. A cast of this character's own does stop it
-   * (`openAgain`) — MegaMUD sends the room spell again after `aund` switched
-   * the fight off.
+   * (`fightBrokenBy`) — MegaMUD sends the room spell again after `aund`
+   * switched the fight off.
    */
   private areaEngaged = false;
   private areaSeenAt = 0;
@@ -430,11 +464,6 @@ export class AutoCombat {
    * (2026-09-23).
    */
   private areaTimer: NodeJS.Timeout | null = null;
-  /**
-   * A cast of this character's own went out mid-fight, and the `*Combat Off*`
-   * it is answered with should release the engage cooldown. See `openAgain`.
-   */
-  private reopen = false;
   /**
    * The last decision written down, so the same one is not written again.
    *
@@ -477,7 +506,8 @@ export class AutoCombat {
       minMana: 0,
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
       blessings: [],
-      notifyPartyOnWearOff: false
+      notifyPartyOnWearOff: false,
+      autoBless: true
     },
     /**
      * The realm's own row for a spell it names, whole.
@@ -520,7 +550,9 @@ export class AutoCombat {
     config: CombatConfig,
     enabled: boolean,
     spells?: SpellsConfig,
-    party?: PartyConfig
+    party?: PartyConfig,
+    // `CombatLease`'s own write landing: not the player overruling a journey.
+    leaseEdge = false
   ): void {
     /*
      * The switch going off *during* a journey is the player overruling the
@@ -530,8 +562,12 @@ export class AutoCombat {
      * Turning it back on the same way clears the refusal, which is what makes
      * the control answer in both directions.
      */
-    if (this.config.enabled && !config.enabled) this.declineWhileTravelling();
-    if (!this.config.enabled && config.enabled) this.declined = false;
+    if (this.config.enabled && !config.enabled && !leaseEdge) this.declineWhileTravelling();
+    // A reload that reads on is the player's hand whichever edge it arrived
+    // on: a run's write and the toolbar's press inside one poll reach here as
+    // on → on, and a decline left standing beside a switch that reads on is
+    // auto-combat dead with nothing to say why (todo 06, on review).
+    if (config.enabled) this.declined = false;
     this.config = config;
     this.enabled = enabled;
     if (spells) this.spells = spells;
@@ -542,7 +578,8 @@ export class AutoCombat {
   private party: PartyConfig = {
     assistLeader: false,
     defendParty: false,
-    restWithLeader: false
+    restWithLeader: false,
+    askForHealBelow: 0
   };
 
   /**
@@ -551,7 +588,7 @@ export class AutoCombat {
    * `party.engaged` is what the server last said the leader hit; the sighting
    * has to be fresh and the monster still listed, or a follower would swing at
    * something that left with the fight. Never a player — the leader may be in
-   * a PvP fight, and that is theirs — and never something on `avoid`.
+   * a PvP fight, and that is theirs — and never something a row leaves alone.
    */
   private assistTarget(state: CharacterState): { name: string; leader: string } | null {
     if (!this.party.assistLeader) return null;
@@ -566,7 +603,7 @@ export class AutoCombat {
     const there = state.room.occupants.find(
       (who) => who.kind === 'mob' && mobKey(who.name) === wanted
     );
-    if (!there || this.spared(wanted) || this.isPlayer(state, there.name)) return null;
+    if (!there || this.leftAlone(wanted) || this.isPlayer(state, there.name)) return null;
     return { name: there.name, leader };
   }
 
@@ -590,7 +627,7 @@ export class AutoCombat {
       const there = state.room.occupants.find(
         (who) => who.kind === 'mob' && mobKey(who.name) === wanted
       );
-      if (!there || this.spared(wanted) || this.isPlayer(state, there.name)) continue;
+      if (!there || this.leftAlone(wanted) || this.isPlayer(state, there.name)) continue;
       if (best === null || seen.at > best.at) best = { name: there.name, member, at: seen.at };
     }
     return best === null ? null : { name: best.name, member: best.member };
@@ -598,12 +635,16 @@ export class AutoCombat {
 
   /** A new connection. Nothing about the last fight carries over. */
   reset(): void {
+    this.wanted.clear();
+    this.questing = false;
+    this.moveOnly = false;
     this.refused.clear();
     this.saidChoice = null;
     this.saidChoiceRefusal = null;
     this.rounds = 0;
     this.state = null;
     this.opened.clear();
+    this.focus = null;
     this.openerSpent = false;
     this.saidOpenerNeedsStealth = false;
     this.retreating = false;
@@ -614,7 +655,6 @@ export class AutoCombat {
     this.standDownUntil = 0;
     this.movePendingNow = false;
     this.areaEngaged = false;
-    this.reopen = false;
     this.clearAreaTimer();
     this.lastDecision = null;
     this.clearRound();
@@ -627,14 +667,58 @@ export class AutoCombat {
 
   /** Whether a route is being walked, which decides whether to start anything. */
   noteWalking(walking: boolean): void {
-    this.setTravelling(walking || this.looping);
+    this.setTravelling(walking || this.looping || this.questing);
     this.walking = walking;
   }
 
   /** Whether a loop is running its lap. */
   noteLooping(looping: boolean): void {
-    this.setTravelling(looping || this.walking);
+    this.setTravelling(looping || this.walking || this.questing);
     this.looping = looping;
+  }
+
+  /**
+   * Whether a quest run has the character (todo 102).
+   *
+   * A run walks, stands at an asker and fights a boss, and it fights on every
+   * one of those terms as a route does: the player pressed *Run it* on a plan
+   * that names the kill, which is the argument `setTravelling` makes for a
+   * route. Armed for the whole run, not per leg, so a fight opened at the
+   * step's room — where nothing is walking — still opens.
+   */
+  noteQuesting(questing: boolean): void {
+    this.setTravelling(questing || this.walking || this.looping);
+    this.questing = questing;
+  }
+
+  /**
+   * A monster a quest step wants dead, fought by name whatever the policy
+   * says about it — `engage: none`, a disposition the realm does not call
+   * hostile, a cap on health or experience. Not past the three refusals that
+   * are not settings (a player, something unplaced, a monster the realm is
+   * sure is good), not past a Friend, and not past somebody else's
+   * claim on it. Session-scoped, like `AutoLoot.alsoTake`.
+   */
+  alsoFight(name: string): void {
+    const key = mobKey(name);
+    if (key.length > 0) this.wanted.add(key);
+  }
+
+  stopFighting(name: string): void {
+    this.wanted.delete(mobKey(name));
+  }
+
+  /** Whether a room's listing names something a quest run wants dead. */
+  private wantedHere(state: CharacterState): boolean {
+    if (this.wanted.size === 0) return false;
+    return state.room.occupants.some((who) => who.kind === 'mob' && this.isWanted(who.name));
+  }
+
+  private isWanted(name: string): boolean {
+    if (this.wanted.size === 0) return false;
+    const key = mobKey(name);
+    for (const wanted of this.wanted) if (nameAnswersTo(key, wanted)) return true;
+    return false;
   }
 
   /**
@@ -661,9 +745,13 @@ export class AutoCombat {
   private setTravelling(moving: boolean): void {
     if (moving === this.travelling) return;
     this.travelling = moving;
-    // A fresh journey takes back a refusal made during the last one: the
-    // player said *not this route*, not *never again*.
-    if (moving) this.declined = false;
+    /*
+     * A refusal is this journey's and ends with it, either edge: the player
+     * said *not this route*, not *never again*. `acting` read it bare, so one
+     * left standing past the journey refused everything beside a switch that
+     * read on until a reload happened to clear it, and said nothing.
+     */
+    this.declined = false;
   }
 
   /**
@@ -672,10 +760,49 @@ export class AutoCombat {
    * The journey's override is the client's decision, so the player has to be
    * able to overrule it — and the overruling has to outlast the room it was
    * made in, or the next arrival turns fighting straight back on. It holds
-   * until this journey ends; the next one asks again.
+   * until this journey ends; the next one asks again. *Run it* (todo 06) makes
+   * the same refusal on the player's behalf the moment the walk starts.
    */
   declineWhileTravelling(): void {
     if (this.travelling) this.declined = true;
+  }
+
+  /**
+   * `CombatLease` handed the switch back (todo 00, 2026-09-23): the journey
+   * is put back as it was when the switch was lent — declined again after a
+   * *Run it*, still fighting on a route that was. The reload that follows
+   * arrives flagged as the lease's (`configure`'s `leaseEdge`), so it
+   * declines nothing by itself.
+   */
+  leaseReturned(declined: boolean): void {
+    this.declined = declined && this.travelling;
+  }
+
+  /** Whether the journey under way is one the player declined to fight on. */
+  get journeyDeclined(): boolean {
+    return this.travelling && this.declined;
+  }
+
+  /** Whether this would hit back at a monster swinging now. */
+  get willFight(): boolean {
+    return this.acting && this.config.retaliate;
+  }
+
+  /**
+   * Whether this fights at all right now, for the walker's question of
+   * whether a fight around a route will end (2026-09-23, on review): acting,
+   * not stood down by a `break`, and either hitting back or engaging.
+   * `willFight` is the defend lease's, which is about hitting back alone.
+   */
+  get wouldFight(): boolean {
+    return (
+      this.acting && !this.stoodDown && (this.config.retaliate || this.config.engage !== 'none')
+    );
+  }
+
+  /** Whether a typed `break` still stands this down. */
+  get stoodDown(): boolean {
+    return Date.now() < this.standDownUntil;
   }
 
   /**
@@ -685,9 +812,33 @@ export class AutoCombat {
    * fights whatever the block says**, unless the player has said otherwise for
    * this journey (todo 00; a lap alone overrode it from todo 03, 2026-09-06).
    * See {@link setTravelling} for the argument.
+   *
+   * **A declined journey is declined whatever the switch reads** (todo 06):
+   * *Run it* declines the journey in the same breath as asking the file to
+   * turn the switch off, and the file answers half a second later through
+   * `configure`. Until then the switch still reads on, and a first step taken
+   * beside a monster would open exactly the fight the press was made to avoid.
+   * Nothing else holds `declined` beside a switch that reads on: it is set on
+   * the switch going off and cleared by any reload that reads on.
    */
   private get acting(): boolean {
-    return this.enabled && (this.config.enabled || (this.travelling && !this.declined));
+    return (
+      this.enabled &&
+      !this.journeyDeclined &&
+      !this.moveOnly &&
+      (this.config.enabled || this.travelling)
+    );
+  }
+
+  /**
+   * Whether the character is under a timed spell the way in put on it (todo
+   * 104). Inside one nothing here swings — not to open a fight and not to
+   * hit back — because a round spent fighting is a round not spent walking
+   * out, and the spell is the deadline. The session reads the fact off the
+   * realm and says it once; this only obeys it.
+   */
+  noteMoveOnly(moveOnly: boolean): void {
+    this.moveOnly = moveOnly;
   }
 
   /**
@@ -702,7 +853,9 @@ export class AutoCombat {
    * reading a switch they set and finding it obeyed, which needs no sentence.
    */
   private get declinedOnly(): boolean {
-    return this.enabled && !this.config.enabled && this.travelling && this.declined;
+    // Whatever the switch reads: a run's decline stands beside a switch that
+    // still reads on for half a second, and is reported for that half second.
+    return this.enabled && this.travelling && this.declined;
   }
 
   /**
@@ -779,9 +932,20 @@ export class AutoCombat {
         this.events.notice?.(t('automation.combat.standDown'));
       }
       this.standDownUntil = Date.now() + tuning().combat.breakStandoffMs;
+      this.focus = null;
       return;
     }
-    if (name !== null && ATTACK_COMMANDS.has(name)) this.standDownUntil = 0;
+    if (name !== null && ATTACK_COMMANDS.has(name)) {
+      this.standDownUntil = 0;
+      // The player chose what to fight, and the choice is kept the way this
+      // module's own is. An argument no monster here answers to commits to
+      // nothing.
+      const typed = command.trim().split(/\s+/).slice(1).join(' ').toLowerCase();
+      const chosen = this.state?.room.occupants.find(
+        (who) => who.kind === 'mob' && nameAnswersTo(mobKey(who.name), typed)
+      );
+      this.focus = chosen === undefined ? null : mobKey(chosen.name);
+    }
     /*
      * And what the fight is repeating, when the player changes it: a swing
      * or an attack spell typed at something re-engages the fight with it, and
@@ -789,13 +953,42 @@ export class AutoCombat {
      */
     if (this.state?.inCombat !== true) return;
     const words = command.trim().split(/\s+/);
+    const cast = this.castIn(command);
     if (name !== null && ATTACK_COMMANDS.has(name) && words.length > 1) this.combatAction = null;
-    if (name === 'Cast' && words.length > 2) this.combatAction = words[1] ?? null;
+    if (cast !== null && cast.argument.length > 0) this.combatAction = cast.word;
     // What the player typed replaces the room spell the fight was repeating.
-    if (name === 'Cast' || (name !== null && ATTACK_COMMANDS.has(name))) {
-      this.areaEngaged = this.isArea(name === 'Cast' ? (words[1] ?? null) : null);
+    if (cast !== null || (name !== null && ATTACK_COMMANDS.has(name))) {
+      this.areaEngaged = this.isArea(cast?.word ?? null);
       if (this.areaEngaged) this.areaSeenAt = Date.now();
     }
+  }
+
+  /**
+   * The stranger `politeAttacks` leaves this monster to, while the sighting is
+   * fresh, or null. `choose` and retaliation's joiners ask the same question.
+   */
+  private claimOn(state: CharacterState, name: string): { by: string } | null {
+    if (!this.config.politeAttacks) return null;
+    const claim = state.combat.claimed[mobKey(name)];
+    if (claim === undefined || Date.now() - claim.at > tuning().combat.assistFreshMs) return null;
+    return claim;
+  }
+
+  /**
+   * The occupant this fight is committed to, in the room's spelling, or null.
+   *
+   * Only while nothing has since ruled it out: a Friend row written
+   * mid-fight, or the roster calling it a person.
+   */
+  private focusHere(state: CharacterState): string | null {
+    if (this.focus === null) return null;
+    const held = state.room.occupants.find(
+      (who) => who.kind === 'mob' && mobKey(who.name) === this.focus
+    );
+    if (held === undefined || this.leftAlone(held.name) || this.isPlayer(state, held.name)) {
+      return null;
+    }
+    return held.name;
   }
 
   /**
@@ -814,10 +1007,15 @@ export class AutoCombat {
    * A line was classified.
    *
    * Two jobs: keep the round clock, and hear the two refusals that mean a verb
-   * is not worth sending again.
+   * is not worth sending again. `answering` is the command the server is
+   * answering (`SessionManager`'s reading of the echo), for `*Combat Off*`.
    */
-  onBlock(block: Block): void {
+  onBlock(block: Block, answering: string | null = null): void {
     switch (block.type) {
+      case 'combat-status':
+        if (block.groups['status'] === 'Off') this.fightBrokenBy(answering);
+        return;
+
       case 'user-hits':
       case 'user-misses':
       case 'mob-hits':
@@ -958,20 +1156,8 @@ export class AutoCombat {
     // A fight that has ended takes its opener and its round cycle with it.
     if (was?.inCombat && !state.inCombat) {
       this.endFight();
-      // Switched off by a cast of this character's own: engage again at once.
-      if (this.reopen) {
-        this.reopen = false;
-        this.opened.clear();
-      }
     }
     if (this.areaDecision(state)) return;
-    /*
-     * A cast of this character's own went out mid-fight and has not been
-     * answered: the `*Combat Off*` it brings is what the next swing waits for.
-     * A room-spell fight has no target, so without this the swing back went
-     * out four milliseconds after the heal, into the fight still running.
-     */
-    if (this.reopen && state.inCombat) return;
 
     if (was) {
       // Moving on ends a break's stand-down: a fresh room is back under the
@@ -982,6 +1168,14 @@ export class AutoCombat {
         // A new room states its own occupants, so the look the count is
         // heading towards has just happened for free.
         this.rounds = 0;
+      }
+      /*
+       * And a new room is a new fight: a namesake in it is another monster,
+       * and its room's own order decides. On the arrival count as well as the
+       * name, since the desert is a thousand rooms called `Scorching Desert`.
+       */
+      if (was.room.name !== state.room.name || was.room.arrival !== state.room.arrival) {
+        this.focus = null;
       }
       /*
        * A monster that left the room takes its pending attack with it, and
@@ -1001,6 +1195,9 @@ export class AutoCombat {
         this.queue.cancel((intent) => intent.coalesceKey === `attack:${key}`);
         this.opened.delete(key);
       }
+      // Dead or gone: the next fight is chosen afresh. A namesake still
+      // standing keeps it, since `aa` switches to that one by itself.
+      if (this.focus !== null && !present.has(this.focus)) this.focus = null;
     }
 
     /*
@@ -1015,7 +1212,7 @@ export class AutoCombat {
      * cannot attack — too afraid, stunned, asleep. MegaMUD's *attack
      * prevented*: every swing and every cast would be a command spent to be
      * refused. Said once per stretch, and the fight resumes on the line that
-     * ends it (`CharacterState.stated`).
+     * ends it (`CharacterState.heard`).
      */
     if (this.cannotAttack(state)) return;
     if (this.acting && this.retaliation(state)) return;
@@ -1087,27 +1284,97 @@ export class AutoCombat {
      * says nothing about which is dangerous.
      *
      * Somebody hitting this character does not make them a thing to swing at
-     * unasked — the roster is what says which they are — and a name on
-     * `avoid` stays avoided. Anything hitting this character is in this room
-     * whatever the last listing said, which is why every attacker resolves
-     * to an occupant here.
+     * unasked — the roster is what says which they are — and a monster a row
+     * says to leave alone stays left alone. Anything hitting this character is
+     * in this room whatever the last listing said, which is why every attacker
+     * resolves to an occupant here.
      */
-    const candidates = state.combat.attackers.filter(
-      (name) => !this.isPlayer(state, name) && !this.spared(name)
+    const swinging: Array<{ name: string; mob?: MobEntity | undefined }> = state.combat.attackers
+      .filter((name) => !this.isPlayer(state, name) && !this.leftAlone(name))
+      .map((name) => ({
+        name,
+        mob: state.room.occupants.find(
+          (who) => who.kind === 'mob' && mobKey(who.name) === mobKey(name)
+        )?.mob
+      }));
+    /*
+     * A blow at a protected attacker lands on its guard, whether that guard
+     * has swung yet or not (`choose`). A certain guard standing here is hit
+     * first, unless attacking it could cost alignment; an attacker something
+     * a row leaves alone protects is left to `choose`, which says why.
+     */
+    const standing = state.room.occupants.filter(
+      (who) => who.kind === 'mob' && !swinging.some((hit) => mobKey(hit.name) === mobKey(who.name))
     );
-    if (candidates.length === 0) return false;
-    const entities = candidates.map(
-      (name) =>
-        state.room.occupants.find((who) => who.kind === 'mob' && mobKey(who.name) === mobKey(name))
-          ?.mob
+    // Nothing swinging is nothing to hit back at; `engage` has the room.
+    if (swinging.length === 0) return false;
+    // The fight already committed to is finished first, whoever swung last.
+    const held = this.focusHere(state);
+    if (held !== null) {
+      return this.swing(held, t('automation.combat.whyStillOn', { target: held }));
+    }
+    /*
+     * And the first pick is the worst of the whole fight, not of whoever has
+     * swung so far: a monster the realm is certain attacks on sight is in this
+     * fight whether its first blow has landed yet or not, and the order the
+     * blows arrive in is the order the server walks the room — which says
+     * nothing about which of them costs most. Not at `engage: none`, where
+     * nothing is opened unasked, and never past a refusal `choose` would make
+     * of it — it has not swung, so picking it is opening on it: a stranger's
+     * claim, a guard left alone that protects it, the two caps.
+     */
+    const mine = ownAlignment(state);
+    const { maxMonsterExperience: worth, maxTargetHealth: cap } = this.config;
+    const certain = standing.filter(
+      (who) =>
+        this.config.engage !== 'none' &&
+        !this.leftAlone(who.name) &&
+        !this.isPlayer(state, who.name) &&
+        !who.uncertain &&
+        who.costly === 'never' &&
+        attacksOnSight(who.disposition, mine) === true &&
+        this.claimOn(state, who.name) === null &&
+        !standing.some((guard) => this.leftAlone(guard.name) && protects(guard, who) !== false) &&
+        !(worth > 0 && who.mob?.experience !== undefined && who.mob.experience > worth) &&
+        !(cap > 0 && who.mob?.hp !== undefined && who.mob.hp > cap)
     );
+    const joining: Array<{ name: string; mob?: MobEntity | undefined }> = certain.map((who) => ({
+      name: who.name,
+      mob: who.mob
+    }));
+    const pool = inTheFight<{ name: string; mob?: MobEntity | undefined }>(
+      [
+        ...swinging.filter(
+          (hit) =>
+            !standing.some((guard) => this.leftAlone(guard.name) && protects(guard, hit) !== false)
+        ),
+        ...joining,
+        ...standing
+          .filter((who) => !this.leftAlone(who.name) && who.costly === 'never')
+          .filter((who) => !certain.includes(who))
+      ],
+      (who) => swinging.includes(who) || joining.includes(who),
+      () => true
+    );
+    if (pool.length === 0) return false;
+    const entities = pool.map((who) => who.mob);
     const menaces = this.weigh(state, entities);
     const verdicts = this.verdicts(state, menaces, entities);
-    const [first] = rankByVerdict(verdicts);
-    const attacker = candidates[first ?? 0] ?? candidates[0]!;
+    const order = rankByVerdict(verdicts);
+    const [first = 0] = guardsFirst(order, pool);
+    const pick = pool[first]!;
+    const joined = !swinging.includes(pick) && !joining.includes(pick);
+    const ward =
+      joined || first !== order[0]
+        ? pool.find((other) =>
+            joined ? protects(pick, other) === true : protects(pick, other) !== false
+          )
+        : undefined;
     return this.swing(
-      attacker,
-      this.explain(attacker, verdicts[first ?? 0] ?? null, candidates.length, true)
+      pick.name,
+      ward === undefined
+        ? this.explain(pick.name, verdicts[first] ?? null, pool.length, true)
+        : t('automation.combat.whyHitBackGuard', { target: pick.name, ward: ward.name })
     );
   }
 
@@ -1136,12 +1403,16 @@ export class AutoCombat {
       unitFloor,
       deathOverRounds
     } = tuning().menace;
+    const { combat, magery, family } = this.realmClass();
     return weighRoom(
       entities.map((entity) => entity ?? {}),
+      // `SessionManager.menacePlayer`'s reading, so the card and the engine agree.
       {
         armourClass: state.progress.armourClass,
         damageResist: state.progress.damageResist,
-        magicRes: state.progress.magicRes
+        magicRes: state.progress.magicRes,
+        ...protectionOf(state, (name) => this.realmSpell(name)),
+        dodge: dodge(prowessSheetOf(state, { combat, magery }), family)?.value ?? null
       },
       {
         held,
@@ -1247,17 +1518,9 @@ export class AutoCombat {
     });
   }
 
-  /**
-   * The band a monster is attacked in: a `mobPriority` row for it, else what
-   * its monster row says (the realm's imported table, or the character's).
-   * The priority list is the more specific statement and wins.
-   */
+  /** The band a monster is attacked in, off its monster row, where one says. */
   private bandOf(name: string): MobPriorityBand | undefined {
-    const key = mobKey(name);
-    return (
-      this.config.mobPriority.find((row) => mobKey(row.mob) === key)?.priority ??
-      this.ruleOf(name)?.priority
-    );
+    return this.ruleOf(name)?.priority;
   }
 
   /**
@@ -1265,11 +1528,11 @@ export class AutoCombat {
    * per monster here, because a monster row may name only part of a name
    * (`guardsman` for `nasty guardsman`) and the ranking matches whole keys.
    */
-  private bandsFor(names: readonly string[]): MobPriority[] {
-    const rows: MobPriority[] = [];
+  private bandsFor(names: readonly string[]): MobRule[] {
+    const rows: MobRule[] = [];
     for (const name of names) {
       const band = this.bandOf(name);
-      if (band !== undefined) rows.push({ mob: name, priority: band });
+      if (band !== undefined) rows.push({ mob: name, treat: band });
     }
     return rows;
   }
@@ -1277,14 +1540,6 @@ export class AutoCombat {
   /** A monster the table marks *Stop to kill*. */
   private stopsFor(name: string): boolean {
     return this.ruleOf(name)?.stopToKill === true;
-  }
-
-  /**
-   * Never swung at, even to hit back: a name on `avoid`, or a monster the
-   * table calls a friend.
-   */
-  private spared(name: string): boolean {
-    return this.config.avoid.includes(mobKey(name)) || this.relationOf(name) === 'friend';
   }
 
   private explain(
@@ -1362,15 +1617,19 @@ export class AutoCombat {
     if (
       this.config.engage === 'none' &&
       this.assistTarget(state) === null &&
-      this.defendTarget(state) === null
+      this.defendTarget(state) === null &&
+      !this.wantedHere(state)
     ) {
       return false;
     }
     if (this.retreating) return false;
     if (Date.now() < this.standDownUntil) return false;
     if (state.combat.target !== null) return false;
-    if (this.config.maxMobs > 0 && countMobs(state.room.occupants) > this.config.maxMobs)
-      return false;
+    const here = countMobs(state.room.occupants);
+    if (this.config.maxMobs > 0 && here > this.config.maxMobs) return false;
+    // `whyNot`'s mirror of the line above. Missing, a room too small to open in
+    // held a walk's beat and held `AutoSearch` for as long as the monster stood.
+    if (this.config.minMobs > 0 && here < this.config.minMobs) return false;
     return this.pick(state) !== null;
   }
 
@@ -1440,7 +1699,7 @@ export class AutoCombat {
       return;
     }
     if (choice.target === null) {
-      // Something is here and the policy will not have it: `avoid`, the ten
+      // Something is here and the policy will not have it: a Friend or Avoid row, the ten
       // evil points, an uncertain disposition at `hostile`, or a monster the
       // realm does not say attacks first.
       this.decline(choice.considered, choice.why);
@@ -1464,8 +1723,9 @@ export class AutoCombat {
    */
   private whyNot(state: CharacterState, joining: boolean): string | null {
     // Joining a party's fight — assisting the leader or defending a member —
-    // is not *opening* one, so `engage: none` does not stop it.
-    if (this.config.engage === 'none' && !joining) {
+    // is not *opening* one, so `engage: none` does not stop it. Nor does it
+    // stop a monster a quest run was told to kill (`alsoFight`).
+    if (this.config.engage === 'none' && !joining && !this.wantedHere(state)) {
       return t('automation.combat.refusedEngageNone');
     }
     if (this.retreating) return t('automation.combat.refusedRetreating');
@@ -1512,7 +1772,7 @@ export class AutoCombat {
     if (engaged !== null) return t('automation.combat.refusedEngagedWith', { target: engaged });
     // The journey turned fighting on and the player turned it back off; it
     // stays off until the next one (`declineWhileTravelling`).
-    if (this.travelling && this.declined && !this.config.enabled) {
+    if (this.travelling && this.declined) {
       return t('automation.combat.refusedDeclinedTravelling');
     }
 
@@ -1565,7 +1825,7 @@ export class AutoCombat {
    * weighing rather than a replacement for it.
    *
    * Every refusal below is applied *before* the weighing, not after: a
-   * monster on `avoid` is not the most dangerous thing here, it is not a
+   * monster a row leaves alone is not the most dangerous thing here, it is not a
    * candidate.
    *
    * Returns `null` only when the room holds **no monster at all** — the one
@@ -1579,31 +1839,38 @@ export class AutoCombat {
     if (mobs.length === 0) return null;
     const mine = ownAlignment(state);
 
-    // The first reason, kept: it belongs to the first monster the room listed,
-    // which is the one somebody looking at the console is looking at.
-    let considered: string | null = null;
-    let why: string | null = null;
+    // Every monster's own reason, which a guard's ward also quotes.
+    const reasons = new Map<RoomOccupant, string>();
     const decline = (who: RoomOccupant, reason: string): void => {
-      if (why !== null) return;
-      considered = who.name;
-      why = reason;
+      reasons.set(who, reason);
+    };
+    // The reason reported is the first monster the room listed, which is the
+    // one somebody looking at the console is looking at.
+    const none = (): Choice | null => {
+      const first = mobs.find((who) => reasons.has(who));
+      return first === undefined
+        ? null
+        : { target: null, considered: first.name, why: reasons.get(first)! };
     };
     const willing: RoomOccupant[] = [];
+    /*
+     * Refused only because the realm does not say it starts fights: still in
+     * the fight if it protects one that is attacked, since the server turns it
+     * on the attacker whatever this module thinks of it (`guards.ts`).
+     */
+    const bystanders = new Set<RoomOccupant>();
 
     for (const who of mobs) {
-      if (this.config.avoid.includes(mobKey(who.name))) {
-        decline(who, t('automation.combat.refusedAvoided', { target: who.name }));
-        continue;
-      }
       /*
-       * What the monster table says about it (MegaMUD's relationships). Only
+       * What the monster rows say about it (MegaMUD's relationships). Only
        * an enemy is started on: a friend never is, an avoided monster waits
        * to swing first (and is hit back then — see `retaliate`), a monster to
        * flee from is run from rather than fought, and one to hang up on ends
-       * the session before a fight could matter.
+       * the session before a fight could matter. A quest's kill (`alsoFight`)
+       * is asked for by name and goes past Avoid, never past a Friend.
        */
       const relationship = this.relationOf(who.name);
-      if (relationship !== 'enemy') {
+      if (relationship !== 'enemy' && !(relationship === 'avoid' && this.isWanted(who.name))) {
         decline(
           who,
           t('automation.combat.refusedRelationship', {
@@ -1620,14 +1887,8 @@ export class AutoCombat {
        * both are one sentence about somebody else's fight, and a minute later
        * neither says anything about now.
        */
-      const claim = state.combat.claimed[mobKey(who.name)];
-      if (
-        this.config.politeAttacks &&
-        claim !== undefined &&
-        // MegaMUD: polite attacks are ignored for a Stop-to-kill monster.
-        !this.stopsFor(who.name) &&
-        Date.now() - claim.at <= tuning().combat.assistFreshMs
-      ) {
+      const claim = this.stopsFor(who.name) ? null : this.claimOn(state, who.name);
+      if (claim !== null) {
         decline(who, t('automation.combat.refusedClaimed', { target: who.name, player: claim.by }));
         continue;
       }
@@ -1637,6 +1898,16 @@ export class AutoCombat {
        */
       if (who.costly === 'always') {
         decline(who, t('automation.combat.refusedCostly', { target: who.name }));
+        continue;
+      }
+      /*
+       * A quest step's monster (`alsoFight`) is past the policy from here on:
+       * the caps and the disposition are about what to pick a fight with
+       * unasked, and this one was asked for by name. The refusals above it —
+       * a Friend, a claim, the ten evil points — stand.
+       */
+      if (this.isWanted(who.name)) {
+        willing.push(who);
         continue;
       }
       const worth = this.config.maxMonsterExperience;
@@ -1672,64 +1943,109 @@ export class AutoCombat {
       const guessing = who.uncertain || who.costly === 'sometimes';
       if (guessing && this.config.engage === 'hostile') {
         decline(who, t('automation.combat.refusedUncertain', { target: who.name }));
+        // A possible alignment cost is the coin toss the setting refused.
+        if (who.costly === 'never') bystanders.add(who);
         continue;
       }
       if (this.config.engage !== 'all' && attacksOnSight(who.disposition, mine) !== true) {
         decline(who, t('automation.combat.refusedNotHostile', { target: who.name }));
+        bystanders.add(who);
         continue;
       }
       willing.push(who);
     }
 
     if (willing.length === 0) {
-      return why === null || considered === null ? null : { target: null, considered, why };
+      return none();
     }
-    const entities = willing.map((who) => who.mob);
+    /*
+     * Weighed with the guards it brings in, because the room's blows are the
+     * unit a hazard is priced in and those guards will be swinging.
+     */
+    const pool = inTheFight(
+      mobs,
+      (who) => willing.includes(who),
+      (who) => bystanders.has(who)
+    );
+    const entities = pool.map((who) => who.mob);
     const menaces = this.weigh(state, entities);
     const verdicts = this.verdicts(state, menaces, entities);
     /*
-     * The one preference the verdict leaves to the player: how hard a fight
-     * to take. `cost` is the health the fight is expected to take off this
-     * character, a bound, and a monster whose bound reaches the stated share
-     * of *current* health is declined with both figures — read from the same
-     * `Verdict` the card draws, so what the card calls a bad fight the engine
-     * declines. An unknown cost is not a high one: on a lineage whose
-     * arithmetic the client does not have every cost is unknown, and refusing
-     * them all would be auto-combat switched off by another name.
+     * A monster that something refused outright protects cannot be attacked
+     * without fighting that one, so it is declined with the guard's reason,
+     * and so in turn is whatever it protects. A maybe counts here: refusing
+     * is the cautious answer.
      */
-    const hp = state.vitals.hp;
-    const share = this.config.maxFightCost;
-    const affordable = willing.map((who, index) => {
-      if (share <= 0 || hp === null) return true;
-      const cost = verdicts[index]?.cost ?? null;
-      if (cost === null || cost.value < share * hp) return true;
-      decline(
-        who,
-        t('automation.combat.refusedTooCostly', {
-          target: who.name,
-          cost: Math.round(cost.value),
-          hp
-        })
-      );
-      return false;
-    });
-    const candidates = willing.filter((_, index) => affordable[index]);
-    if (candidates.length === 0) {
-      return why === null || considered === null ? null : { target: null, considered, why };
+    const refused = new Set(mobs.filter((who) => reasons.has(who) && !bystanders.has(who)));
+    const open = [...pool];
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const who of [...open]) {
+        const guard = [...refused].find((other) => protects(other, who) !== false);
+        if (guard === undefined) continue;
+        decline(
+          who,
+          t('automation.combat.refusedGuarded', {
+            target: who.name,
+            guard: guard.name,
+            why: reasons.get(guard) ?? ''
+          })
+        );
+        refused.add(who);
+        open.splice(open.indexOf(who), 1);
+        grew = true;
+      }
     }
-    const kept = verdicts.filter((_, index) => affordable[index]);
+    // A guard brought in for a ward that has just been declined stays out.
+    const candidates = inTheFight(
+      open,
+      (who) => willing.includes(who),
+      (who) => bystanders.has(who)
+    );
+    if (candidates.length === 0) {
+      return none();
+    }
+    // The fight already committed to, while it stands. See `focus`.
+    const held = this.focusHere(state);
+    const committed = candidates.find((who) => who.name === held);
+    if (committed !== undefined) {
+      return {
+        target: committed.name,
+        because: t('automation.combat.whyStillOn', { target: committed.name })
+      };
+    }
+    const kept = candidates.map((who) => verdicts[pool.indexOf(who)]!);
     /*
      * The player's own order, where they stated one for something in this
      * room. It replaces the weighing rather than ranking against it — see
-     * `CombatConfig.mobPriority` — so `rankByVerdict` is not consulted at
+     * `CombatConfig.monsters` — so `rankByVerdict` is not consulted at
      * all on this path, and the trace says the band rather than a menace
      * figure that did not make the decision.
      */
     const names = candidates.map((who) => who.name);
     const ranked = rankByPriority(names, this.bandsFor(names));
+    /*
+     * The realm's guards outrank either order: the server hands the blow to
+     * the guard whichever is named, so what it protects waits for it.
+     */
+    const order = ranked ?? rankByVerdict(kept);
+    const [index = 0] = guardsFirst(order, candidates);
+    const pick = candidates[index] ?? candidates[0]!;
+    const joined = bystanders.has(pick);
+    if (joined || index !== order[0]) {
+      const ward = candidates.find((other) =>
+        joined ? protects(pick, other) === true : protects(pick, other) !== false
+      );
+      if (ward !== undefined) {
+        return {
+          target: pick.name,
+          because: joined
+            ? t('automation.combat.whyGuardJoins', { target: pick.name, ward: ward.name })
+            : t('automation.combat.whyGuardFirst', { target: pick.name, ward: ward.name })
+        };
+      }
+    }
     if (ranked !== null) {
-      const index = ranked[0] ?? 0;
-      const pick = candidates[index] ?? candidates[0]!;
       return {
         target: pick.name,
         because: this.whyRanked(
@@ -1739,11 +2055,9 @@ export class AutoCombat {
         )
       };
     }
-    const [first] = rankByVerdict(kept);
-    const pick = candidates[first ?? 0] ?? candidates[0]!;
     return {
       target: pick.name,
-      because: this.explain(pick.name, kept[first ?? 0] ?? null, candidates.length, false)
+      because: this.explain(pick.name, kept[index] ?? null, candidates.length, false)
     };
   }
 
@@ -1777,30 +2091,6 @@ export class AutoCombat {
 
   private decline(target: string, why: string): void {
     this.note(target, false, why);
-  }
-
-  /**
-   * This character cast between rounds — a heal, a blessing, a cure — or the
-   * server refused a cast. Either is answered `*Combat Off*` with the monster
-   * still standing here, and the fight has to be engaged again **at once**.
-   *
-   * The engage cooldown is a floor on asking about a monster whose answer has
-   * not come, and this is not that: the answer came, and a cast of this
-   * character's own undid it. Kept, it lost a round after every heal on skinny
-   * (2026-09-23) — `c mahe`, `*Combat Off*`, and the re-engage waiting out the
-   * four seconds since `c fury giant war dog`, past the server's next round,
-   * because every dog in the room shares the name.
-   */
-  openAgain(): void {
-    /*
-     * On the `*Combat Off*` that answers it, not at the send: cleared at the
-     * send, the next state change swung again while the fight was still on,
-     * and three `c spir` went into a room the round had already emptied.
-     */
-    if (this.state?.inCombat === true) this.reopen = true;
-    else this.opened.clear();
-    // The cast replaced the room spell the fight was repeating.
-    this.dropArea();
   }
 
   /**
@@ -1888,9 +2178,67 @@ export class AutoCombat {
     });
   }
 
+  /**
+   * A command as a cast, `c` or bare (`castOf`): a bare word is a spell when
+   * this character's listing, or the realm's table, has it as a short name.
+   */
+  private castIn(command: string): { word: string; argument: string } | null {
+    return castOf(
+      command,
+      (word) =>
+        isShortIn(word, this.state?.spellbook) ||
+        this.realmSpell(word)?.short?.toLowerCase() === word.toLowerCase()
+    );
+  }
+
+  /** The spell a command casts, or null. */
+  private spellOf(command: string): string | null {
+    return this.castIn(command)?.word ?? null;
+  }
+
   private isArea(spell: string | null): boolean {
     const area = this.spells.areaAttack.trim();
     return spell !== null && area.length > 0 && this.sameSpell(spell, area);
+  }
+
+  /**
+   * `*Combat Off*` answering a command that is not an attack: the server ended
+   * the fight *for* that command, so the monster is owed its attack back now.
+   *
+   * The engage cooldown is for the Off half of an attack's own answer (see
+   * `endFight`). An instant spell calls `BreakCombat` before its roll
+   * (`Spell.cs:2082`), and a blessing lapsing mid-fight is cast into one:
+   * `gbls` 167ms behind `aa dustdevil` ended the fight, the cooldown refused
+   * the re-engage for four seconds, and the dustdevil's round went unanswered
+   * (todo 03, 2026-09-23). Released for the monster the fight was on, so the
+   * state the Off produces re-opens it; that `aa` meets no fight, so it is
+   * answered by `*Combat Engaged*` alone and cannot feed itself.
+   */
+  private fightBrokenBy(command: string | null): void {
+    if (command === null) return;
+    const name = commandOf(command);
+    if (name !== null && ATTACK_COMMANDS.has(name)) return;
+    // A configured verb the command table does not call an attack is still one.
+    const word = (text: string): string => text.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+    const verb = word(command);
+    if (verb === word(this.config.attack) || verb === word(this.config.opener)) return;
+    /*
+     * A room spell's fight has no target to release — its opening is held
+     * against the name it was aimed at — and the cast that broke it replaced
+     * the spell the server was repeating: a heal on skinny (2026-09-23), then
+     * three `c spir` into a room the round had already emptied. So the whole
+     * cooldown goes, and the room spell with it, unless the command was that
+     * spell again.
+     */
+    if (this.areaEngaged) {
+      if (this.isArea(this.spellOf(command))) return;
+      this.dropArea();
+      this.opened.clear();
+      return;
+    }
+    const fought = this.state?.combat.target ?? null;
+    if (fought !== null) this.opened.delete(mobKey(fought));
+    if (this.focus !== null) this.opened.delete(this.focus);
   }
 
   /**
@@ -1938,6 +2286,7 @@ export class AutoCombat {
     // is still deciding something — the room's occupants, at most.
     for (const [name, at] of this.opened) if (now - at >= cooldown) this.opened.delete(name);
     this.opened.set(key, now);
+    this.focus = key;
     this.openerSpent = true;
     /*
      * The monster row's pre-attack spell, ahead of whatever opens the fight.
@@ -2201,6 +2550,10 @@ export class AutoCombat {
     this.rounds += 1;
     this.refresh();
     this.roundSpell(state);
+    // And whatever else this beat is owed to. Last, because the spell is the
+    // round's own command and anything riding the beat is spending what is
+    // left of it.
+    this.events.round?.(state);
   }
 
   /**
@@ -2344,14 +2697,14 @@ export class AutoCombat {
      * room, once a round. See `canPayFor`.
      */
     if (found === null || !canPayFor(state, spellCost(found))) return null;
-    // The realm's short name — the `Cast` command reads exactly one word
-    // as the spell (`castWord`), so `mmis giant rat`, never
-    // `c minor missile giant rat`.
+    // The realm's short name, which is itself the command (`castWord`):
+    // `mmis giant rat`, never `c minor missile giant rat` — and a mystic's
+    // `swan` has no `c` form at all.
     const word = found.word;
     // A room spell is cast bare: the wire shows an area cast with no target
     // answering `You cast poison cloud on the room!` (captures/131); a named
     // target on one has never been seen.
-    return cast.area ? `c ${word}` : `c ${word} ${target}`;
+    return cast.area ? word : `${word} ${target}`;
   }
 
   /**
@@ -2442,7 +2795,7 @@ export class AutoCombat {
        */
       const spares = state.room.occupants.some(
         (who) =>
-          who.kind === 'mob' && (this.spared(who.name) || this.relationOf(who.name) !== 'enemy')
+          who.kind === 'mob' && (this.leftAlone(who.name) || this.relationOf(who.name) !== 'enemy')
       );
       const crowd = Math.max(countThreats(state), state.combat.attackers.length);
       const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
@@ -2788,6 +3141,21 @@ export class AutoCombat {
 
   private relationOf(name: string): Relationship {
     return this.ruleOf(name)?.relationship ?? 'enemy';
+  }
+
+  /**
+  /**
+   * Whether the monster rows say to leave this monster alone — a Friend,
+   * never attacked, even when it swings first.
+   *
+   * Upstream's `never` row, which is what the flat `combat.avoid` list became
+   * and which is a Friend here since the two monster lists became one
+   * (2026-09-24). One reading, because it is asked from every place a swing is
+   * decided — the assist, the defence, retaliation, a guard's ward, a quest's
+   * kill — and copies of the test are how one of them comes to disagree.
+   */
+  private leftAlone(name: string): boolean {
+    return this.relationOf(name) === 'friend';
   }
 
   private isPlayer(state: CharacterState, name: string): boolean {

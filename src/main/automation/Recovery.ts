@@ -650,6 +650,6 @@ export class Recovery {
 
 /** The name of a held message row saying to rest to full, of this kind, or null. */
 function statedRest(state: CharacterState, action: 'rest-hp' | 'rest-mana'): string | null {
-  const row = state.stated.find((entry) => entry.action === action);
+  const row = state.heard.find((entry) => entry.action === action);
   return row === undefined ? null : row.name || action;
 }

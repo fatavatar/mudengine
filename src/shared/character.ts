@@ -24,6 +24,7 @@ import type {
 import type { ExperienceTable } from './experience';
 import type { Direction, RoomCommand, WorldLair, WorldShop, WorldSpell } from './world';
 import type { WoundBand } from './wounds';
+import type { StatedSheet } from './stated';
 import { NO_PLAYERS, type PlayerRegistry } from './players';
 import { NO_TALLY, type CombatTally } from './tally';
 import type { MessageAction, MessageEffect } from './messageTriggers';
@@ -87,6 +88,13 @@ export interface Afflictions {
    * a step that lands — see `stoodUp`.
    */
   held: Affliction;
+  /**
+   * Confused: every command has a chance of being thrown away before the
+   * server reads it (`ActionFigure.CheckConfusion`, todo 05). Read from the
+   * realm's `Confusion` rows both ways, from `You are confused!`, and from
+   * the fumble itself, which proves it.
+   */
+  confused: Affliction;
 }
 
 /**
@@ -111,15 +119,16 @@ export interface StatedEffect {
 }
 
 /** Whether the realm's messages say this is on the character now. */
-export function isStated(state: Pick<CharacterState, 'stated'>, effect: MessageEffect): boolean {
-  return state.stated.some((entry) => entry.effects.includes(effect));
+export function isStated(state: Pick<CharacterState, 'heard'>, effect: MessageEffect): boolean {
+  return state.heard.some((entry) => entry.effects.includes(effect));
 }
 
 export const NO_AFFLICTIONS: Afflictions = {
   blind: 'unknown',
   poisoned: 'unknown',
   diseased: 'unknown',
-  held: 'unknown'
+  held: 'unknown',
+  confused: 'unknown'
 };
 
 /**
@@ -532,6 +541,25 @@ export interface Room {
    * happened.
    */
   light: RoomLight | null;
+  /**
+   * How many times this character has arrived somewhere, counted from the
+   * session's first room.
+   *
+   * **The one thing that tells an arrival from a reprint**, and the only thing
+   * that can: a room is otherwise addressed by its name and the exits it
+   * printed, and a maze is a maze precisely because that address is not
+   * unique. Three rooms called `Secret Passage` with `east, west` in a row
+   * (bearfather, 2026-09-17) are one address, so `AutoSearch` searched the
+   * first and believed it was still standing in it for the other two.
+   *
+   * The tracker already knows: a room block that consumed a pending move is an
+   * arrival and every other one is a reprint, which is the same test that
+   * decides whether a search's finds are carried across. This is that fact
+   * published rather than recomputed, so nothing downstream has to guess at it.
+   * Unchanged by a `look`, a courtesy reprint after a fight and the idle
+   * Enter — all of which leave the character where it was standing.
+   */
+  arrival: number;
 
   // --- what the realm knows, attached the moment the room resolved --------
   //
@@ -1184,7 +1212,8 @@ export function emptyRoom(): Room {
     confidence: 0,
     ambiguous: 0,
     candidates: [],
-    light: null
+    light: null,
+    arrival: 0
   };
 }
 
@@ -1303,6 +1332,22 @@ export function bankKey(name: string): string {
     .toLowerCase()
     .replace(/^the\s+/, '')
     .trim();
+}
+
+/**
+ * The balance this character's record holds for a bank row: by the shop id
+ * the header printed, else by the name through `bankKey`, since one realm
+ * prints no id and the two spell the article differently. Null is a vault
+ * nobody has asked, never an empty one.
+ */
+export function balanceOf(
+  shop: { id: number; name: string },
+  banks: readonly BankBalance[]
+): BankBalance | null {
+  const byId = banks.find((bank) => bank.shop !== null && bank.shop === shop.id);
+  if (byId) return byId;
+  const key = bankKey(shop.name);
+  return banks.find((bank) => bankKey(bank.name) === key) ?? null;
 }
 
 /**
@@ -1501,8 +1546,11 @@ export interface CharacterState {
   mortallyWounded: boolean;
   /** What the server has said is wrong with this character. See `Affliction`. */
   afflictions: Afflictions;
-  /** What the realm's message table says is on this character. See `StatedEffect`. */
-  stated: readonly StatedEffect[];
+  /**
+   * What the realm's message table says is on this character. See
+   * `StatedEffect`. Not `stated`, which is the `stat all` sheet.
+   */
+  heard: readonly StatedEffect[];
   /**
    * The duration spells the wire has confirmed on this character, newest last.
    *
@@ -1529,6 +1577,11 @@ export interface CharacterState {
    * one this project refuses.
    */
   abilities: AbilitySums | null;
+  /**
+   * What the last `stat all` said, or null until one has been read. Carries
+   * what it was computed from; `statedNow` says what of it still holds.
+   */
+  stated: StatedSheet | null;
   /** See `StatusLineFacts`. */
   statline: StatusLineFacts;
   /** Epoch ms of the last status line, i.e. the last confirmed heartbeat. */
@@ -1609,10 +1662,11 @@ export const EMPTY_CHARACTER: CharacterState = {
   party: NO_PARTY,
   stealth: 'unknown',
   afflictions: NO_AFFLICTIONS,
-  stated: [],
+  heard: [],
   buffs: [],
   spellbook: null,
   abilities: null,
+  stated: null,
   statline: { reported: null, exact: null },
   lastStatusAt: null,
   updatedAt: null

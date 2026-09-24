@@ -8,10 +8,14 @@ import {
 } from './menace';
 import { swing, type ProwessSheet, type ProwessWeapon, type Reckoning } from './prowess';
 import type { RealmFamily } from './realm';
+// Type only: `survival.ts` imports this module's values, and a value the other
+// way would be the cycle `module-cycle.test.ts` exists to refuse.
+import type { Survival } from './survival';
 import { DODGE_ABILITY } from './abilities';
+import { statedNow } from './stated';
 import type { CharacterState, RoomOccupant } from './character';
 import type { MobEntity } from './entities';
-import { DEFAULT_MOB_PRIORITY, MOB_PRIORITIES, type MobPriority } from './config';
+import { DEFAULT_MOB_PRIORITY, MOB_PRIORITIES, type MobPriorityBand, type MobRule } from './config';
 import { mobKey } from './world';
 
 /**
@@ -152,10 +156,13 @@ export function targetOf(entity: TargetEntity | undefined): {
  * because two copies of *which sheet figure feeds which formula* agree until
  * one is edited. `combat` and `magery` are the class row's — the sheet prints
  * neither — and a null row leaves both null, which `prowess` answers with
- * null rather than a guess.
+ * null rather than a guess. And what the last `stat all` said, where it still
+ * holds (`statedNow`), so every reader of the sheet gets the server's figure
+ * without asking for it.
  */
 export function prowessSheetOf(
-  state: Pick<CharacterState, 'progress' | 'inventory'>,
+  state: Pick<CharacterState, 'progress' | 'inventory'> &
+    Partial<Pick<CharacterState, 'stated' | 'buffs' | 'className' | 'party' | 'name'>>,
   cls: { combat: number | null; magery: number | null }
 ): ProwessSheet {
   const { encumbrance, encumbranceMax } = state.inventory;
@@ -173,7 +180,8 @@ export function prowessSheetOf(
     encumbrancePercent:
       encumbrance === null || encumbranceMax === null || encumbranceMax <= 0
         ? null
-        : (100 * encumbrance) / encumbranceMax
+        : (100 * encumbrance) / encumbranceMax,
+    stated: statedNow(state)
   };
 }
 
@@ -222,9 +230,16 @@ export interface RoomVerdict {
    * A `bound`, as every `cost` under it is.
    */
   cost: Reckoning<number> | null;
+  /**
+   * The room's fight run rather than added up (`simulateFight`): how often
+   * this character walks out, against everything here that would fight, with
+   * the heal it would cast and the regeneration it gets. Null where the fight
+   * cannot be run honestly, and the card says so rather than guessing.
+   */
+  survival: Survival | null;
 }
 
-export const EMPTY_ROOM_VERDICT: RoomVerdict = { monsters: [], cost: null };
+export const EMPTY_ROOM_VERDICT: RoomVerdict = { monsters: [], cost: null, survival: null };
 
 /** Every occupant the room lists that is not a person — the ones a verdict is about. */
 export function appraiseRoom(
@@ -253,8 +268,27 @@ export function appraiseRoom(
   }
   return {
     monsters: monsters.map((who, index) => ({ name: who.name, verdict: verdicts[index]! })),
-    cost: complete ? { value: total, from: 'bound' } : null
+    cost: complete ? { value: total, from: 'bound' } : null,
+    // Run by the session, which alone holds the heal and the buffs; the
+    // appraisal itself is the expectation and says nothing about the tail.
+    survival: null
   };
+}
+
+/**
+ * What one pass through a room's lair takes, and whether the wire says so.
+ *
+ * `sure` is false when the worst monster counted is one whose disposition is
+ * conditional on a standing nothing has read — it may open on this character
+ * or it may not, and `attacksOnSight` answers neither. The damage is still the
+ * honest worst case; the flag is what lets the router price it as a
+ * discouragement instead of a wall. See {@link lairPass}.
+ */
+export interface LairPass {
+  /** Hit points, for the worst that waits there. */
+  damage: number;
+  /** Whether the wire settles that it happens at all. */
+  sure: boolean;
 }
 
 /**
@@ -296,6 +330,60 @@ export function lairPassage(
 }
 
 /**
+ * What one pass takes, and whether the wire settles that it happens at all.
+ *
+ * `lairPassage` folds *certainly attacks* and *nobody can say* together on
+ * purpose — unknown is never the reassuring answer, so both count — and the
+ * router then has one number where it needs two facts. A monster's
+ * disposition can be conditional on a standing (`hates-evil` opens on an
+ * Outlaw and leaves a Saint alone), so a character whose roster row has not
+ * been read meets `null` from every guard in town; priced at its full share
+ * that reaches `deadlyShare` and **walls** the corridor, which is a route
+ * closed on a fact nobody has read.
+ *
+ * So the same predicate is read twice, which is cheaper than a second return
+ * shape and says exactly what the difference is: `possible` counts everything
+ * `lairPassage` counts, `certain` counts only what the wire settles, and when
+ * they part it is because the *worst* monster is one that may not open at all.
+ * The damage stays the honest worst case — `sure` is what earns it a cap
+ * rather than a wall (`tuning.world.unsureShare`, applied by `passShare`).
+ */
+export function lairPass(
+  verdicts: ReadonlyArray<Verdict>,
+  held: number | null,
+  rounds: number,
+  attacks: (index: number) => boolean | null
+): LairPass | null {
+  const possible = lairPassage(verdicts, held, rounds, (index) => attacks(index) !== false);
+  if (possible === null) return null;
+  const certain = lairPassage(verdicts, held, rounds, (index) => attacks(index) === true);
+  return { damage: possible, sure: certain !== null && certain >= possible };
+}
+
+/**
+ * A weighed pass as a share of the bar the router prices against, capped where
+ * the wire cannot settle that the fight happens at all.
+ *
+ * The share is taken against the health the character has **now** rather than
+ * against the maximum: a route planned at a third of the bar has to be three
+ * times as careful as one planned at the top of it. `cap` is what an
+ * unevidenced pass may cost at most, and it exists so that *nobody has read
+ * this character's standing* discourages a room instead of closing it — the
+ * same answer `edgePenalty` gives a gate it cannot evaluate. Null where
+ * nothing can be weighed, which prices at nothing; unread health is not zero
+ * health.
+ */
+export function passShare(
+  pass: LairPass | null,
+  health: number | null,
+  cap: number
+): number | null {
+  if (pass === null || health === null || !(health > 0)) return null;
+  const share = pass.damage / health;
+  return pass.sure ? share : Math.min(share, cap);
+}
+
+/**
  * What of an appraisal a reader can see, so a publisher pushes on change and
  * not on every status line: the names, and each figure to the unit it is drawn
  * at. Two appraisals with the same key draw the same row.
@@ -316,7 +404,12 @@ export function roomVerdictKey(appraisal: RoomVerdict): string {
           verdict.rounds
         )}:${health(verdict.cost)}`
     ),
-    health(appraisal.cost)
+    health(appraisal.cost),
+    appraisal.survival === null
+      ? '-'
+      : `${Math.round(appraisal.survival.survives * 100)}:${appraisal.survival.level}:${Math.round(
+          appraisal.survival.rounds.value
+        )}:${appraisal.survival.hpLeft ?? '-'}`
   ].join('|');
 }
 
@@ -375,14 +468,14 @@ export function rankByVerdict(verdicts: ReadonlyArray<Verdict>): number[] {
 }
 
 /**
- * The order to attack a room in when a priority list has something to say.
+ * The order to attack a room in when the monster list has something to say.
  *
  * Bands first, and **instead of** the weighing rather than above it: a listed
  * monster's band decides, and within one band the room's own listing order
  * decides. That is the order the client used before any weighing existed, and
  * it is the one somebody reading their own list can predict — which is the
  * whole point of writing the list. `rankByVerdict` is not consulted here at
- * all; see `CombatConfig.mobPriority`.
+ * all; see `CombatConfig.monsters`, whose priorities `AutoCombat.bandsFor` hands in as these rows.
  *
  * `names` and `verdicts` are parallel to the candidates the caller is choosing
  * between, and the returned indices point back into them. `verdicts` is taken
@@ -392,10 +485,15 @@ export function rankByVerdict(verdicts: ReadonlyArray<Verdict>): number[] {
  * case and the one where the realm's arithmetic should decide as it always
  * has. Deciding that here keeps the caller from asking the same question
  * twice.
+ *
+ * A `never` row is not a rank and is skipped outright: such a monster was
+ * declined long before this, so a row for it says nothing about the order of
+ * what is left — and counting it as *listed* would take the whole room off
+ * the realm's arithmetic on the strength of a monster nobody is fighting.
  */
 export function rankByPriority(
   names: readonly string[],
-  rows: readonly MobPriority[]
+  rows: readonly MobRule[]
 ): number[] | null {
   if (rows.length === 0) return null;
   /*
@@ -404,7 +502,11 @@ export function rankByPriority(
    * and a list that quietly did nothing until the file was reloaded would be
    * the control lying about itself while somebody watched it.
    */
-  const bands = new Map(rows.map((row) => [mobKey(row.mob), row.priority]));
+  const bands = new Map<string, MobPriorityBand>();
+  for (const row of rows) {
+    if (row.treat === 'never') continue;
+    bands.set(mobKey(row.mob), row.treat);
+  }
   const middle = MOB_PRIORITIES.indexOf(DEFAULT_MOB_PRIORITY);
   let listed = false;
   const scored = names.map((name, index) => {

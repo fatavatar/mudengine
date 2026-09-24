@@ -35,7 +35,7 @@ import type { LoopProgress } from '../shared/loops';
 import type { WalkProgress } from '../shared/walk';
 import type { AutomationSnapshot } from '../shared/automation';
 import type { RoomVerdict } from '../shared/verdict';
-import type { QuestWatched, RoomAsk } from '../shared/quests';
+import type { QuestRunProgress, QuestWatched, RoomAsk } from '../shared/quests';
 import type {
   ConnectionState,
   ConnectionTarget,
@@ -57,6 +57,8 @@ const api: IpcApi = {
 
   clientReady: () => ipcRenderer.send(Send.clientReady),
   input: (session: SessionId, data: string) => ipcRenderer.send(Send.input, session, data),
+  macro: (session: SessionId, line: string) => ipcRenderer.send(Send.macro, session, line),
+  dropMacro: (session: SessionId) => ipcRenderer.send(Send.dropMacro, session),
   resize: (session: SessionId, size: TerminalSize) => ipcRenderer.send(Send.resize, session, size),
   diagnostics: (on: boolean) => ipcRenderer.send(Send.diagnostics, on),
   debugFeed: (on: boolean) => ipcRenderer.send(Send.debugFeed, on),
@@ -71,11 +73,11 @@ const api: IpcApi = {
   saveDebug: (session) => ipcRenderer.invoke(Invoke.saveDebug, session),
   getCharacter: (session) => ipcRenderer.invoke(Invoke.getCharacter, session),
   routeTo: (session, map, room) => ipcRenderer.invoke(Invoke.routeTo, session, map, room),
-  walkRoute: (session, route) => ipcRenderer.invoke(Invoke.walkRoute, session, route),
+  walkRoute: (session, route, run) => ipcRenderer.invoke(Invoke.walkRoute, session, route, run),
   startMoving: (session, loop, confirmed) =>
     ipcRenderer.invoke(Invoke.startMoving, session, loop, confirmed),
-  collectThenWalk: (session, items, route) =>
-    ipcRenderer.invoke(Invoke.collectThenWalk, session, items, route),
+  collectThenWalk: (session, items, route, run) =>
+    ipcRenderer.invoke(Invoke.collectThenWalk, session, items, route, run),
   stopMoving: (session) => ipcRenderer.invoke(Invoke.stopMoving, session),
   stepBack: (session, confirmed) => ipcRenderer.invoke(Invoke.stepBack, session, confirmed),
   listLoops: (session) => ipcRenderer.invoke(Invoke.listLoops, session),
@@ -136,13 +138,18 @@ const api: IpcApi = {
   worldInfo: (session) => ipcRenderer.invoke(Invoke.worldInfo, session),
   questBook: (session) => ipcRenderer.invoke(Invoke.questBook, session),
   questErrand: (session, block) => ipcRenderer.invoke(Invoke.questErrand, session, block),
+  questPlan: (session, block, marked) =>
+    ipcRenderer.invoke(Invoke.questPlan, session, block, marked),
+  questRun: (session, block, marked) => ipcRenderer.invoke(Invoke.questRun, session, block, marked),
+  questStop: (session) => ipcRenderer.invoke(Invoke.questStop, session),
   localMap: (session, map, room, radius) =>
     ipcRenderer.invoke(Invoke.localMap, session, map, room, radius),
   roomBrief: (session, map, room) => ipcRenderer.invoke(Invoke.roomBrief, session, map, room),
-  huntingGrounds: (session) => ipcRenderer.invoke(Invoke.huntingGrounds, session),
+  huntingGrounds: (session, measure) => ipcRenderer.invoke(Invoke.huntingGrounds, session, measure),
   trainers: (session) => ipcRenderer.invoke(Invoke.trainers, session),
   banks: (session) => ipcRenderer.invoke(Invoke.banks, session),
   itemsServing: (session) => ipcRenderer.invoke(Invoke.itemsServing, session),
+  wards: (session) => ipcRenderer.invoke(Invoke.wards, session),
   draftLoop: (session, rooms) => ipcRenderer.invoke(Invoke.draftLoop, session, rooms),
   wearer: (session) => ipcRenderer.invoke(Invoke.wearer, session),
   lookup: (session, query) => ipcRenderer.invoke(Invoke.lookup, session, query),
@@ -175,6 +182,7 @@ const api: IpcApi = {
   onFinds: (handler) => subscribe<Addressed<Find[]>>(Push.finds, handler),
   onCharacterReset: (handler) => subscribe<Addressed<ResetNotice>>(Push.characterReset, handler),
   onQuestSaid: (handler) => subscribe<Addressed<QuestWatched>>(Push.questSaid, handler),
+  onQuestRun: (handler) => subscribe<Addressed<QuestRunProgress>>(Push.questRun, handler),
   onConfig: (handler) => subscribe<ConfigSnapshot>(Push.config, handler),
   onInternal: (handler) => subscribe<InternalConfig>(Push.internal, handler)
 };

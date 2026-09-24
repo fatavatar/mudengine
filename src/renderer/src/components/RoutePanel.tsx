@@ -4,6 +4,7 @@ import MapView from './MapView';
 import ClearField from './ClearField';
 import Icon from './Icon';
 import { commandsOf, runsOf, stepSignature } from '../lib/route';
+import { useHotkeys } from '../hooks/useHotkeys';
 import { useListNavigation } from '../hooks/useListNavigation';
 import { t } from '../lib/i18n';
 import { type LocalMap } from '@shared/map';
@@ -33,7 +34,7 @@ function named(items: ReadonlyArray<{ name: string }>): string {
 }
 
 /** Which of the plan's routes is on screen — see `chosen`. */
-type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'keyed';
+type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'keyed' | 'another';
 
 /**
  * Whether an alternative steps over none of the walls the plan crosses — the
@@ -59,8 +60,9 @@ export interface RoutePanelProps {
    * Resolves to what happened: walking, why it could not, or **the plan drawn
    * again** — the character moved between the drawing and the press, and the
    * way from where it now stands comes back to be read and pressed again.
+   * `run` is *Run it*: auto-combat turned off first, and left off (todo 06).
    */
-  onWalk(route: Route): Promise<WalkStart>;
+  onWalk(route: Route, run: boolean): Promise<WalkStart>;
   /**
    * Collects what the way needs first, then walks it (todo 07).
    *
@@ -70,7 +72,8 @@ export interface RoutePanelProps {
    */
   onCollectThenWalk(
     items: Array<{ id: number; name: string }>,
-    route: Route
+    route: Route,
+    run: boolean
   ): Promise<string | null>;
   /**
    * A destination chosen elsewhere — clicking the map — to plan on opening.
@@ -171,7 +174,20 @@ function chips(step: RouteStep) {
       a summons — is the word, never the share it was priced at: `2%` beside
       a room whose spell is unread was read as a lair figure. */}
       {step.hazard !== undefined && (
-        <span className={step.hazardKind === undefined ? 'chip bad' : 'chip warn'}>
+        <span
+          className={step.hazardKind === undefined ? 'chip bad' : 'chip warn'}
+          /* The two words that are a *discouragement* rather than a figure say
+             so on hover: neither is a reading that the room is dangerous, and
+             `unread` in particular is the absence of a reading — which is not
+             what the word says on its own (todo 01). */
+          title={
+            step.hazardKind === 'unread'
+              ? t('cards.route.stepUnreadTitle')
+              : step.hazardKind === 'summons'
+                ? t('cards.route.stepSummonsTitle')
+                : undefined
+          }
+        >
           {step.hazardKind === 'unread'
             ? t('cards.route.stepUnread')
             : step.hazardKind === 'summons'
@@ -263,8 +279,9 @@ export default function RoutePanel({
   /**
    * Which of the plan's routes is on screen: the plan itself, the way round
    * the worst of it (`Route.otherWay`), the way with the right items
-   * (`Route.carrying`), or the way that spends a charge to skip the walk
-   * (`Route.viaItem`). A choice among routes main already planned, never a
+   * (`Route.carrying`), the way that spends a charge to skip the walk
+   * (`Route.viaItem`), or a way that is simply not the plan
+   * (`Route.another`). A choice among routes main already planned, never a
    * re-plan: the panel is a reader, and *Show it* swaps what is read.
    */
   const [chosen, setChosen] = useState<Way>('plan');
@@ -322,7 +339,9 @@ export default function RoutePanel({
             ? (route.unlocks ?? route)
             : chosen === 'viaItem'
               ? (route.viaItem ?? route)
-              : route;
+              : chosen === 'another'
+                ? (route.another ?? route)
+                : route;
   /**
    * How large a room is drawn in the picture of where the route ends.
    *
@@ -532,7 +551,7 @@ export default function RoutePanel({
   });
 
   const walk = useCallback(
-    (plan: Route): void => {
+    (plan: Route, run = false): void => {
       /*
        * *Collect it first* is a different press: main goes and gets every
        * item the way asks for, one after another, and walks it once the pack
@@ -573,10 +592,12 @@ export default function RoutePanel({
        * way on from there itself, so a plan handed to it cannot be stale and
        * there is nothing for it to redraw.
        */
+      // *Run it* rides through both doors: the errand carries it to the walk
+      // it ends in, so the ticks and the press compose as they do for a walk.
       const started: Promise<WalkStart> =
         needed.length === 0
-          ? onWalk(walked)
-          : onCollectThenWalk(needed, walked).then((reason) =>
+          ? onWalk(walked, run)
+          : onCollectThenWalk(needed, walked, run).then((reason) =>
               reason === null ? { started: true } : { refused: reason }
             );
       void started
@@ -630,10 +651,25 @@ export default function RoutePanel({
     [onPeek, shown, walk]
   );
 
-  if (!open) return null;
-
   /** True when there is a plan on screen that could actually be walked. */
   const walkable = shown !== null && !shown.blocked && shown.steps.length > 0;
+
+  /*
+   * The two presses from the keyboard: Alt R runs it, Alt G walks it. At the
+   * window rather than on the form, because a click on the panel's own
+   * background leaves the caret on the body, and only while a plan is on
+   * screen, so neither chord is taken from the game the rest of the time.
+   */
+  useHotkeys(
+    open && walkable && shown !== null
+      ? [
+          { key: 'r', alt: true, run: () => walk(shown, true) },
+          { key: 'g', alt: true, run: () => walk(shown) }
+        ]
+      : []
+  );
+
+  if (!open) return null;
 
   return (
     // The palette's scrim, whole: one dismissal rule for every dialog that
@@ -807,8 +843,8 @@ export default function RoutePanel({
                * somebody is already reaching for — so no `onChoose`, and the
                * click settles the panel as it does on the card. A room on the
                * plan offers *walk here*, the list's action; a neighbour the
-               * plan does not pass through offers *walk to*, which re-plans in
-               * the open, by name.
+               * plan does not pass through offers *plan route*, which re-plans
+               * in the open, by name.
                *
                * Drawn as soon as there is a room to centre on. The realm
                * having nothing for it says so inside the frame, which is a
@@ -871,7 +907,7 @@ export default function RoutePanel({
                         <button
                           className="primary"
                           onClick={() => {
-                            void onCollectThenWalk(wanted, unlocks)
+                            void onCollectThenWalk(wanted, unlocks, false)
                               .then((reason) => {
                                 setRefused(reason);
                                 if (reason === null) onClose();
@@ -892,12 +928,10 @@ export default function RoutePanel({
               ) : (
                 <>
                   <div className="route-summary">
-                    <span>
-                      {t('cards.route.routeSummary', {
-                        stepCount: shown.steps.length,
-                        cost: shown.cost
-                      })}
-                    </span>
+                    {/* How far, and nothing else. The router's cost is the
+                    number it sorted the ways by, not a number anybody walks
+                    on, and beside it *57 steps* read as one of a pair. */}
+                    <span>{t('cards.route.routeSummary', { stepCount: shown.steps.length })}</span>
                     {/* Which route this is, when it is not the plan: the reader
                     chose it from the list below, and the list closes behind
                     the choice. */}
@@ -909,7 +943,9 @@ export default function RoutePanel({
                             ? t('cards.route.showing.keyed')
                             : chosen === 'viaItem'
                               ? t('cards.route.showing.viaItem')
-                              : t('cards.route.showing.carrying')}
+                              : chosen === 'another'
+                                ? t('cards.route.showing.another')
+                                : t('cards.route.showing.carrying')}
                       </span>
                     )}
                     {/* The traps, counted at the head of the list where the
@@ -990,7 +1026,13 @@ export default function RoutePanel({
                       const deadly = lairs.deadly;
                       const avoided =
                         deadly !== null &&
-                        [route.otherWay, route.carrying, route.viaItem, route.unlocks].some(
+                        [
+                          route.otherWay,
+                          route.carrying,
+                          route.viaItem,
+                          route.unlocks,
+                          route.another
+                        ].some(
                           (other) =>
                             other !== undefined &&
                             other !== shown &&
@@ -1030,45 +1072,74 @@ export default function RoutePanel({
                     if you fetch a log raft first and a wall of damage if you
                     do not, and the client has known which items those are all
                     along and never said. */}
-                    {(shown.hazards ?? []).map((hazard) => (
-                      <span
-                        className={hazard.unread || hazard.summons ? 'chip warn' : 'chip bad'}
-                        key={hazard.spell}
-                        title={
-                          hazard.needsSpell.length > 0
-                            ? t('cards.route.hazardSpell', {
-                                spellList: hazard.needsSpell.join(', ')
-                              })
-                            : undefined
-                        }
-                      >
-                        {[
-                          hazard.rooms === 1
-                            ? t('cards.route.hazardRooms.one', { spellName: hazard.spell })
-                            : t('cards.route.hazardRooms.many', {
+                    {(shown.hazards ?? []).map((hazard) =>
+                      hazard.corridor !== undefined ? (
+                        /* A passage the way in puts a timed spell on you for:
+                           nothing carried stops it, and the chip says to keep
+                           moving — or that this way has no way out of it. */
+                        <span
+                          className={hazard.corridor.ends ? 'chip info' : 'chip warn'}
+                          key={`corridor:${hazard.spell}`}
+                          title={
+                            hazard.corridor.ticks !== undefined &&
+                            hazard.corridor.then !== undefined
+                              ? t('cards.route.corridorTitle', {
+                                  ticks: hazard.corridor.ticks,
+                                  then: hazard.corridor.then
+                                })
+                              : t('cards.route.corridorTitleShort')
+                          }
+                        >
+                          {hazard.corridor.ends
+                            ? t('cards.route.corridor', {
                                 spellName: hazard.spell,
                                 roomCount: hazard.rooms
-                              }),
-                          hazard.unread
-                            ? t('cards.route.hazardUnread')
-                            : hazard.summons && hazard.share === null
-                              ? t('cards.route.hazardSummons')
-                              : hazard.share === null
-                                ? null
-                                : // Under a percent is said as *under a percent*:
-                                  // rounding it up to one is a figure the data
-                                  // did not give, and rounding it to zero is a
-                                  // reassurance it did not give either.
-                                  hazard.share * 100 < 1
-                                  ? t('cards.route.hazardSlight')
-                                  : t('cards.route.hazardShare', {
-                                      percent: Math.round(hazard.share * 100)
-                                    })
-                        ]
-                          .filter((part) => part !== null)
-                          .join(' · ')}
-                      </span>
-                    ))}
+                              })
+                            : t('cards.route.corridorOpen', {
+                                spellName: hazard.spell,
+                                roomCount: hazard.rooms
+                              })}
+                        </span>
+                      ) : (
+                        <span
+                          className={hazard.unread || hazard.summons ? 'chip warn' : 'chip bad'}
+                          key={hazard.spell}
+                          title={
+                            hazard.needsSpell.length > 0
+                              ? t('cards.route.hazardSpell', {
+                                  spellList: hazard.needsSpell.join(', ')
+                                })
+                              : undefined
+                          }
+                        >
+                          {[
+                            hazard.rooms === 1
+                              ? t('cards.route.hazardRooms.one', { spellName: hazard.spell })
+                              : t('cards.route.hazardRooms.many', {
+                                  spellName: hazard.spell,
+                                  roomCount: hazard.rooms
+                                }),
+                            hazard.unread
+                              ? t('cards.route.hazardUnread')
+                              : hazard.summons && hazard.share === null
+                                ? t('cards.route.hazardSummons')
+                                : hazard.share === null
+                                  ? null
+                                  : // Under a percent is said as *under a percent*:
+                                    // rounding it up to one is a figure the data
+                                    // did not give, and rounding it to zero is a
+                                    // reassurance it did not give either.
+                                    hazard.share * 100 < 1
+                                    ? t('cards.route.hazardSlight')
+                                    : t('cards.route.hazardShare', {
+                                        percent: Math.round(hazard.share * 100)
+                                      })
+                          ]
+                            .filter((part) => part !== null)
+                            .join(' · ')}
+                        </span>
+                      )
+                    )}
                     {/* And the offer to go and get what this way asks for,
                     beside the press it changes (todo 07). Wherever the need is
                     stated — a door this plan crosses or a spell its rooms cast
@@ -1077,64 +1148,94 @@ export default function RoutePanel({
                     when the plan itself is the way through the locked door.
                     The item is named here: the sentence that names it sits
                     below this row, and a tick that says only *it* is a tick
-                    about something the reader has to go and look for. */}
+                    about something the reader has to go and look for.
+
+                    Held as `.chip.pick` rather than a checkbox: the head is a
+                    row of chips already, and a box plus its label is two
+                    elements' worth of width for one bit of state on a row
+                    that has to keep the two presses beside it. */}
                     {(() => {
                       const wanted = itemsWanted(shown);
                       if (wanted.length === 0) return null;
                       return (
-                        <label className="route-collect">
-                          <input
-                            checked={collectFirst}
-                            onChange={(event) => setCollectFirst(event.currentTarget.checked)}
-                            onMouseDown={keepFocus}
-                            type="checkbox"
-                          />
+                        <button
+                          aria-pressed={collectFirst}
+                          className="chip pick route-collect"
+                          onClick={() => setCollectFirst(!collectFirst)}
+                          onMouseDown={keepFocus}
+                          type="button"
+                        >
                           {t('cards.route.collectFirst', { itemName: named(wanted) })}
-                        </label>
+                        </button>
                       );
                     })()}
                     {/* And the toggle that says *walk up to it, not into it*.
-                    Beside the press it changes, by the same rule as the tick
+                    Beside the press it changes, by the same rule as the chip
                     above: walking to a boss is walking to the doorway, and
                     the reader wants to be at the keyboard — or to have a
                     party standing with them — before the step that starts
-                    the fight goes out. The destination is named because the
-                    row it governs is a row about this journey, and the room
-                    it will actually stop in is the tooltip: the reader can
-                    see it two rows from the bottom of the list, and a label
-                    carrying both names is a label nobody finishes reading.
-                    Offered on any walkable plan, one step included — there
-                    the answer is *you are already in the room before*, which
-                    is a fact worth having and not nothing. */}
+                    the fight goes out.
+
+                    It names **neither** room. *Entering* can only mean the
+                    destination, which the head states one line above in the
+                    place the reader already looks for it, so repeating it
+                    here spent the row's width restating the head; the room it
+                    actually stops in was never the label's and stays the
+                    tooltip. Offered on any walkable plan, one step included —
+                    there the answer is *you are already in the room before*,
+                    which is a fact worth having and not nothing. */}
                     {(() => {
                       const into = shown.steps.at(-1);
                       if (into === undefined) return null;
                       const before = shown.steps.at(-2);
                       return (
-                        <label
-                          className="route-stop"
+                        <button
+                          aria-pressed={stopShort}
+                          className="chip pick route-stop"
+                          onClick={() => setStopShort(!stopShort)}
+                          onMouseDown={keepFocus}
                           title={
                             before === undefined
                               ? undefined
                               : t('cards.route.stopShortTooltip', { roomName: before.name })
                           }
+                          type="button"
                         >
-                          <input
-                            checked={stopShort}
-                            onChange={(event) => setStopShort(event.currentTarget.checked)}
-                            onMouseDown={keepFocus}
-                            type="checkbox"
-                          />
-                          {t('cards.route.stopShort', { roomName: into.name })}
-                        </label>
+                          {t('cards.route.stopShort')}
+                        </button>
                       );
                     })()}
-                    {/* The one filled control in this panel, per §3.3: walking is
-                    the action, everything else here is reading. */}
-                    {/* Also the form's default action, so Enter walks it. */}
-                    <button className="primary" title={t('cards.route.walkTooltip')} type="submit">
-                      {t('cards.route.walkButton')}
-                    </button>
+                    {/* The two presses, in one box so the head can wrap
+                    without wrapping *between them*. They are one choice —
+                    walk this way, or run it — and a head wearing three chips
+                    put *Run it* at the end of one line and *Walk it* at the
+                    start of the next, which reads as two unrelated controls
+                    and costs a row nothing is in. */}
+                    <div className="route-presses">
+                      {/* *Run it* (todo 06): the same press with auto-combat
+                      turned off first and left off — turn off, go.
+                      `type="button"` because Enter is *Walk it*, and not
+                      `.primary` because the panel spends its one filled
+                      control on that. */}
+                      <button
+                        className="route-run"
+                        onClick={() => walk(shown, true)}
+                        title={t('cards.route.runTooltip')}
+                        type="button"
+                      >
+                        {t('cards.route.runButton')}
+                      </button>
+                      {/* The one filled control in this panel, per §3.3: walking
+                      is the action, everything else here is reading. */}
+                      {/* Also the form's default action, so Enter walks it. */}
+                      <button
+                        className="primary"
+                        title={t('cards.route.walkTooltip')}
+                        type="submit"
+                      >
+                        {t('cards.route.walkButton')}
+                      </button>
+                    </div>
                   </div>
                   {/* What this way itself crosses that the character cannot
                   pass: a door below both skills, walked because nothing else
@@ -1152,7 +1253,13 @@ export default function RoutePanel({
                         ))}
                       </ul>
                       {shown === route &&
-                        ![route.otherWay, route.carrying, route.viaItem, route.unlocks].some(
+                        ![
+                          route.otherWay,
+                          route.carrying,
+                          route.viaItem,
+                          route.unlocks,
+                          route.another
+                        ].some(
                           (other) => other !== undefined && avoidsWalls(other, route.walls!)
                         ) && <span>{t('cards.route.noOtherWay')}</span>}
                     </div>
@@ -1270,6 +1377,24 @@ export default function RoutePanel({
                           itemList: [...spent.values()].join(', '),
                           stepCount: route.viaItem.steps.length,
                           savedCount: route.steps.length - route.viaItem.steps.length
+                        })
+                      });
+                    }
+                    /*
+                     * And a way that is simply not the plan. **Named by how
+                     * much of it is new**, because that is what makes it a
+                     * choice rather than the plan with a corner cut: the
+                     * router offers it only when enough rooms differ, and the
+                     * reader is told how many.
+                     */
+                    if (route.another !== undefined && chosen !== 'another') {
+                      const onPlan = new Set(route.steps.map((step) => step.to));
+                      items.push({
+                        key: 'another',
+                        sentence: t('cards.route.alternative.another', {
+                          stepCount: route.another.steps.length,
+                          freshCount: route.another.steps.filter((step) => !onPlan.has(step.to))
+                            .length
                         })
                       });
                     }

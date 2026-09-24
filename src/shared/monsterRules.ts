@@ -226,7 +226,10 @@ export function ruleFor(
 ): MonsterRule | null {
   if (rules.length === 0) return null;
   const key = mobKey(name);
-  const byMob = (mob: string): MonsterRule | null => rules.find((rule) => rule.mob === mob) ?? null;
+  // Keyed on both sides: a row typed on the settings screen has not been
+  // through `asMonsterRules` yet, and must mean the same while it is written.
+  const byMob = (mob: string): MonsterRule | null =>
+    rules.find((rule) => mobKey(rule.mob) === mob) ?? null;
   const exact = byMob(key);
   if (exact !== null) return exact;
   const stripped = mobNameCandidates(key).slice(1);

@@ -6,6 +6,8 @@ import { t } from '../lib/i18n';
 import { keepFocus } from '../lib/focus';
 import { tuning } from '../lib/tuning';
 import {
+  compareSpots,
+  fightUnpriced,
   huntLoop,
   loopNameOf,
   type HuntingAdvice,
@@ -38,13 +40,15 @@ import type { LoopDestination } from '../lib/loops';
  * Nothing here is a prediction. What was left out before the ranking — too
  * dangerous, or beneath this level — is counted in the head; a spot whose
  * rate could not be finished says which part was unknown and ranks below
- * every known rate; a deadly spot is last. A move re-asks on
- * `huntReaskMs`, since only the steps column moves with the character.
+ * every known rate; one whose fight itself could not be priced ranks below
+ * those, nearest first and never by what it pays, and the head says how many;
+ * a deadly spot is last. A move re-asks on `huntReaskMs`, since only the
+ * steps column moves with the character.
  */
 export interface HuntingCardProps extends CardChrome {
   session: SessionId;
-  /** Asks main, addressed at this card's own character. */
-  loadHunting(): ReturnType<IpcApi['huntingGrounds']>;
+  /** Asks main, addressed at this card's own character; `measure` is a rough row opened. */
+  loadHunting(measure: string | null): ReturnType<IpcApi['huntingGrounds']>;
   /** Opens the route panel on a room; null on a pinned float. */
   chooseOnMap: ((map: number, room: number) => void) | null;
   /** Walks a loop built here, filed or not; null on a pinned float. */
@@ -79,6 +83,9 @@ const hours = (rate: number | null): string =>
 const seconds = (value: number | null): string => (value === null ? '?' : `${Math.round(value)}s`);
 const percent = (share: number | null): string =>
   share === null ? '?' : `${Math.round(share * 100)}%`;
+/** A floor, marked as one: the least the room can cost where a spawn's rounds are unknown. */
+const atLeast = (share: number | null): string =>
+  share === null ? '?' : `\u2265 ${percent(share)}`;
 
 function mobsOf(spot: HuntingSpot): string {
   return spot.mobs.map((mob) => mob.name).join(', ');
@@ -92,11 +99,16 @@ function mobClock(regenSeconds: number): string {
     : t('cards.hunting.mobClock.many', { hours: hoursOf });
 }
 
+/** Every lair the survey kept, measured or not, in one order. */
+function everySpot(advice: HuntingAdvice): HuntingSpot[] {
+  return [...advice.spots, ...advice.unmeasured].sort(compareSpots);
+}
+
 export function huntingCopyText(advice: HuntingAdvice | null): string {
   if (advice === null) return t('cards.hunting.title');
   return [
     t('cards.hunting.title'),
-    ...advice.spots.map((spot) =>
+    ...everySpot(advice).map((spot) =>
       t('cards.hunting.copyRow', {
         mobs: mobsOf(spot),
         rate: hours(spot.estimate.expPerHour),
@@ -120,9 +132,12 @@ function HuntingCard({
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [asked, setAsked] = useState(0);
+  /* A rough row opened, measured on the next ask so what it walks is a ring. */
+  const [measure, setMeasure] = useState<string | null>(null);
   /* When main was last asked, and which press it answered: a move waits its turn, a press does not. */
   const lastAsk = useRef(0);
   const answered = useRef(asked);
+  const answeredMeasure = useRef(measure);
 
   useEffect(() => {
     let stale = false;
@@ -130,7 +145,7 @@ function HuntingCard({
     const run = (): void => {
       lastAsk.current = Date.now();
       setLoading(true);
-      void loadHunting().then((answer) => {
+      void loadHunting(measure).then((answer) => {
         if (stale) return;
         setAdvice(answer);
         setLoading(false);
@@ -141,8 +156,9 @@ function HuntingCard({
      * a lap moves every second and a quarter; a step changes nothing but the
      * steps column, so a move re-asks on `huntReaskMs` and *Ask again* at once.
      */
-    const pressed = asked !== answered.current;
+    const pressed = asked !== answered.current || measure !== answeredMeasure.current;
     answered.current = asked;
+    answeredMeasure.current = measure;
     const due = lastAsk.current + tuning().huntReaskMs - Date.now();
     if (pressed || due <= 0) run();
     else timer = window.setTimeout(run, due);
@@ -151,9 +167,12 @@ function HuntingCard({
       if (timer !== undefined) window.clearTimeout(timer);
     };
     // `hereKey` is the room: a step re-asks, because the steps moved.
-  }, [loadHunting, asked, hereKey]);
+  }, [loadHunting, asked, hereKey, measure]);
 
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
+
+  const rows = useMemo(() => (advice === null ? [] : everySpot(advice)), [advice]);
+  const rough = useMemo(() => new Set(advice?.unmeasured.map((spot) => spot.key) ?? []), [advice]);
 
   const spotColumns: Array<Column<HuntingSpot>> = useMemo(
     () => [
@@ -167,13 +186,21 @@ function HuntingCard({
             <button
               aria-expanded={open === spot.key}
               className="lookup"
-              onClick={() => setOpen(open === spot.key ? null : spot.key)}
+              onClick={() => {
+                setOpen(open === spot.key ? null : spot.key);
+                if (rough.has(spot.key)) setMeasure(spot.key);
+              }}
               onMouseDown={keepFocus}
               type="button"
             >
               {mobsOf(spot)}
             </button>
             {spot.boss ? <span className="chip quiet">{t('cards.hunting.boss')}</span> : null}
+            {rough.has(spot.key) ? (
+              <span className="chip quiet" title={t('cards.hunting.roughLong')}>
+                {t('cards.hunting.rough')}
+              </span>
+            ) : null}
           </span>
         )
       },
@@ -217,16 +244,24 @@ function HuntingCard({
         label: t('cards.hunting.columns.cost'),
         numeric: true,
         // The worst the room can spawn, which is what the exclusions read and
-        // what a person deciding whether to start there wants to know.
-        value: (spot) =>
-          spot.estimate.worstShare === null ? null : Math.round(spot.estimate.worstShare * 100),
-        cell: (spot) => percent(spot.estimate.worstShare)
+        // what a person deciding whether to start there wants to know — and
+        // the floor under it, marked as a floor, where a spawn's rounds are
+        // unknown: a room that costs *at least* half the bar is not a room
+        // whose cost is unknown.
+        value: (spot) => {
+          const share = spot.estimate.worstShare ?? spot.estimate.worstShareAtLeast;
+          return share === null ? null : Math.round(share * 100);
+        },
+        cell: (spot) =>
+          spot.estimate.worstShare === null
+            ? atLeast(spot.estimate.worstShareAtLeast)
+            : percent(spot.estimate.worstShare)
       }
     ],
-    [open]
+    [open, rough]
   );
 
-  const opened = advice?.spots.find((spot) => spot.key === open) ?? null;
+  const opened = rows.find((spot) => spot.key === open) ?? null;
   const closeDetail = useCallback(() => setOpen(null), []);
   const copyText = useCallback(() => huntingCopyText(advice), [advice]);
   const actions = useMemo(
@@ -243,6 +278,27 @@ function HuntingCard({
           beneath: advice.excluded.beneath
         })
       : '';
+  /*
+   * A fight nobody could price is listed nearest first rather than by what it
+   * pays, and the head says so — on a realm whose kill arithmetic is not this
+   * family's, that is every row, and a list that looked ranked was the bug.
+   */
+  const unpricedCount = rows.filter((spot) => fightUnpriced(spot.estimate)).length;
+  const unpriced =
+    unpricedCount === 0
+      ? ''
+      : unpricedCount === 1
+        ? t('cards.hunting.unpricedOne')
+        : t('cards.hunting.unpricedMany', { count: unpricedCount });
+  const recorded = advice?.assumptions.measured ?? null;
+  const measured =
+    recorded === null
+      ? ''
+      : t('cards.hunting.measured', {
+          perRound: Math.round(recorded.perRound),
+          fights: recorded.fights.toLocaleString(),
+          level: recorded.fromLevel
+        });
 
   return (
     <BentoCard
@@ -260,11 +316,18 @@ function HuntingCard({
               ? t('cards.hunting.loading')
               : advice === null
                 ? ''
-                : `${t('cards.hunting.from', {
-                    room: advice.from?.name ?? '',
-                    count: advice.spots.length,
-                    swept: advice.swept.toLocaleString()
-                  })} ${leftOut}`.trim()}
+                : [
+                    t('cards.hunting.from', {
+                      room: advice.from?.name ?? '',
+                      count: rows.length.toLocaleString(),
+                      swept: advice.swept.toLocaleString()
+                    }),
+                    measured,
+                    leftOut,
+                    unpriced
+                  ]
+                    .filter((sentence) => sentence !== '')
+                    .join(' ')}
         </span>
       </div>
       <CardTable
@@ -278,7 +341,7 @@ function HuntingCard({
         name="hunting"
         onDetailHidden={closeDetail}
         rowAttrs={(spot) => ({ 'data-open': open === spot.key ? 'true' : 'false' })}
-        rows={advice?.spots ?? []}
+        rows={rows}
         session={session}
       />
       {/*
@@ -304,6 +367,7 @@ function HuntingCard({
           <SpotActions
             chooseOnMap={chooseOnMap}
             createLoop={createLoop}
+            rough={rough.has(opened.key)}
             runLoop={runLoop}
             spot={opened}
           />
@@ -363,14 +427,19 @@ function SpotDetail({
           </dd>
           <dt>{t('cards.hunting.detail.cost')}</dt>
           <dd>
-            {estimate.damagePerRoom === null || estimate.worstDamagePerRoom === null
-              ? '?'
-              : t('cards.hunting.detail.costValue', {
+            {estimate.damagePerRoom !== null && estimate.worstDamagePerRoom !== null
+              ? t('cards.hunting.detail.costValue', {
                   hp: Math.round(estimate.damagePerRoom),
                   share: percent(estimate.damageShare),
                   worst: Math.round(estimate.worstDamagePerRoom),
                   worstShare: percent(estimate.worstShare)
-                })}
+                })
+              : estimate.worstDamageAtLeast === null
+                ? '?'
+                : t('cards.hunting.detail.costAtLeast', {
+                    worst: Math.round(estimate.worstDamageAtLeast),
+                    worstShare: percent(estimate.worstShareAtLeast)
+                  })}
           </dd>
           <dt>{t('cards.hunting.detail.walk')}</dt>
           <dd>
@@ -482,11 +551,14 @@ function SpotDetail({
  */
 function SpotActions({
   spot,
+  rough,
   chooseOnMap,
   runLoop,
   createLoop
 }: {
   spot: HuntingSpot;
+  /** Not measured yet: its walk is a guess, so nothing loops it until the ask that measures it lands. */
+  rough: boolean;
   chooseOnMap: HuntingCardProps['chooseOnMap'];
   runLoop: HuntingCardProps['runLoop'];
   createLoop: HuntingCardProps['createLoop'];
@@ -509,8 +581,10 @@ function SpotActions({
           (todo 108): it dwells, steps to the same stop and dwells again. */}
       <button
         className="quiet"
+        disabled={rough}
         onClick={() => runLoop(huntLoop(spot, t), 'none')}
         onMouseDown={keepFocus}
+        title={rough ? t('cards.hunting.measuring') : undefined}
         type="button"
       >
         {t('cards.hunting.loopIt')}
@@ -519,10 +593,16 @@ function SpotActions({
           nothing for it to draw. */}
       <button
         className="quiet"
-        disabled={spot.walk.length < 2}
+        disabled={rough || spot.walk.length < 2}
         onClick={() => createLoop(spot.walk, loopNameOf(spot, t))}
         onMouseDown={keepFocus}
-        title={spot.walk.length < 2 ? t('cards.hunting.oneRoomNoLoop') : undefined}
+        title={
+          rough
+            ? t('cards.hunting.measuring')
+            : spot.walk.length < 2
+              ? t('cards.hunting.oneRoomNoLoop')
+              : undefined
+        }
         type="button"
       >
         {t('cards.hunting.createLoop')}

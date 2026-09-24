@@ -261,7 +261,7 @@ describe('sitting down', () => {
  */
 describe('resting while poisoned', () => {
   const poisoned = (): Partial<CharacterState> => ({
-    afflictions: { blind: 'no', poisoned: 'yes', diseased: 'no', held: 'no' }
+    afflictions: { blind: 'no', poisoned: 'yes', diseased: 'no', held: 'no', confused: 'no' }
   });
 
   const onGreaterMud = (config: HealthConfig, said: string[] = []): Recovery =>
@@ -298,7 +298,7 @@ describe('resting while poisoned', () => {
       state({
         hp: 20,
         hpMax: 100,
-        afflictions: { blind: 'no', poisoned: 'no', diseased: 'no', held: 'no' }
+        afflictions: { blind: 'no', poisoned: 'no', diseased: 'no', held: 'no', confused: 'no' }
       })
     );
     drain();
@@ -323,7 +323,7 @@ describe('resting while poisoned', () => {
       state({
         hp: 100,
         hpMax: 100,
-        afflictions: { blind: 'no', poisoned: 'no', diseased: 'no', held: 'no' }
+        afflictions: { blind: 'no', poisoned: 'no', diseased: 'no', held: 'no', confused: 'no' }
       })
     );
     drain();
@@ -715,7 +715,8 @@ describe('resting with the leader', () => {
     new Recovery({ ...DEFAULT_CONFIG.automation.health }, true, queue, {
       assistLeader: false,
       defendParty: false,
-      restWithLeader: true
+      restWithLeader: true,
+      askForHealBelow: 0
     });
 
   it('rests when the leader rests', () => {
@@ -886,20 +887,20 @@ describe('a figure a walk is waiting for', () => {
  * character (`CharacterState.stated`) until `SessionManager` lets it go.
  */
 describe('resting to full because a message said to', () => {
-  const told = (action: 'rest-hp' | 'rest-mana'): CharacterState['stated'] => [
+  const told = (action: 'rest-hp' | 'rest-mana'): CharacterState['heard'] => [
     { name: 'poison pool', effects: [], action, since: 0 }
   ];
 
   it('rests above restBelow while the row is held and health is not full', () => {
     new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
-      state({ hp: 90, hpMax: 100, stated: told('rest-hp') })
+      state({ hp: 90, hpMax: 100, heard: told('rest-hp') })
     );
     expect(sent).toEqual(['rest']);
   });
 
   it('meditates for mana where the class has it', () => {
     new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
-      state({ hp: 100, hpMax: 100, mana: 5, manaMax: 50, stated: told('rest-mana') })
+      state({ hp: 100, hpMax: 100, mana: 5, manaMax: 50, heard: told('rest-mana') })
     );
     expect(sent).toEqual(['med']);
   });
