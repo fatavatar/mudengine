@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EMPTY_CHARACTER,
   joinedTheParty,
+  membersBelow,
   ratio,
   vitalLevel,
   type CharacterState,
@@ -108,5 +109,46 @@ describe('joinedTheParty', () => {
     expect(joinedTheParty(EMPTY_CHARACTER, 'Rend')).toBe(false);
     expect(joinedTheParty(withParty(member('Soul')), null)).toBe(false);
     expect(joinedTheParty(withParty(member('Soul')), '   ')).toBe(false);
+  });
+});
+
+/*
+ * MegaMUD's Wait For Party Members (2026-09-24): who, of the party this
+ * character leads, is under the line on the listing.
+ */
+describe('membersBelow', () => {
+  const row = (name: string, health: number | null, invited = false): PartyMember => ({
+    name,
+    className: null,
+    health,
+    mana: null,
+    rank: null,
+    activity: null,
+    invited,
+    vitals: null
+  });
+  const leading = (following: string | null = null): CharacterState => ({
+    ...EMPTY_CHARACTER,
+    name: 'Skinny',
+    party: {
+      ...EMPTY_CHARACTER.party,
+      following,
+      members: [
+        row('Skinny', 0.1),
+        row('Healbot', 0.4),
+        row('Fatty', 0.2),
+        row('Jack', 0.1, true),
+        row('Quiet', null)
+      ]
+    }
+  });
+
+  it('names real members under the line, lowest first', () => {
+    expect(membersBelow(leading(), 0.5).map((member) => member.name)).toEqual(['Fatty', 'Healbot']);
+  });
+
+  it('names nobody when following, or when the line is off', () => {
+    expect(membersBelow(leading('Fatty'), 0.5)).toEqual([]);
+    expect(membersBelow(leading(), 0)).toEqual([]);
   });
 });

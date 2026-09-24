@@ -168,8 +168,6 @@ export type WalkHold =
   | 'dark'
   /** Waiting out what the realm's message table says is on the character. */
   | 'condition'
-  /** Leading, a member of the party under `party.waitForMembersBelow`. */
-  | 'party'
   | null;
 
 /**

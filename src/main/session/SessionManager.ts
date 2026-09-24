@@ -117,6 +117,7 @@ import { LinkWatch } from './LinkWatch';
 import { isPrompt, type Block } from '../../shared/blocks';
 import {
   bankKey,
+  membersBelow,
   ownAlignment,
   packRows,
   type AbilitySums,
@@ -1060,6 +1061,15 @@ export class SessionManager {
    * must not hold a loop nobody asked it to.
    */
   private readonly waitingFollowers = new Set<string>();
+  /**
+   * Members under `party.waitForMembersBelow` on the listing, lower-cased —
+   * MegaMUD's *Wait For Party Members*, read as a `@wait` nobody had to say
+   * (`paceForHealth`). Kept apart from `waitingFollowers` because the listing,
+   * not an `@ok`, is what lets them go. `hurtWaitSpent` is the limit having
+   * run out on them: the lap walks on until every one is back over the line.
+   */
+  private hurtFollowers = new Set<string>();
+  private hurtWaitSpent = false;
   /**
    * Whether the loop's current pause is this session's own answer to `@wait`.
    *
@@ -2569,28 +2579,17 @@ export class SessionManager {
         const follower = who.toLowerCase();
         if (!ready) {
           // MegaMUD's *Ignore @wait If Leading*. A member's health still
-          // stands the walk still — `Walker.holdForParty` — just not a request.
+          // pauses the lap — `paceForHealth` — just not a request.
           if (this.automationConfig.party.ignoreWaitWhenLeading) {
             this.sink.notice(t('automation.remotes.ignoredWait', { from: who }));
             return;
           }
           this.waitingFollowers.add(follower);
-          if (this.loops.progress.status !== 'running') return;
-          /*
-           * The lap before the leg, not after: `walker.stop` reports `ended`
-           * synchronously, and on a loop still *running* that is a counted
-           * failure — "skipping the stop" and a fresh leg planned, for a walk
-           * nothing went wrong with. Stopped first, the runner reads the
-           * ending as what it is: a leg the stop ended.
-           */
-          this.loops.stop(t('session.loop.pausedForRemote', { who }));
-          this.pausedForFollowers = true;
-          this.walker.stop(t('session.loop.pausedForRemote', { who }));
-          this.armFollowerWaitLimit();
+          this.pauseForFollowers(t('session.loop.pausedForRemote', { who }));
           return;
         }
         this.waitingFollowers.delete(follower);
-        if (this.waitingFollowers.size > 0) return;
+        if (this.followersWaiting()) return;
         this.resumeForFollowers(who);
       },
       /*
@@ -3521,9 +3520,8 @@ export class SessionManager {
       if (this.loops.progress.status !== 'idle') {
         this.loops.stop(t('session.loop.stoppedRealmChanged'));
         this.loops.reset();
-        this.waitingFollowers.clear();
+        this.forgetFollowers();
         this.pausedForFollowers = false;
-        this.clearFollowerWaitLimit();
         this.sink.notice(
           t('automation.loops.stopped', { reason: t('session.loop.stoppedRealmChanged') })
         );
@@ -3542,8 +3540,7 @@ export class SessionManager {
     }
     if (!this.loops.carried) {
       this.loops.reset();
-      this.waitingFollowers.clear();
-      this.clearFollowerWaitLimit();
+      this.forgetFollowers();
     }
     this.events.reset();
     this.refusedEdges.clear();
@@ -4214,8 +4211,64 @@ export class SessionManager {
   }
 
   /**
-   * The loop this session paused for `@wait`, walked on — every follower
-   * having said `@ok`, or `party.waitNoLongerMinutes` having run out.
+   * The loop stopped for the party — a `@wait`, or a member under the line.
+   *
+   * The lap before the leg, not after: `walker.stop` reports `ended`
+   * synchronously, and on a loop still *running* that is a counted failure —
+   * "skipping the stop" and a fresh leg planned, for a walk nothing went wrong
+   * with. Stopped first, the runner reads the ending as what it is: a leg the
+   * stop ended.
+   */
+  private pauseForFollowers(why: string): void {
+    if (this.loops.progress.status !== 'running') return;
+    this.loops.stop(why);
+    this.pausedForFollowers = true;
+    this.walker.stop(why);
+    this.armFollowerWaitLimit();
+  }
+
+  /** Whether anybody still has the party waiting: a `@wait`, or a member under the line. */
+  private followersWaiting(): boolean {
+    return this.waitingFollowers.size > 0 || (!this.hurtWaitSpent && this.hurtFollowers.size > 0);
+  }
+
+  /**
+   * MegaMUD's *Wait For Party Members*: leading, a member whose health on the
+   * listing is under `party.waitForMembersBelow` pauses the lap as a `@wait`
+   * would, and the listing putting the last of them back over the line is
+   * their `@ok`. Only the listing says so, so it pairs with `parEverySeconds`.
+   */
+  private paceForHealth(state: CharacterState): void {
+    const hurt = membersBelow(state, this.automationConfig.party.waitForMembersBelow);
+    const were = [...this.hurtFollowers];
+    this.hurtFollowers = new Set(hurt.map((member) => member.name.toLowerCase()));
+    const lowest = hurt[0];
+    if (lowest === undefined) {
+      this.hurtWaitSpent = false;
+      if (were.length > 0 && !this.followersWaiting()) this.resumeForFollowers(were.join(', '));
+      return;
+    }
+    if (this.hurtWaitSpent) return;
+    this.pauseForFollowers(
+      t('session.loop.pausedForHurt', {
+        who: lowest.name,
+        percent: Math.round((lowest.health ?? 0) * 100)
+      })
+    );
+  }
+
+  /** Nobody waiting any more: a new realm, or a loop reset. */
+  private forgetFollowers(): void {
+    this.waitingFollowers.clear();
+    this.hurtFollowers.clear();
+    this.hurtWaitSpent = false;
+    this.clearFollowerWaitLimit();
+  }
+
+  /**
+   * The loop this session paused for the party, walked on — every follower
+   * having said `@ok` and every member back over the line, or
+   * `party.waitNoLongerMinutes` having run out.
    */
   private resumeForFollowers(who: string): void {
     this.clearFollowerWaitLimit();
@@ -4248,8 +4301,8 @@ export class SessionManager {
   private followerWaitTimer: NodeJS.Timeout | null = null;
 
   /**
-   * Started when the loop stops for `@wait`, so a follower whose `@ok` was
-   * lost does not hold the party all evening. Off at 0.
+   * Started when the loop stops for the party, so a follower whose `@ok` was
+   * lost, or a member who never heals, does not hold it all evening. Off at 0.
    */
   private armFollowerWaitLimit(): void {
     this.clearFollowerWaitLimit();
@@ -4257,8 +4310,9 @@ export class SessionManager {
     if (minutes <= 0) return;
     this.followerWaitTimer = setTimeout(() => {
       this.followerWaitTimer = null;
-      const who = [...this.waitingFollowers].join(', ');
+      const who = [...this.waitingFollowers, ...this.hurtFollowers].join(', ');
       this.waitingFollowers.clear();
+      if (this.hurtFollowers.size > 0) this.hurtWaitSpent = true;
       if (!this.pausedForFollowers) return;
       this.sink.notice(t('automation.remotes.waitedLongEnough', { minutes, who }));
       this.resumeForFollowers(who);
@@ -5397,6 +5451,8 @@ export class SessionManager {
     // Telling a party leader this character has sat down, and that it is up
     // again. A fact about this character, so it goes out with the others.
     this.remotes.onCharacter(state);
+    // And the members under the line, for the lap this character leads.
+    this.paceForHealth(state);
     // Running away is tried *first*, because it is the escape that works and
     // the one that costs nothing: an unclean disconnect is penalised on this
     // server family and can kill outright.
