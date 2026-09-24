@@ -81,6 +81,7 @@ import {
 } from '../../shared/character';
 import { ATTACK_COMMANDS, commandOf, REREAD_ROOM } from '../../shared/commands';
 import {
+  DEFAULT_CONFIG,
   DEFAULT_MOB_PRIORITY,
   type CombatConfig,
   type MobPriorityBand,
@@ -590,12 +591,7 @@ export class AutoCombat {
   }
 
   /** What the party's leader is fighting, if this character follows one and is told to help. */
-  private party: PartyConfig = {
-    assistLeader: false,
-    defendParty: false,
-    restWithLeader: false,
-    askForHealBelow: 0
-  };
+  private party: PartyConfig = DEFAULT_CONFIG.automation.party;
 
   /**
    * The leader's target, when it is a monster standing in this room.
@@ -2311,19 +2307,30 @@ export class AutoCombat {
     const verb = word(command);
     if (verb === word(this.config.attack) || verb === word(this.config.opener)) return;
     /*
+     * And a cast that attacks is an attack: its `*Combat Off*` is the Off half
+     * of the server re-engaging, not the fight ending. Read as a break it let
+     * the target go, the Off re-opened it, and skinny cast `fury` at one
+     * fungus tree sixteen times in a second — sixty-seven at a baby dragon
+     * (2026-09-24).
+     */
+    const cast = this.castIn(command);
+    const attacking = cast !== null && this.attackCast(cast);
+    /*
      * A room spell's fight has no target to release — its opening is held
      * against the name it was aimed at — and the cast that broke it replaced
      * the spell the server was repeating: a heal on skinny (2026-09-23), then
      * three `c spir` into a room the round had already emptied. So the whole
      * cooldown goes, and the room spell with it, unless the command was that
-     * spell again.
+     * spell again. A single-target attack replaces the room spell too, but
+     * the fight it opened is kept.
      */
     if (this.areaEngaged) {
       if (this.isArea(this.spellOf(command))) return;
       this.dropArea();
-      this.opened.clear();
+      if (!attacking) this.opened.clear();
       return;
     }
+    if (attacking) return;
     const fought = this.state?.combat.target ?? null;
     if (fought !== null) this.opened.delete(mobKey(fought));
     if (this.focus !== null) this.opened.delete(this.focus);

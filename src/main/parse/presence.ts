@@ -621,8 +621,33 @@ export function withRank(
 }
 
 /**
+ * `<player> just left to the …`: a member walking off has stood up. The one
+ * thing besides a listing that says so — a leader's `stops to rest` otherwise
+ * outlived the rest, and its follower sat down in every room it was walked
+ * into, before the leader had (skinny behind Fatty, 2026-09-24).
+ */
+export function withMemberMoving(
+  s: CharacterState,
+  player: string | undefined
+): CharacterState | null {
+  if (!player) return null;
+  const held = s.party.members.find((entry) => entry.name === player);
+  if (held === undefined || held.activity === null) return null;
+  return {
+    ...s,
+    party: {
+      ...s.party,
+      members: s.party.members.map((entry) =>
+        entry.name === player ? { ...entry, activity: null } : entry
+      )
+    }
+  };
+}
+
+/**
  * `<player> stops to rest.` / `kneels to meditate`: the flag between listings,
- * for a member. Nothing announces standing up, so only a listing clears it.
+ * for a member. Standing up is announced only by walking off
+ * (`withMemberMoving`); otherwise a listing clears it.
  */
 export function withResting(
   s: CharacterState,

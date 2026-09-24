@@ -2510,6 +2510,12 @@ export class SessionManager {
       pace: (who, ready) => {
         const follower = who.toLowerCase();
         if (!ready) {
+          // MegaMUD's *Ignore @wait If Leading*. A member's health still
+          // stands the walk still — `Walker.holdForParty` — just not a request.
+          if (this.automationConfig.party.ignoreWaitWhenLeading) {
+            this.sink.notice(t('automation.remotes.ignoredWait', { from: who }));
+            return;
+          }
           this.waitingFollowers.add(follower);
           if (this.loops.progress.status !== 'running') return;
           /*
@@ -2522,33 +2528,12 @@ export class SessionManager {
           this.loops.stop(t('session.loop.pausedForRemote', { who }));
           this.pausedForFollowers = true;
           this.walker.stop(t('session.loop.pausedForRemote', { who }));
+          this.armFollowerWaitLimit();
           return;
         }
         this.waitingFollowers.delete(follower);
         if (this.waitingFollowers.size > 0) return;
-        if (!this.pausedForFollowers || this.loops.progress.status !== 'stopped') return;
-        this.pausedForFollowers = false;
-        /*
-         * Through `startMoving`, not straight at the runner: this is a second
-         * door onto the resume, and the wander check exists precisely because
-         * a stop keeps its place while the character does not. A follower's
-         * `@ok` is not somebody who can answer a question, so a lap that is
-         * now a journey away is **reported and left stopped** — the player
-         * presses play, having read how far.
-         */
-        const answer = this.startMoving(null, null);
-        // Said out loud: a loop that quietly failed to walk on is the same
-        // stalled evening the resume exists to prevent.
-        if ('refused' in answer) this.sink.notice(answer.refused);
-        if ('confirm' in answer) {
-          this.sink.notice(
-            t('session.move.tooFarForRemote', {
-              who,
-              name: answer.confirm.name,
-              stepCount: answer.confirm.steps
-            })
-          );
-        }
+        this.resumeForFollowers(who);
       },
       /*
        * Recorded on the player's own registry entry, which is what the Player
@@ -3480,6 +3465,7 @@ export class SessionManager {
         this.loops.reset();
         this.waitingFollowers.clear();
         this.pausedForFollowers = false;
+        this.clearFollowerWaitLimit();
         this.sink.notice(
           t('automation.loops.stopped', { reason: t('session.loop.stoppedRealmChanged') })
         );
@@ -3497,6 +3483,7 @@ export class SessionManager {
     if (!this.loops.carried) {
       this.loops.reset();
       this.waitingFollowers.clear();
+      this.clearFollowerWaitLimit();
     }
     this.events.reset();
     this.refusedEdges.clear();
@@ -4166,6 +4153,65 @@ export class SessionManager {
   }
 
   /**
+   * The loop this session paused for `@wait`, walked on — every follower
+   * having said `@ok`, or `party.waitNoLongerMinutes` having run out.
+   */
+  private resumeForFollowers(who: string): void {
+    this.clearFollowerWaitLimit();
+    if (!this.pausedForFollowers || this.loops.progress.status !== 'stopped') return;
+    this.pausedForFollowers = false;
+    /*
+     * Through `startMoving`, not straight at the runner: this is a second
+     * door onto the resume, and the wander check exists precisely because
+     * a stop keeps its place while the character does not. A follower's
+     * `@ok` is not somebody who can answer a question, so a lap that is
+     * now a journey away is **reported and left stopped** — the player
+     * presses play, having read how far.
+     */
+    const answer = this.startMoving(null, null);
+    // Said out loud: a loop that quietly failed to walk on is the same
+    // stalled evening the resume exists to prevent.
+    if ('refused' in answer) this.sink.notice(answer.refused);
+    if ('confirm' in answer) {
+      this.sink.notice(
+        t('session.move.tooFarForRemote', {
+          who,
+          name: answer.confirm.name,
+          stepCount: answer.confirm.steps
+        })
+      );
+    }
+  }
+
+  /** The give-up clock on a `@wait` — MegaMUD's *If Leading Wait No Longer Than*. */
+  private followerWaitTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Started when the loop stops for `@wait`, so a follower whose `@ok` was
+   * lost does not hold the party all evening. Off at 0.
+   */
+  private armFollowerWaitLimit(): void {
+    this.clearFollowerWaitLimit();
+    const minutes = this.automationConfig.party.waitNoLongerMinutes;
+    if (minutes <= 0) return;
+    this.followerWaitTimer = setTimeout(() => {
+      this.followerWaitTimer = null;
+      const who = [...this.waitingFollowers].join(', ');
+      this.waitingFollowers.clear();
+      if (!this.pausedForFollowers) return;
+      this.sink.notice(t('automation.remotes.waitedLongEnough', { minutes, who }));
+      this.resumeForFollowers(who);
+    }, minutes * 60_000);
+    this.followerWaitTimer.unref?.();
+  }
+
+  private clearFollowerWaitLimit(): void {
+    if (this.followerWaitTimer === null) return;
+    clearTimeout(this.followerWaitTimer);
+    this.followerWaitTimer = null;
+  }
+
+  /**
    * What this realm calls its coins (`server.yaml` `coins:`): read as the
    * stock names on the way in, and asked for by the realm's word on the way
    * out. See `CoinReader`.
@@ -4582,6 +4628,7 @@ export class SessionManager {
   private reconsiderTimer: NodeJS.Timeout | null = null;
 
   dispose(): void {
+    this.clearFollowerWaitLimit();
     this.cancelIdleFlush();
     this.forgetPlayers();
     this.feed.dispose();

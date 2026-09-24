@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandQueue } from '../CommandQueue';
 import { Remotes } from '../Remotes';
 import { DEFAULT_CONFIG } from '../../../shared/config';
-import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
+import { EMPTY_CHARACTER, type CharacterState, type PartyMember } from '../../../shared/character';
 import { wireExit, wireItem } from '../../../shared/entities';
 import type { AutomationConfig } from '../../../shared/config';
 import type { Block } from '../../../shared/blocks';
@@ -546,13 +546,61 @@ describe('asking, which is the other half of the same vocabulary', () => {
       party: { engaged: {}, threatened: {}, following: 'Soul', members: [] },
       vitals: { ...EMPTY_CHARACTER.vitals, resting: true }
     });
+    const up = who({ party: { engaged: {}, threatened: {}, following: 'Soul', members: [] } });
     peers.onCharacter(resting);
     peers.onCharacter(resting);
-    peers.onCharacter(
-      who({ party: { engaged: {}, threatened: {}, following: 'Soul', members: [] } })
-    );
+    peers.onCharacter(up);
+    drain();
+    // Up for the drain's five seconds, which is `okAfterMs`: now it is @ok.
+    peers.onCharacter(up);
     drain();
     expect(sent).toEqual(['/Soul @wait', '/Soul @ok']);
+  });
+
+  /*
+   * skinny to Fatty, 2026-09-24: a heal cast from a rest stood him up for the
+   * cast, and the leader was told @ok and then @wait a second apart.
+   */
+  it('does not say @ok for a cast that stood it up for a moment', () => {
+    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
+    const resting = who({ party, vitals: { ...EMPTY_CHARACTER.vitals, resting: true } });
+    peers.onCharacter(resting);
+    drain();
+    peers.onCharacter(who({ party }));
+    vi.advanceTimersByTime(1_000);
+    peers.onCharacter(resting);
+    drain();
+    expect(sent).toEqual(['/Soul @wait']);
+  });
+
+  /*
+   * skinny behind Fatty, 2026-09-24: sat down because the leader had, said
+   * @wait, and a MegaMUD leader waiting on it rested in every room after.
+   */
+  it('does not say @wait for a rest kept with a resting leader', () => {
+    const leader = (activity: PartyMember['activity']): PartyMember => ({
+      name: 'Soul',
+      className: null,
+      health: 1,
+      mana: null,
+      rank: null,
+      activity,
+      invited: false,
+      vitals: null
+    });
+    const resting = (activity: PartyMember['activity']) =>
+      who({
+        party: { engaged: {}, threatened: {}, following: 'Soul', members: [leader(activity)] },
+        vitals: { ...EMPTY_CHARACTER.vitals, resting: true }
+      });
+    peers.onCharacter(resting({ state: 'resting' }));
+    peers.onCharacter(resting({ state: 'meditating' }));
+    drain();
+    expect(sent).toEqual([]);
+    // The leader up and this one still sitting: that rest is its own.
+    peers.onCharacter(resting(null));
+    drain();
+    expect(sent).toEqual(['/Soul @wait']);
   });
 
   /* A leader telling itself to wait would be talking to nobody. */
@@ -1484,5 +1532,102 @@ describe('@heal', () => {
     queue.noteTyping(false);
     drain();
     expect(sent).toEqual(['.@heal']);
+  });
+});
+
+/*
+ * MegaMUD's party pacing (2026-09-24): Ignore @party If Following, Request
+ * Party Health, Par Frequency and Send PAR after combat round.
+ */
+describe('party pacing', () => {
+  const member = (name: string) => ({
+    name,
+    className: null,
+    health: 0.9,
+    mana: null,
+    rank: null,
+    activity: null,
+    invited: false,
+    vitals: null
+  });
+  const inParty = (over: Partial<CharacterState> = {}, following: string | null = null) =>
+    who({
+      party: {
+        engaged: {},
+        threatened: {},
+        following,
+        members: [member('Vaelor'), member('Soul')]
+      },
+      ...over
+    });
+  const withParty = (party: Partial<AutomationConfig['party']>): Remotes =>
+    new Remotes({ ...config, party: { ...config.party, ...party } }, queue, {
+      notice: (m) => notices.push(m)
+    });
+  const blow = (): Block =>
+    ({ ...said('mob-hits', 'x', 'x'), type: 'mob-hits', domain: 'combat' }) as Block;
+
+  it('refuses the leader’s @party while following, when told to, and says so', () => {
+    const wary = withParty({ ignorePartyWhenFollowing: true });
+    wary.onBlock(said('conversation-local', 'Swampfox', '@party go rift'), inParty({}, 'Swampfox'));
+    drain();
+    expect(sent).toEqual([]);
+    expect(notices.join(' ')).toContain('Ignore @party If Following');
+    // Leading, it is not following anybody, so there is nothing to ignore.
+    wary.onBlock(said('conversation-local', 'Swampfox', '@party go rift'), inParty());
+    drain();
+    expect(sent).toEqual(['go rift']);
+  });
+
+  it('asks a joiner for nothing but the client they run when Request Party Health is off', () => {
+    withParty({ requestPartyHealth: false }).askParty(inParty());
+    drain();
+    expect(sent).toEqual(['/Soul @version']);
+  });
+
+  it('asks for the listing on its clock, twice as often in a fight', () => {
+    const pacing = withParty({ parEverySeconds: 15 });
+    pacing.onCharacter(inParty());
+    drain();
+    expect(sent).toEqual(['party']);
+    vi.advanceTimersByTime(16_000);
+    pacing.onCharacter(inParty());
+    drain();
+    expect(sent).toEqual(['party']);
+    pacing.onCharacter(inParty({ inCombat: true }));
+    drain();
+    expect(sent).toEqual(['party', 'party']);
+  });
+
+  /*
+   * `join` says whom this character follows and nothing about who else is
+   * there: a follower that waited for a listing to count itself in a party
+   * never asked for one (skinny, 2026-09-24).
+   */
+  it('asks for the listing when following before any listing has arrived', () => {
+    withParty({ parEverySeconds: 10 }).onCharacter(
+      who({ party: { engaged: {}, threatened: {}, following: 'Fatty', members: [] } })
+    );
+    drain();
+    expect(sent).toEqual(['party']);
+  });
+
+  it('never asks for the listing out of a party, or when the clock is off', () => {
+    withParty({ parEverySeconds: 15 }).onCharacter(who());
+    withParty({ parEverySeconds: 0 }).onCharacter(inParty());
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('asks for the listing once a round, after its blows', () => {
+    const pacing = withParty({ parAfterRound: true });
+    const fighting = inParty({ inCombat: true });
+    pacing.onBlock(blow(), fighting);
+    pacing.onBlock(blow(), fighting);
+    drain();
+    expect(sent).toEqual(['party']);
+    pacing.onBlock(blow(), fighting);
+    drain();
+    expect(sent).toEqual(['party', 'party']);
   });
 });

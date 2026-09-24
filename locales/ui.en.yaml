@@ -1054,6 +1054,7 @@ tabs:
     markOffline: offline
     markPvp: attacked! (PvP)
     markRecovering: recovering
+    markWaitingParty: waiting for the party
     markSearching: searching
     markBlocked: blocked
     markLighting: lighting
@@ -2087,6 +2088,7 @@ cards:
       statusCondition: waiting it out
       statusOffline: offline
       statusResting: resting
+      statusWaitingParty: waiting for the party
       statusRunning: running
       statusStopped: stopped
       title: Loop
@@ -3901,6 +3903,22 @@ settings:
       A member's own @heal is answered by Auto-Heal Party Members on the Spells page, when @heal is
       ticked under Party @ commands below.
     legend: Following
+    ignorePartyHint:
+      Refuse the leader's @party <command> — for a leader trusted to help, not to type for you.
+    ignorePartyLabel: Ignore @party If Following
+    ignoreWaitHint:
+      Walk on through a follower's @wait. Wait For Party Members still stops for a member's health.
+    ignoreWaitLabel: Ignore @wait If Leading
+    leadLegend: Leading
+    leadNote:
+      What this character does when others follow it. Every figure here comes from the party
+      listing, so how fresh it is depends on how often the listing is asked for.
+    parAfterRoundHint: Ask for the party listing after every combat round as well.
+    parAfterRoundLabel: Send par After Each Combat Round
+    parEveryHint:
+      While in a party, ask for the listing this often in combat and twice as long out of it. 0 asks
+      only when the party changes. MegaMUD uses 15.
+    parEveryLabel: Par Every (seconds)
     remotesLegend: Party @ commands
     remotesNote:
       What anybody who has **joined** this party may ask this character for. An invitation
@@ -3908,8 +3926,20 @@ settings:
     remotesOffWarning:
       Answering @ commands is off for this character, so nothing here is answered yet. The
       switch is on the Remotes page.
+    requestHealthHint:
+      Telepath @health to whoever joins, for their real health and mana rather than the
+      listing's percentage.
+    requestHealthLabel: Request Party Health
     restHint: Out of combat only, like every rest. Meditates only for a class with mana.
     restLabel: Rest With Leader
+    waitBelowHint:
+      Leading, stand still while any member's health is under this, whether or not they sent
+      @wait. 0 never waits.
+    waitBelowLabel: Wait For Party Members Below %
+    waitMinutesHint:
+      Leading, the longest to wait — for a @wait whose @ok never came, or a member whose health
+      never rose — before walking on. 0 waits as long as it takes.
+    waitMinutesLabel: Wait No Longer Than (minutes)
     warning:
       Whether the realm's command window is per connection or per host is unmeasured. These make
       a second automated character useful; turning them on is choosing to run that experiment.
@@ -5131,6 +5161,11 @@ automation:
       one ({yes: 1}), so nothing was sent.'
     ranDo: 'Remote execution (@do) by {from}: "{command}"'
     ranParty: '{from} asked the party to "{command}".'
+    reasonParEvery: 'the party listing, every {seconds}s (Par Every)'
+    reasonParRound: the party listing after the round (Send par After Each Combat Round)
+    ignoredParty: '{from} asked the party to "{command}"; Ignore @party If Following is on, so it was not sent.'
+    ignoredWait: '{from} asked the party to wait; Ignore @wait If Leading is on, so the walk goes on.'
+    waitedLongEnough: 'Waited {minutes} min for {who}; walking on, as Wait No Longer Than says.'
     peerIsOurs:
       "{who} answered @version with {client}, so questions to them will use this client's own
       wording — a room's realm address rather than its name."
@@ -5238,6 +5273,8 @@ automation:
       realm where that is.'
     manaHolding: Mana is low; meditating here before walking on.
     manaResumed: Mana is back; walking on.
+    partyHolding: '{name} is at {percent}%; waiting here for the party.'
+    partyResumed: The party is fit again; walking on.
     askingWhere: '{roomName} could be one of several rooms; asking the realm where this is.'
     landedElsewhere: '{command} put you in {roomName}, not where the route said; planning again from here.'
     trapHolding:

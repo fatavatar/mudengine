@@ -2299,6 +2299,45 @@ export interface PartyConfig {
    * still under it; a party member running either client answers with a heal.
    */
   askForHealBelow: number;
+  /**
+   * Leading, stand the walk still while any member's health is under this
+   * share — MegaMUD's *Wait For Party Members*, whether or not they sent
+   * `@wait`. Read off the party listing (`PartyMember.health`), so how fresh
+   * it is is how often the listing is asked for (`parEverySeconds`). 0 never
+   * waits. Ignored while following: the leader decides when the party moves.
+   */
+  waitForMembersBelow: number;
+  /**
+   * Leading, the most minutes to stand still for the party — for a `@wait`
+   * whose `@ok` never came, or a member whose health never rose — before
+   * walking on regardless: MegaMUD's *If Leading Wait No Longer Than*. 0 waits
+   * as long as it takes.
+   */
+  waitNoLongerMinutes: number;
+  /**
+   * Leading, walk on through a follower's `@wait` — MegaMUD's *Ignore @wait If
+   * Leading*. `waitForMembersBelow` still stops the walk for a member's health.
+   */
+  ignoreWaitWhenLeading: boolean;
+  /**
+   * Following, refuse the leader's `@party <command>` — MegaMUD's *Ignore @party
+   * If Following*, for a leader trusted to help but not to type for you.
+   */
+  ignorePartyWhenFollowing: boolean;
+  /**
+   * Telepath `@health` to a member who joins, for their absolute figures —
+   * MegaMUD's *Request Party Health*. On, as MegaMUD ships it.
+   */
+  requestPartyHealth: boolean;
+  /**
+   * Ask for the party listing every this many seconds while in a party, twice
+   * that out of combat — MegaMUD's *Par Frequency* (15 in MegaMUD). The
+   * listing is the only place another member's health shows. 0 asks only when
+   * the party changes (`onPartyChange`).
+   */
+  parEverySeconds: number;
+  /** Ask for the listing after every combat round too — MegaMUD's *Send PAR after combat round*. */
+  parAfterRound: boolean;
 }
 
 /**
@@ -2741,7 +2780,19 @@ export const DEFAULT_CONFIG: AppConfig = {
     },
     // Off, like everything automated. A client that sits down on its own is one
     // deciding when a fight is over.
-    party: { assistLeader: false, defendParty: false, restWithLeader: false, askForHealBelow: 0 },
+    party: {
+      assistLeader: false,
+      defendParty: false,
+      restWithLeader: false,
+      askForHealBelow: 0,
+      waitForMembersBelow: 0,
+      waitNoLongerMinutes: 0,
+      ignoreWaitWhenLeading: false,
+      ignorePartyWhenFollowing: false,
+      requestPartyHealth: true,
+      parEverySeconds: 0,
+      parAfterRound: false
+    },
     health: {
       /*
        * The figures `loopPauseBelow` / `loopResumeAt` shipped with, inherited
@@ -4207,14 +4258,24 @@ export const BLESSING_FALLBACK_MIN_S = 30;
 /** More blessings than this is a list nobody typed. */
 const MAX_BLESSINGS = 16;
 
-function normalizeParty(value: unknown): PartyConfig {
+export function normalizeParty(value: unknown): PartyConfig {
   const raw = isRecord(value) ? value : {};
   const d = DEFAULT_CONFIG.automation.party;
   return {
     assistLeader: bool(raw['assistLeader'], d.assistLeader),
     defendParty: bool(raw['defendParty'], d.defendParty),
     restWithLeader: bool(raw['restWithLeader'], d.restWithLeader),
-    askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow)
+    askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow),
+    waitForMembersBelow: fraction(raw['waitForMembersBelow'], d.waitForMembersBelow),
+    waitNoLongerMinutes: int(raw['waitNoLongerMinutes'], d.waitNoLongerMinutes, 0, 240),
+    ignoreWaitWhenLeading: bool(raw['ignoreWaitWhenLeading'], d.ignoreWaitWhenLeading),
+    ignorePartyWhenFollowing: bool(raw['ignorePartyWhenFollowing'], d.ignorePartyWhenFollowing),
+    requestPartyHealth: bool(raw['requestPartyHealth'], d.requestPartyHealth),
+    // Never faster than the server acknowledges a command, and 0 is off.
+    parEverySeconds: ((seconds) => (seconds > 0 && seconds < 5 ? 5 : seconds))(
+      int(raw['parEverySeconds'], d.parEverySeconds, 0, 3600)
+    ),
+    parAfterRound: bool(raw['parAfterRound'], d.parAfterRound)
   };
 }
 

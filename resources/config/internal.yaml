@@ -1121,6 +1121,12 @@ tuning:
     # MegaMUD re-reads the party listing every 15s in a fight (ParPeriod).
     healAskAgainMs: 15000
 
+    # How long a follower that told its leader @wait stays up before it says
+    # @ok. A heal cast from a rest stands the character up for a second and it
+    # sits straight back down; @ok and @wait that close together tell the
+    # leader nothing.
+    okAfterMs: 5000
+
   # How many commands one press or one `@` may spend.
   #
   # One budget, because it is one budget: each `wear`, `get` or `drop` comes

@@ -597,6 +597,10 @@ function walkChip(walk: WalkProgress) {
   if (walk.status === 'walking' && walk.hold === 'fight') {
     return <span className="chip bad">{t('cards.navigation.loop.statusFighting')}</span>;
   }
+  // Leading, standing still for a member's health — `Walker.holdForParty`.
+  if (walk.status === 'walking' && walk.hold === 'party') {
+    return <span className="chip info">{t('cards.navigation.loop.statusWaitingParty')}</span>;
+  }
   /*
    * Waiting out what the server said is on the character. `warn`, unlike the
    * two holds above: a condition is something somebody may want to come and

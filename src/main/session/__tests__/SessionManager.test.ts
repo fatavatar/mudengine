@@ -4182,10 +4182,14 @@ describe('what the realm knows about a player, between characters', () => {
 
 describe('a follower pacing the loop', () => {
   /** A manager whose remotes answer Soul and Yang the pacing pair. */
-  function pacedManager(sink: SessionSink): SessionManager {
+  function pacedManager(
+    sink: SessionSink,
+    party: Partial<AutomationConfig['party']> = {}
+  ): SessionManager {
     return new SessionManager(sink, undefined, {
       ...DEFAULT_CONFIG.automation,
       enabled: true,
+      party: { ...DEFAULT_CONFIG.automation.party, ...party },
       remotes: {
         enabled: true,
         gangpath: false,
@@ -4240,6 +4244,42 @@ describe('a follower pacing the loop', () => {
     expect(manager.loops.progress.status).toBe('stopped');
 
     socket.write('Yang telepaths: @ok\r\n');
+    await until(() => manager!.loops.progress.status === 'running');
+  });
+
+  /* MegaMUD's Ignore @wait If Leading: read, said, and the lap walks on. */
+  it('walks on through @wait when told to ignore it', async () => {
+    const { sink, notices } = collect();
+    manager = pacedManager(sink, { ignoreWaitWhenLeading: true });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    await looping(socket);
+
+    socket.write('Soul telepaths: @wait\r\n');
+    await until(() => notices.some((notice) => /Ignore @wait If Leading/.test(notice)));
+    expect(manager.loops.progress.status).toBe('running');
+  });
+
+  /*
+   * MegaMUD's If Leading Wait No Longer Than: a `@wait` whose `@ok` never came
+   * does not hold the party all evening. The clock is minutes, so its callback
+   * is taken off `setTimeout` and run rather than waited for.
+   */
+  it('walks on once it has waited as long as it was told to for an @ok', async () => {
+    const { sink, notices } = collect();
+    manager = pacedManager(sink, { waitNoLongerMinutes: 2 });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    await looping(socket);
+
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    socket.write('Soul telepaths: @wait\r\n');
+    await until(() => manager!.loops.progress.status === 'stopped');
+    const giveUp = timers.mock.calls.find(([, delay]) => delay === 120_000)?.[0];
+    timers.mockRestore();
+    expect(giveUp).toBeTypeOf('function');
+    (giveUp as () => void)();
+    expect(notices.some((notice) => /Waited 2 min for soul/.test(notice))).toBe(true);
     await until(() => manager!.loops.progress.status === 'running');
   });
 

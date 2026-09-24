@@ -1351,14 +1351,20 @@ export const RULES: Rule[] = [
    * statement of the state.
    */
   { type: 'party-following', pattern: /^You are (?:already )?following (?<leader>\w+)\.$/ },
+  /*
+   * The join and the parting, each with its full stop optional: Skinny Inc
+   * prints `You are now following Fatty` bare (2026-09-24), and read as
+   * nothing the follower never knew it was following — no `@wait`, no par,
+   * no assist — until a `party` listing happened to say so.
+   */
   {
     type: 'party-joined',
-    pattern: /^(?:(?<player>\w+) started to follow you|You are now following (?<leader>\w+))\.$/
+    pattern: /^(?:(?<player>\w+) started to follow you|You are now following (?<leader>\w+))\.?$/
   },
   {
     type: 'party-left',
     pattern:
-      /^(?:(?<player>\w+) is no longer following you|You are no longer following (?<leader>\w+))\.$/
+      /^(?:(?<player>\w+) is no longer following you|You are no longer following (?<leader>\w+))\.?$/
   },
   /*
    * `uninvite <name>`, captured live (2026-08-28). The offer is withdrawn before
