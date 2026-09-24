@@ -26,8 +26,6 @@ import {
   type DensityPreference,
   type EngagePolicy,
   type RetreatStrategy,
-  normalizeMobRules,
-  type MobRule,
   POTION_WHENS,
   type PotionRule,
   type PotionWhen,
@@ -148,16 +146,6 @@ export interface ServerDraft {
    * `Server.database`.
    */
   database: string;
-  /**
-   * How this realm's own monsters are treated, under every character's list.
-   *
-   * On the realm for the reason the loops are: it names monsters by the names
-   * *this realm's* data spells, so it means nothing on another one, and every
-   * character playing here wants the same answer. Merged rather than replaced
-   * — a character's row for a monster wins and the rest of this list still
-   * applies. See `Server.mobRules` and `mergeMobRules`.
-   */
-  mobRules: MobRule[];
   /** Whether a hang-up here is charged; null leaves it to the options file. See `Server.hangPenalties`. */
   hangPenalties: boolean | null;
 }
@@ -428,8 +416,6 @@ export interface ProfileDraft {
     politeAttacks: boolean;
     maxMobs: number;
     refreshRounds: number;
-    /** The player's own rules for the realm's monsters. See `CombatConfig`. */
-    mobRules: MobRule[];
     /** This character's own monster rows, laid over the realm's. See `CombatConfig`. */
     monsters: MonsterRule[];
     maxTargetHealth: number;
@@ -722,10 +708,6 @@ export function asServerDraft(value: unknown): ServerDraft | null {
     // IPC boundary, so it is parsed rather than trusted.
     loops: asLoops(value['loops'], LOOP_LIMITS),
     database: text(value['database']).slice(0, 400),
-    // Parsed rather than trusted, like the loops: this crossed the IPC
-    // boundary. `normalizeMobRules` is the same coercion the config file goes
-    // through, so a row means one thing whichever door it arrived at.
-    mobRules: normalizeMobRules(value['mobRules']),
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null
   };
 }
@@ -891,7 +873,6 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       // Capped low: every round is a fraction of a second, so a client asked to
       // look every round would spend most of a fight looking.
       refreshRounds: Math.min(20, Math.max(0, Math.trunc(Number(combat['refreshRounds']) || 0))),
-      mobRules: normalizeMobRules(combat['mobRules']),
       monsters: asMonsterRules(combat['monsters']),
       maxTargetHealth: Math.max(0, Math.round(Number(combat['maxTargetHealth']) || 0)),
       minMobs: Math.max(0, Math.min(99, Math.round(Number(combat['minMobs']) || 0))),

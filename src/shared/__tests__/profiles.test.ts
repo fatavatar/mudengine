@@ -299,88 +299,57 @@ describe('resolveProfile', () => {
 
 /*
  * The one `automation:` list that is merged across scopes instead of being
- * replaced by the overlay. The realm's half cannot ride on `overlay` at all —
- * a realm's settings are not part of `config` — so this is the seam where the
- * three lists actually meet, and the place a mistake in it would show.
+ * replaced by the overlay: the monster rows, laid field by field. The options
+ * file's rows meet the character's here; the realm's imported table goes
+ * under both when a session is configured (`withRealmMonsters`).
  */
-describe('the mob priority list, across global, realm and character', () => {
-  const realm = {
-    name: 'GreaterMUD (local)',
-    host: 'gmud-tgs',
-    port: 2427,
-    encoding: 'cp437',
-    mobRules: [{ mob: 'sewer rat', treat: 'last' }]
-  };
-  const withRealm: Record<string, unknown> = {
+describe('the monster rows, across global and character', () => {
+  const realm = { name: 'GreaterMUD (local)', host: 'gmud-tgs', port: 2427, encoding: 'cp437' };
+  const withGlobal: Record<string, unknown> = {
     servers: [realm],
-    automation: { combat: { mobRules: [{ mob: 'red dragon', treat: 'last' }] } }
+    automation: {
+      combat: { monsters: [{ mob: 'red dragon', priority: 'last', relationship: 'avoid' }] }
+    }
   };
 
-  const rules = (profile: { config: { automation: { combat: { mobRules: unknown } } } }) =>
-    profile.config.automation.combat.mobRules;
+  const rows = (profile: { config: { automation: { combat: { monsters: unknown } } } }) =>
+    profile.config.automation.combat.monsters;
 
-  it('keeps a monster only the realm names', () => {
-    const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withRealm);
-    expect(rules(profile)).toContainEqual({ mob: 'sewer rat', treat: 'last' });
-  });
-
-  it('keeps the global rows beside the realm’s', () => {
-    const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withRealm);
-    expect(rules(profile)).toContainEqual({ mob: 'red dragon', treat: 'last' });
+  it('keeps the global rows for a character that states none', () => {
+    const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withGlobal);
+    expect(rows(profile)).toEqual([{ mob: 'red dragon', priority: 'last', relationship: 'avoid' }]);
   });
 
   /*
-   * The case `overlay` alone gets wrong: a character stating its own list would
-   * otherwise replace the global one wholesale and lose the realm's entirely.
+   * The case `overlay` alone gets wrong: a character stating its own rows
+   * would otherwise replace the global ones wholesale.
    */
-  it('keeps every scope’s rows when the character states its own', () => {
+  it('keeps both scopes’ rows when the character states its own', () => {
     const profile = resolve(
       {
         name: 'Thorn',
         server: 'GreaterMUD (local)',
-        automation: { combat: { mobRules: [{ mob: 'gnoll shaman', treat: 'first' }] } }
+        automation: { combat: { monsters: [{ mob: 'gnoll shaman', priority: 'first' }] } }
       },
-      withRealm
+      withGlobal
     );
-    expect(rules(profile)).toEqual(
-      expect.arrayContaining([
-        { mob: 'gnoll shaman', treat: 'first' },
-        { mob: 'sewer rat', treat: 'last' },
-        { mob: 'red dragon', treat: 'last' }
-      ])
-    );
+    expect(rows(profile)).toEqual([
+      { mob: 'red dragon', priority: 'last', relationship: 'avoid' },
+      { mob: 'gnoll shaman', priority: 'first' }
+    ]);
   });
 
-  it('lets the character’s row win over the realm’s for one monster', () => {
+  it('lets the character’s field win and keeps the rest of the global row', () => {
     const profile = resolve(
       {
         name: 'Thorn',
         server: 'GreaterMUD (local)',
-        automation: { combat: { mobRules: [{ mob: 'sewer rat', treat: 'first' }] } }
+        automation: { combat: { monsters: [{ mob: 'red dragon', priority: 'first' }] } }
       },
-      withRealm
+      withGlobal
     );
-    expect(rules(profile)).toContainEqual({ mob: 'sewer rat', treat: 'first' });
-    expect(rules(profile)).not.toContainEqual({ mob: 'sewer rat', treat: 'last' });
-  });
-
-  it('lets the realm’s row win over the global one', () => {
-    const profile = resolve(
-      { name: 'Thorn', server: 'GreaterMUD (local)' },
-      {
-        servers: [{ ...realm, mobRules: [{ mob: 'red dragon', treat: 'first' }] }],
-        automation: { combat: { mobRules: [{ mob: 'red dragon', treat: 'last' }] } }
-      }
-    );
-    expect(rules(profile)).toEqual([{ mob: 'red dragon', treat: 'first' }]);
-  });
-
-  /*
-   * An inline address names no realm directory, so there is no realm list to
-   * inherit and the global one must survive untouched.
-   */
-  it('keeps the global list for a character that spells its address out inline', () => {
-    const profile = resolve({ name: 'Thorn', server: { host: 'gmud-tgs', port: 2427 } }, withRealm);
-    expect(rules(profile)).toEqual([{ mob: 'red dragon', treat: 'last' }]);
+    expect(rows(profile)).toEqual([
+      { mob: 'red dragon', priority: 'first', relationship: 'avoid' }
+    ]);
   });
 });

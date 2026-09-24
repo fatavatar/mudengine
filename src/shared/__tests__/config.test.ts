@@ -14,8 +14,6 @@ import {
   resolveUiFonts,
   targetFromConfig,
   toCssFontStack,
-  mergeMobRules,
-  normalizeMobRules,
   type AppConfig
 } from '../config';
 import { DENOMINATIONS } from '../character';
@@ -185,9 +183,6 @@ describe('normalizeConfig', () => {
         // The default: this realm's own `locate:` key is absent.
         locate: 'rm',
         database: '',
-        // Empty for the same reason the menus are: a realm ranks nothing until
-        // somebody playing it says so.
-        mobRules: [],
         hangPenalties: null
       }
     ]);
@@ -446,15 +441,15 @@ describe('automation.combat', () => {
   it('keys monster names the way the stream spells them', () => {
     expect(
       combat({
-        mobRules: [
-          { mob: 'The Giant Rat', treat: 'never' },
-          { mob: 'giant rat', treat: 'first' },
-          { mob: '  A Kobold  Thief ', treat: 'last' }
+        monsters: [
+          { mob: 'The Giant Rat', relationship: 'friend' },
+          { mob: 'giant rat', priority: 'first' },
+          { mob: '  A Kobold  Thief ', priority: 'last' }
         ]
-      }).mobRules
+      }).monsters
     ).toEqual([
-      { mob: 'giant rat', treat: 'never' },
-      { mob: 'kobold thief', treat: 'last' }
+      { mob: 'giant rat', relationship: 'friend' },
+      { mob: 'kobold thief', priority: 'last' }
     ]);
   });
 
@@ -819,80 +814,5 @@ describe('the coins collected and the coins shed', () => {
     expect(after.coinKinds).toEqual(['gold']);
     expect(after.discardKinds).toEqual(['runic']);
     for (const list of [after.coinKinds, after.discardKinds]) expect(list).not.toContain('copper');
-  });
-});
-
-describe('the monster list, merged across scopes rather than replaced', () => {
-  it('keeps a monster only one scope names', () => {
-    const merged = mergeMobRules(
-      [{ mob: 'rat', treat: 'low' }],
-      [{ mob: 'sewer rat', treat: 'last' }],
-      [{ mob: 'dragon', treat: 'first' }]
-    );
-    expect(merged.map((row) => row.mob).sort()).toEqual(['dragon', 'rat', 'sewer rat']);
-  });
-
-  /*
-   * The whole reason this list is merged and every other one is replaced: a
-   * character that wants the realm's rules plus one row of its own must not
-   * have to restate the realm's.
-   */
-  it('lets the narrowest scope win for a monster two of them name', () => {
-    const merged = mergeMobRules(
-      [{ mob: 'rat', treat: 'low' }],
-      [{ mob: 'rat', treat: 'high' }],
-      [{ mob: 'rat', treat: 'first' }]
-    );
-    expect(merged).toEqual([{ mob: 'rat', treat: 'first' }]);
-  });
-
-  it('lets the realm win over the global list where the character is silent', () => {
-    const merged = mergeMobRules(
-      [{ mob: 'rat', treat: 'low' }],
-      [{ mob: 'rat', treat: 'last' }],
-      []
-    );
-    expect(merged).toEqual([{ mob: 'rat', treat: 'last' }]);
-  });
-
-  it('keys a row the way the wire spells a monster', () => {
-    const merged = mergeMobRules([{ mob: 'The Giant Rat', treat: 'low' }], [], []);
-    expect(merged).toEqual([{ mob: 'giant rat', treat: 'low' }]);
-  });
-
-  it('drops a row naming no monster, which could only ever match nothing', () => {
-    expect(normalizeMobRules([{ mob: '   ', treat: 'first' }])).toEqual([]);
-  });
-
-  /*
-   * The runtime half of a closed union. Dropped rather than defaulted to
-   * `default`: a typo that became a row reading as deliberate and doing
-   * nothing is worse than one that is visibly absent.
-   */
-  it('drops a row whose treatment the table does not know', () => {
-    expect(normalizeMobRules([{ mob: 'rat', treat: 'urgent' }])).toEqual([]);
-  });
-
-  /*
-   * `never` is the refusal the flat `avoid` list used to be, and it merges by
-   * the same rule as a band: a character that leaves the town guard alone
-   * where the realm ranks it `first` leaves it alone.
-   */
-  it('lets a character leave alone what a broader scope ranks', () => {
-    const merged = mergeMobRules(
-      [{ mob: 'town guard', treat: 'first' }],
-      [],
-      [{ mob: 'town guard', treat: 'never' }]
-    );
-    expect(merged).toEqual([{ mob: 'town guard', treat: 'never' }]);
-  });
-
-  it('keeps the first row for a monster and drops a later duplicate', () => {
-    expect(
-      normalizeMobRules([
-        { mob: 'rat', treat: 'first' },
-        { mob: 'the rat', treat: 'last' }
-      ])
-    ).toEqual([{ mob: 'rat', treat: 'first' }]);
   });
 });

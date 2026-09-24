@@ -3,7 +3,7 @@ import Advanced from './Advanced';
 import AlertList from './AlertList';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
-import MobRuleList from './MobRuleList';
+import { MonsterRuleList } from './MonsterRules';
 import GearSetList from './GearSetList';
 import PotionList from './PotionList';
 import SettingsNav, { type NavFieldset } from './SettingsNav';
@@ -162,7 +162,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   realm: [{ id: 'realm-login', label: t('settings.realms.loginLegend') }],
   combat: [
     { id: 'combat-monsters', label: t('settings.combat.monstersLegend') },
-    { id: 'combat-mob-rules', label: t('settings.combat.mobRuleLegend') }
+    { id: 'combat-monster-rows', label: t('settings.combat.monsterRowsLegend') }
   ],
   health: [
     { id: 'health-recover', label: t('settings.health.recoverLegend') },
@@ -905,22 +905,27 @@ export default function GlobalSettings({
                 value={String(draft.automation.combat.maxMonsterExperience)}
               />
             </fieldset>
-            <fieldset className="settings-menus" data-fieldset="combat-mob-rules">
-              <legend>{t('settings.combat.mobRuleLegend')}</legend>
-              <p className="settings-note">{t('settings.combat.mobRuleNote')}</p>
+            <fieldset className="settings-menus" data-fieldset="combat-monster-rows">
+              <legend>{t('settings.combat.monsterRowsLegend')}</legend>
+              <p className="settings-note">{t('settings.global.combat.monsterRowsNote')}</p>
               {/* No suggestions here, and deliberately: this page belongs to no
                 character and therefore to no realm, and the monsters one realm
                 names mean nothing on another. The field is typable, which is
                 what it is for a character on a realm the client holds no data
                 for either. */}
-              <MobRuleList
-                known={[]}
-                namePrefix="global-mob-rule"
-                onChange={(rows) =>
-                  automation({ combat: { ...draft.automation.combat, mobRules: rows } })
-                }
-                rows={draft.automation.combat.mobRules}
-              />
+              <div className="realm-messages">
+                <MonsterRuleList
+                  addLabel={t('settings.monsters.add')}
+                  emptyText={t('settings.global.combat.monsterRowsNone')}
+                  known={[]}
+                  namePrefix="global-monster"
+                  onChange={(rows) => {
+                    automation({ combat: { ...draft.automation.combat, monsters: rows } });
+                    return Promise.resolve(null);
+                  }}
+                  rows={draft.automation.combat.monsters}
+                />
+              </div>
             </fieldset>
             <Advanced label={t('settings.global.combat.advancedPacing')}>
               <div className="settings-inline">

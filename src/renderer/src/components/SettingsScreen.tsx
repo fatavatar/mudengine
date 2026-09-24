@@ -12,7 +12,6 @@ import AlertList from './AlertList';
 import RealmMessages from './RealmMessages';
 import RealmMonsters from './RealmMonsters';
 import { MonsterRuleList } from './MonsterRules';
-import MobRuleList from './MobRuleList';
 import SettingsNav, { type NavFieldset } from './SettingsNav';
 import GearSetList from './GearSetList';
 import PotionList, { WardRules } from './PotionList';
@@ -76,7 +75,6 @@ import {
   type EngagePolicy,
   type LocateMethod,
   type LootConfig,
-  type MobRule,
   type RetreatStrategy,
   type PvpAction,
   type RewritesUiConfig,
@@ -480,7 +478,6 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'combat-attack', label: t('settings.combat.attackLegend') },
     { id: 'combat-attacks', label: t('settings.combat.attacksLegend') },
     { id: 'combat-monsters', label: t('settings.combat.monstersLegend') },
-    { id: 'combat-mob-rules', label: t('settings.combat.mobRuleLegend') },
     { id: 'combat-monster-rows', label: t('settings.combat.monsterRowsLegend') }
   ],
   health: [
@@ -594,8 +591,6 @@ interface CharacterForm {
   /** `party.askForHealBelow`, as a percentage string. */
   partyAskHeal: string;
   combatRefresh: string;
-  /** The player's own rules for the realm's monsters. See `MobRuleList`. */
-  combatMobRules: MobRule[];
   /** This character's own monster rows (`combat.monsters`). */
   combatMonsters: MonsterRule[];
   combatMaxTargetHealth: string;
@@ -801,7 +796,6 @@ function formOf(entry: ProfileEditable): CharacterForm {
     // threshold here: one representation on disk, the one people think in on
     // the form.
     combatRefresh: String(entry.combat.refreshRounds),
-    combatMobRules: entry.combat.mobRules.map((row) => ({ ...row })),
     combatMonsters: entry.combat.monsters.map((row) => ({ ...row })),
     combatMaxTargetHealth: String(entry.combat.maxTargetHealth),
     combatMinMobs: String(entry.combat.minMobs),
@@ -989,7 +983,6 @@ function draftOf(form: CharacterForm): ProfileDraft {
       politeAttacks: form.combatPoliteAttacks,
       maxMobs: Number.parseInt(form.combatMaxMobs, 10) || 0,
       refreshRounds: Number.parseInt(form.combatRefresh, 10) || 0,
-      mobRules: form.combatMobRules,
       monsters: form.combatMonsters,
       maxTargetHealth: Math.max(0, Number.parseInt(form.combatMaxTargetHealth, 10) || 0),
       minMobs: Math.max(0, Number.parseInt(form.combatMinMobs, 10) || 0),
@@ -1216,9 +1209,6 @@ function emptyServerForm(defaults: GlobalDraft | null): ServerDraft {
     // somebody says otherwise. There is no Global default to copy: a map is a
     // fact about one place, so there is no sensible "next realm" value for it.
     database: '',
-    // Nor for the monsters, and for exactly the same reason: a ranking names
-    // this realm's own monsters, so there is nothing to carry from Global.
-    mobRules: [],
     hangPenalties: null
   };
 }
@@ -1343,7 +1333,6 @@ function emptyForm(
     partyRest: party.restWithLeader,
     partyAskHeal: percent(party.askForHealBelow),
     combatRefresh: String(combat.refreshRounds),
-    combatMobRules: combat.mobRules.map((row) => ({ ...row })),
     combatMonsters: combat.monsters.map((row) => ({ ...row })),
     combatMaxTargetHealth: String(combat.maxTargetHealth),
     combatMinMobs: String(combat.minMobs),
@@ -3037,26 +3026,14 @@ export default function SettingsScreen({
                             />
                           </fieldset>
 
-                          <fieldset className="settings-menus" data-fieldset="combat-mob-rules">
-                            <legend>{t('settings.combat.mobRuleLegend')}</legend>
-                            {/* In the open rather than behind a hint: that the
-                                band skips the weighing is the one thing about
-                                this control somebody could otherwise have
-                                wrong for a whole evening. */}
-                            <p className="settings-note">{t('settings.combat.mobRuleNote')}</p>
-                            <MobRuleList
-                              known={monsterNames}
-                              namePrefix="mob-rule"
-                              onChange={(rows) => patch({ combatMobRules: rows })}
-                              rows={form.combatMobRules}
-                            />
-                          </fieldset>
-
                           {/*
                             This character's own monster rows, laid over the
                             realm's table field by field -- a shaman's spell
                             for a monster the realm marks Flee keeps the Flee.
-                            Part of the form's draft, so it saves with it.
+                            The one list about named monsters: what to leave
+                            alone is a Friend, and the attack order is the
+                            priority. Part of the form's draft, so it saves
+                            with it.
                           */}
                           <fieldset className="settings-menus" data-fieldset="combat-monster-rows">
                             <legend>{t('settings.combat.monsterRowsLegend')}</legend>
@@ -4658,28 +4635,6 @@ export default function SettingsScreen({
                     onToggle={toggleServerLoop}
                     picking={picking}
                   />
-
-                  {/*
-                    And the monsters that belong to the place, for the same
-                    reason: a ranking names monsters as *this* realm's data
-                    spells them, so it means nothing on another realm and
-                    everything to every character playing here. A character's
-                    own row for a monster still wins over this one.
-                  */}
-                  <fieldset className="settings-menus" data-fieldset="realm-mob-rules">
-                    <legend>{t('settings.combat.mobRuleLegend')}</legend>
-                    <p className="settings-note">{t('settings.realms.mobRuleNote')}</p>
-                    {/* No suggestions: the realm page is reached without a
-                        session, and the monster names come from the realm a
-                        *session* has loaded. The field is typable, as it is
-                        for a realm the client holds no data for. */}
-                    <MobRuleList
-                      known={[]}
-                      namePrefix="realm-mob-rule"
-                      onChange={(rows) => setServerForm({ ...serverForm, mobRules: rows })}
-                      rows={serverForm.mobRules}
-                    />
-                  </fieldset>
 
                   {/*
                     And what the place's sentences mean: a realm's message

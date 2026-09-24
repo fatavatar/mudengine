@@ -467,10 +467,8 @@ describe('the round combat macro', () => {
       maxMonsterExperience: 0,
       // And by `statedTheHideForOpener`, off.
       hideForOpener: false,
-      // And by `statedTheMobRules`, empty, which is what the client already
-      // does without the key.
-      mobRules: [],
-      // And by `statedTheMonsterRows`, empty for the same reason.
+      // And by `statedTheMonsterRows`, empty, which is what the client already
+      // does without the key (`statedTheMobRules`' list folded into it).
       monsters: [],
       // And by `statedTheNewAutomation`, at the shipped figure (todo 00).
       defendAfterRounds: 2
@@ -5583,8 +5581,10 @@ describe('the mob rules list is stated', () => {
       'utf8'
     );
     migrate();
-    expect(combat()['mobRules']).toEqual([]);
-    expect(said.join('\n')).toContain('automation.combat.mobRules');
+    // The rules list is written and then folded away in the same run: what is
+    // left is the one list of monster rows (`theMobRulesBecameMonsterRows`).
+    expect(combat()['mobRules']).toBeUndefined();
+    expect(combat()['monsters']).toEqual([]);
   });
 
   /* The list somebody wrote by hand is theirs, and running twice changes nothing. */
@@ -5595,7 +5595,8 @@ describe('the mob rules list is stated', () => {
       'utf8'
     );
     migrate();
-    expect(combat()['mobRules']).toEqual([{ mob: 'gnoll shaman', treat: 'first' }]);
+    expect(combat()['mobRules']).toBeUndefined();
+    expect(combat()['monsters']).toEqual([{ mob: 'gnoll shaman', priority: 'first' }]);
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
@@ -5617,7 +5618,8 @@ describe('the mob rules list is stated', () => {
       string,
       unknown
     >;
-    expect(block['mobRules']).toEqual([]);
+    expect(block['mobRules']).toBeUndefined();
+    expect(block['monsters']).toEqual([]);
   });
 });
 
@@ -5658,9 +5660,10 @@ describe('the two monster lists became one', () => {
     );
     migrate();
     expect(combat()['avoid']).toBeUndefined();
-    expect(combat()['mobRules']).toEqual([
-      { mob: 'town guard', treat: 'never' },
-      { mob: 'priest', treat: 'never' }
+    // And on through the rules list into the monster rows: `never` is a Friend.
+    expect(combat()['monsters']).toEqual([
+      { mob: 'town guard', relationship: 'friend' },
+      { mob: 'priest', relationship: 'friend' }
     ]);
     expect(said.join('\n')).toContain('combat.mobRules');
   });
@@ -5675,9 +5678,9 @@ describe('the two monster lists became one', () => {
     );
     migrate();
     expect(combat()['mobPriority']).toBeUndefined();
-    expect(combat()['mobRules']).toEqual([
-      { mob: 'gnoll shaman', treat: 'first' },
-      { mob: 'giant rat', treat: 'last' }
+    expect(combat()['monsters']).toEqual([
+      { mob: 'gnoll shaman', priority: 'first' },
+      { mob: 'giant rat', priority: 'last' }
     ]);
   });
 
@@ -5695,13 +5698,8 @@ describe('the two monster lists became one', () => {
       'utf8'
     );
     migrate();
-    expect(combat()['mobRules']).toEqual([
-      { mob: 'town guard', treat: 'never' },
-      { mob: 'town guard', treat: 'first' }
-    ]);
-    // And where the first of the two keys stood, not at the end of the block.
-    const text = fs.readFileSync(home.options, 'utf8');
-    expect(text.indexOf('mobRules:')).toBeLessThan(text.indexOf('engage:'));
+    // The refusal is the row's: the first rule for a monster is the one kept.
+    expect(combat()['monsters']).toEqual([{ mob: 'town guard', relationship: 'friend' }]);
   });
 
   it('renames the realm’s own list, which has no avoid half', () => {
@@ -5717,7 +5715,12 @@ describe('the two monster lists became one', () => {
     migrate();
     const realm = parse(fs.readFileSync(scope.file, 'utf8')) as Record<string, unknown>;
     expect(realm['mobPriority']).toBeUndefined();
-    expect(realm['mobRules']).toEqual([{ mob: 'sewer rat', treat: 'last' }]);
+    expect(realm['mobRules']).toBeUndefined();
+    // And on into the realm's own monster table, which it creates.
+    const table = parse(
+      fs.readFileSync(path.join(path.dirname(scope.file), 'monsters.yaml'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(table['monsters']).toEqual([{ mob: 'sewer rat', priority: 'last' }]);
   });
 
   it('is safe to run again', () => {
@@ -5728,6 +5731,88 @@ describe('the two monster lists became one', () => {
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
     expect(said.join('\n')).not.toContain('became one');
+  });
+});
+
+/*
+ * And the rules list became monster rows (2026-09-24): Monster Rules and
+ * Monster Details were one question in two panels. `never` is a Friend, a band
+ * is the row's priority, and a rule wins where the two rows disagree — as it
+ * did while both were read — except over a Flee or a Hang up.
+ */
+describe('the monster rules became monster rows', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const combat = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'combat'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-monster-rows-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('lays each rule over the row for its monster, and keeps a Flee', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  combat:\n    mobRules:\n' +
+        '      - { mob: gnoll shaman, treat: first }\n' +
+        '      - { mob: dark bishop, treat: never }\n' +
+        '      - { mob: ooze, treat: never }\n' +
+        '    monsters:\n' +
+        '      - { mob: gnoll shaman, priority: last, attack: mmis }\n' +
+        '      - { mob: dark bishop, relationship: avoid }\n' +
+        '      - { mob: ooze, relationship: escape }\n',
+      'utf8'
+    );
+    migrate();
+    expect(combat()['mobRules']).toBeUndefined();
+    expect(combat()['monsters']).toEqual([
+      { mob: 'gnoll shaman', priority: 'first', attack: 'mmis' },
+      { mob: 'dark bishop', relationship: 'friend' },
+      { mob: 'ooze', relationship: 'escape' }
+    ]);
+    expect(said.join('\n')).toContain('one list now');
+  });
+
+  it('fills a realm table that already exists, and runs twice safely', () => {
+    const scope = home.server('home');
+    fs.mkdirSync(scope.dir, { recursive: true });
+    fs.writeFileSync(
+      scope.file,
+      'name: Home\nhost: gmud-tgs\nport: 2427\nmobRules:\n  - { mob: sewer rat, treat: last }\n',
+      'utf8'
+    );
+    const table = path.join(scope.dir, 'monsters.yaml');
+    fs.writeFileSync(
+      table,
+      'source: { file: Monsters.md, importedAt: 2026-09-23 }\nmonsters:\n' +
+        '  - { mob: sewer rat, notHostile: true }\n  - { mob: orc, relationship: avoid }\n',
+      'utf8'
+    );
+    migrate();
+    const read = parse(fs.readFileSync(table, 'utf8')) as Record<string, unknown>;
+    expect(read['source']).toEqual({ file: 'Monsters.md', importedAt: '2026-09-23' });
+    expect(read['monsters']).toEqual([
+      { mob: 'sewer rat', notHostile: true, priority: 'last' },
+      { mob: 'orc', relationship: 'avoid' }
+    ]);
+    expect(parse(fs.readFileSync(scope.file, 'utf8'))['mobRules']).toBeUndefined();
+    const after = fs.readFileSync(table, 'utf8');
+    said.length = 0;
+    migrate();
+    expect(fs.readFileSync(table, 'utf8')).toBe(after);
+    expect(said.join('\n')).not.toContain('one list now');
   });
 });
 

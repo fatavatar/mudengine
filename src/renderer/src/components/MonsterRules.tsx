@@ -45,7 +45,7 @@ function flagLabel(flag: Flag): string {
   }
 }
 
-/** One literal `t()` per band, for `i18n-coverage.test.ts` (see `MobPriorityList`). */
+/** One literal `t()` per band, for `i18n-coverage.test.ts`. */
 const BAND_WORD: Record<MobPriorityBand, () => string> = {
   first: () => t('settings.monsters.bands.first'),
   high: () => t('settings.monsters.bands.high'),
@@ -84,8 +84,9 @@ export interface MonsterRuleListProps {
   emptyText: string;
   /**
    * Monster names to suggest for a row — the realm's own and its imported
-   * table's. Suggestions only: the field stays free text, for `MobPriorityList`'s
-   * reason, and a row may name only part of a monster.
+   * table's. Suggestions only: the field stays free text, because a realm the
+   * client holds no data for still has monsters, and a row may name only part
+   * of a monster.
    */
   known?: readonly string[];
 }

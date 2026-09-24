@@ -1745,40 +1745,32 @@ automation:
     # nothing to hide for. Off, because it spends a command per fight.
     hideForOpener: false
 
-    # How named monsters are treated -- MegaMUD's Attack Priority List and its
-    # avoid list, as one row per monster.
+    # How named monsters are treated -- MegaMUD's Monster Details, one row per
+    # monster. A row names a monster and only what differs from one nobody
+    # listed:
     #
-    # Six treatments: never, first, high, default, low, last. `never` is the
-    # refusal -- that monster is not attacked automatically at all -- and the
-    # other five are the order the rest are attacked in. A monster no row names
-    # is `default`, so this is somewhere to add the one that matters rather
-    # than a ranking of the realm.
-    #
-    #   mobRules:
-    #     - { mob: town guard, treat: never }
-    #     - { mob: gnoll shaman, treat: first }
-    #     - { mob: giant rat, treat: last }
-    #
-    # Where a banded monster is in the room the band decides outright and the
-    # client's own weighing is skipped -- which is the point: a ranking the
-    # realm's arithmetic could overturn is one nobody can predict from reading
-    # it. `never` and every other refusal still apply first, so a band says
-    # which of the monsters worth attacking to attack, never that one is.
-    #
-    # A realm may state its own list in `servers/<id>/server.yaml`, and it is
-    # merged rather than replaced: a row here wins for the monster it names,
-    # and the realm's rows for every other monster still apply.
-    mobRules: []
-
-    # What this character does differently about particular monsters -- MegaMUD's
-    # Monster Details, laid one field at a time over the realm's own table
-    # (servers/<id>/monsters.yaml, imported from Monsters.md on the realm's page).
-    # A row names a monster and only what differs: relationship (friend, avoid,
-    # enemy, escape, hangup), priority, notHostile, noBackstab, stopToKill, and a
-    # preAttack or attack spell. A field left out keeps what the realm says.
+    #   relationship  friend (never attacked, even when it swings first), avoid
+    #                 (never started on, hit back), enemy (the default), escape
+    #                 (run from), hangup (end the session when it is here)
+    #   priority      first, high, default, low, last -- the order the rest are
+    #                 attacked in
+    #   notHostile, noBackstab, stopToKill, and a preAttack or attack spell
     #
     #   monsters:
+    #     - { mob: town guard, relationship: friend }
+    #     - { mob: gnoll shaman, priority: first }
     #     - { mob: gigantic black ooze, attack: mmis }
+    #
+    # Where a monster with a priority is in the room the band decides outright
+    # and the client's own weighing is skipped -- which is the point: a ranking
+    # the realm's arithmetic could overturn is one nobody can predict from
+    # reading it. Every refusal still applies first, so a band says which of
+    # the monsters worth attacking to attack, never that one is.
+    #
+    # Laid one field at a time: the realm's own table (servers/<id>/monsters.yaml,
+    # imported from Monsters.md on the realm's page) under this list, and this
+    # list under a character's own rows. A field left out keeps what the broader
+    # one says.
     monsters: []
 
     # And a refusal from the realm's own column rather than a name: decline

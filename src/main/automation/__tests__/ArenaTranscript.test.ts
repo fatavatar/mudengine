@@ -81,7 +81,7 @@ function vaelorConfig(): AutomationConfig {
     retaliate: true,
     maxMobs: 0,
     refreshRounds: 3,
-    mobRules: []
+    monsters: []
   };
   return base;
 }

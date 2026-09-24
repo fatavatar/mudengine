@@ -475,7 +475,7 @@ export function rankByVerdict(verdicts: ReadonlyArray<Verdict>): number[] {
  * decides. That is the order the client used before any weighing existed, and
  * it is the one somebody reading their own list can predict — which is the
  * whole point of writing the list. `rankByVerdict` is not consulted here at
- * all; see `CombatConfig.mobRules`.
+ * all; see `CombatConfig.monsters`, whose priorities `AutoCombat.bandsFor` hands in as these rows.
  *
  * `names` and `verdicts` are parallel to the candidates the caller is choosing
  * between, and the returned indices point back into them. `verdicts` is taken

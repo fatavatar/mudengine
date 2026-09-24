@@ -34,7 +34,8 @@ import { editYaml, type EditResult } from './YamlFile';
 export const MONSTERS_FILE = 'monsters.yaml';
 
 /** Said once at the top of a file this client creates. */
-const HEADER = ` What to do about particular monsters in this realm.
+/** The paragraph at the head of a realm's table; `Migration` writes it too. */
+export const MONSTERS_HEADER = ` What to do about particular monsters in this realm.
 
  Imported from MegaMUD's Monsters.md on the realm's settings page, and
  editable there. Each row names a monster and only what differs for it:
@@ -116,7 +117,7 @@ export class RealmMonsterStore extends EventEmitter {
     const creating = !fs.existsSync(file);
     const result = editYaml(file, {
       mutate: (document) => {
-        if (creating) document.commentBefore = HEADER;
+        if (creating) document.commentBefore = MONSTERS_HEADER;
         if (table.source === null) {
           if (document.hasIn(['source'])) document.deleteIn(['source']);
         } else {

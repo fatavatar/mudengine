@@ -603,7 +603,7 @@ export class AutoCombat {
     const there = state.room.occupants.find(
       (who) => who.kind === 'mob' && mobKey(who.name) === wanted
     );
-    if (!there || this.spared(wanted) || this.isPlayer(state, there.name)) return null;
+    if (!there || this.leftAlone(wanted) || this.isPlayer(state, there.name)) return null;
     return { name: there.name, leader };
   }
 
@@ -627,7 +627,7 @@ export class AutoCombat {
       const there = state.room.occupants.find(
         (who) => who.kind === 'mob' && mobKey(who.name) === wanted
       );
-      if (!there || this.spared(wanted) || this.isPlayer(state, there.name)) continue;
+      if (!there || this.leftAlone(wanted) || this.isPlayer(state, there.name)) continue;
       if (best === null || seen.at > best.at) best = { name: there.name, member, at: seen.at };
     }
     return best === null ? null : { name: best.name, member: best.member };
@@ -696,7 +696,7 @@ export class AutoCombat {
    * says about it — `engage: none`, a disposition the realm does not call
    * hostile, a cap on health or experience. Not past the three refusals that
    * are not settings (a player, something unplaced, a monster the realm is
-   * sure is good), not past a `never` row, and not past somebody else's
+   * sure is good), not past a Friend, and not past somebody else's
    * claim on it. Session-scoped, like `AutoLoot.alsoTake`.
    */
   alsoFight(name: string): void {
@@ -977,7 +977,7 @@ export class AutoCombat {
   /**
    * The occupant this fight is committed to, in the room's spelling, or null.
    *
-   * Only while nothing has since ruled it out: a `never` row written
+   * Only while nothing has since ruled it out: a Friend row written
    * mid-fight, or the roster calling it a person.
    */
   private focusHere(state: CharacterState): string | null {
@@ -985,7 +985,7 @@ export class AutoCombat {
     const held = state.room.occupants.find(
       (who) => who.kind === 'mob' && mobKey(who.name) === this.focus
     );
-    if (held === undefined || this.spared(held.name) || this.isPlayer(state, held.name)) {
+    if (held === undefined || this.leftAlone(held.name) || this.isPlayer(state, held.name)) {
       return null;
     }
     return held.name;
@@ -1290,7 +1290,7 @@ export class AutoCombat {
      * resolves to an occupant here.
      */
     const swinging: Array<{ name: string; mob?: MobEntity | undefined }> = state.combat.attackers
-      .filter((name) => !this.isPlayer(state, name) && !this.spared(name))
+      .filter((name) => !this.isPlayer(state, name) && !this.leftAlone(name))
       .map((name) => ({
         name,
         mob: state.room.occupants.find(
@@ -1328,13 +1328,13 @@ export class AutoCombat {
     const certain = standing.filter(
       (who) =>
         this.config.engage !== 'none' &&
-        !this.spared(who.name) &&
+        !this.leftAlone(who.name) &&
         !this.isPlayer(state, who.name) &&
         !who.uncertain &&
         who.costly === 'never' &&
         attacksOnSight(who.disposition, mine) === true &&
         this.claimOn(state, who.name) === null &&
-        !standing.some((guard) => this.spared(guard.name) && protects(guard, who) !== false) &&
+        !standing.some((guard) => this.leftAlone(guard.name) && protects(guard, who) !== false) &&
         !(worth > 0 && who.mob?.experience !== undefined && who.mob.experience > worth) &&
         !(cap > 0 && who.mob?.hp !== undefined && who.mob.hp > cap)
     );
@@ -1346,11 +1346,11 @@ export class AutoCombat {
       [
         ...swinging.filter(
           (hit) =>
-            !standing.some((guard) => this.spared(guard.name) && protects(guard, hit) !== false)
+            !standing.some((guard) => this.leftAlone(guard.name) && protects(guard, hit) !== false)
         ),
         ...joining,
         ...standing
-          .filter((who) => !this.spared(who.name) && who.costly === 'never')
+          .filter((who) => !this.leftAlone(who.name) && who.costly === 'never')
           .filter((who) => !certain.includes(who))
       ],
       (who) => swinging.includes(who) || joining.includes(who),
@@ -1518,16 +1518,8 @@ export class AutoCombat {
     });
   }
 
-  /**
-   * The band a monster is attacked in: a `mobRules` row for it, else what its
-   * monster row says (the realm's imported table, or the character's). The
-   * rule is the more specific statement and wins; a `never` row is not a
-   * band, and is refused before anything is ranked (`leftAlone`).
-   */
+  /** The band a monster is attacked in, off its monster row, where one says. */
   private bandOf(name: string): MobPriorityBand | undefined {
-    const key = mobKey(name);
-    const row = this.config.mobRules.find((rule) => mobKey(rule.mob) === key);
-    if (row !== undefined && row.treat !== 'never') return row.treat;
     return this.ruleOf(name)?.priority;
   }
 
@@ -1548,14 +1540,6 @@ export class AutoCombat {
   /** A monster the table marks *Stop to kill*. */
   private stopsFor(name: string): boolean {
     return this.ruleOf(name)?.stopToKill === true;
-  }
-
-  /**
-   * Never swung at, even to hit back: a `never` row (`leftAlone`), or a
-   * monster the monster table calls a friend.
-   */
-  private spared(name: string): boolean {
-    return this.leftAlone(name) || this.relationOf(name) === 'friend';
   }
 
   private explain(
@@ -1715,7 +1699,7 @@ export class AutoCombat {
       return;
     }
     if (choice.target === null) {
-      // Something is here and the policy will not have it: a `never` row, the ten
+      // Something is here and the policy will not have it: a Friend or Avoid row, the ten
       // evil points, an uncertain disposition at `hostile`, or a monster the
       // realm does not say attacks first.
       this.decline(choice.considered, choice.why);
@@ -1877,19 +1861,16 @@ export class AutoCombat {
     const bystanders = new Set<RoomOccupant>();
 
     for (const who of mobs) {
-      if (this.leftAlone(who.name)) {
-        decline(who, t('automation.combat.refusedNever', { target: who.name }));
-        continue;
-      }
       /*
-       * What the monster table says about it (MegaMUD's relationships). Only
+       * What the monster rows say about it (MegaMUD's relationships). Only
        * an enemy is started on: a friend never is, an avoided monster waits
        * to swing first (and is hit back then — see `retaliate`), a monster to
        * flee from is run from rather than fought, and one to hang up on ends
-       * the session before a fight could matter.
+       * the session before a fight could matter. A quest's kill (`alsoFight`)
+       * is asked for by name and goes past Avoid, never past a Friend.
        */
       const relationship = this.relationOf(who.name);
-      if (relationship !== 'enemy') {
+      if (relationship !== 'enemy' && !(relationship === 'avoid' && this.isWanted(who.name))) {
         decline(
           who,
           t('automation.combat.refusedRelationship', {
@@ -1923,7 +1904,7 @@ export class AutoCombat {
        * A quest step's monster (`alsoFight`) is past the policy from here on:
        * the caps and the disposition are about what to pick a fight with
        * unasked, and this one was asked for by name. The refusals above it —
-       * a `never` row, a claim, the ten evil points — stand.
+       * a Friend, a claim, the ten evil points — stand.
        */
       if (this.isWanted(who.name)) {
         willing.push(who);
@@ -2037,7 +2018,7 @@ export class AutoCombat {
     /*
      * The player's own order, where they stated one for something in this
      * room. It replaces the weighing rather than ranking against it — see
-     * `CombatConfig.mobRules` — so `rankByVerdict` is not consulted at
+     * `CombatConfig.monsters` — so `rankByVerdict` is not consulted at
      * all on this path, and the trace says the band rather than a menace
      * figure that did not make the decision.
      */
@@ -2814,7 +2795,7 @@ export class AutoCombat {
        */
       const spares = state.room.occupants.some(
         (who) =>
-          who.kind === 'mob' && (this.spared(who.name) || this.relationOf(who.name) !== 'enemy')
+          who.kind === 'mob' && (this.leftAlone(who.name) || this.relationOf(who.name) !== 'enemy')
       );
       const crowd = Math.max(countThreats(state), state.combat.attackers.length);
       const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
@@ -3164,19 +3145,17 @@ export class AutoCombat {
 
   /**
   /**
-   * Whether a row says to leave this monster alone.
+   * Whether the monster rows say to leave this monster alone — a Friend,
+   * never attacked, even when it swings first.
    *
-   * The refusal the flat `combat.avoid` list used to be, now a `never` row of
-   * `combat.mobRules` — one reading, because it is asked from four places
-   * (the assist, the defence, retaliation and `choose`) and four copies of
-   * `includes(mobKey(name))` is how one of them comes to disagree. Keyed on
-   * both sides, since a row typed on the settings screen has not been through
-   * the normalizer yet and the list must mean the same thing while it is being
-   * written as after it is saved.
+   * Upstream's `never` row, which is what the flat `combat.avoid` list became
+   * and which is a Friend here since the two monster lists became one
+   * (2026-09-24). One reading, because it is asked from every place a swing is
+   * decided — the assist, the defence, retaliation, a guard's ward, a quest's
+   * kill — and copies of the test are how one of them comes to disagree.
    */
   private leftAlone(name: string): boolean {
-    const wanted = mobKey(name);
-    return this.config.mobRules.some((row) => row.treat === 'never' && mobKey(row.mob) === wanted);
+    return this.relationOf(name) === 'friend';
   }
 
   private isPlayer(state: CharacterState, name: string): boolean {

@@ -552,7 +552,7 @@ describe('which one to go for', () => {
   });
 
   it('skips one it was told never to attack', () => {
-    const auto = make(combat({ mobRules: [{ mob: 'giant rat', treat: 'never' }] }));
+    const auto = make(combat({ monsters: [{ mob: 'giant rat', relationship: 'friend' }] }));
     auto.onCharacter(state({ room }));
     drain();
     expect(sent).toEqual(['a wererat shaman']);
@@ -563,7 +563,7 @@ describe('which one to go for', () => {
      and a refusal that did nothing until the file was reloaded would be the
      control lying about itself while somebody watched it. */
   it('leaves it alone however the row spelled the name', () => {
-    const auto = make(combat({ mobRules: [{ mob: 'The Giant Rat', treat: 'never' }] }));
+    const auto = make(combat({ monsters: [{ mob: 'The Giant Rat', relationship: 'friend' }] }));
     auto.onCharacter(state({ room }));
     drain();
     expect(sent).toEqual(['a wererat shaman']);
@@ -2424,7 +2424,7 @@ describe('one target until it is dead', () => {
       };
       const ward = ogre({ ids: [20], abilities: [[GUARDED_BY_ABILITY, 10]] });
       make(
-        combat({ engage: 'hostile', mobRules: [{ mob: 'kobold thief', treat: 'never' }] })
+        combat({ engage: 'hostile', monsters: [{ mob: 'kobold thief', relationship: 'friend' }] })
       ).onCharacter(bitten([guard, ward, rat]));
       drain();
       expect(sent).toEqual(['a giant rat']);
@@ -2810,11 +2810,11 @@ describe('saying why it did not open a fight', () => {
     expect(refusals()).toEqual(['shopkeeper — the realm does not say shopkeeper attacks first']);
   });
 
-  it('names a row set to never attack', () => {
-    const auto = make(combat({ mobRules: [{ mob: 'thug', treat: 'never' }] }));
+  it('names a row marked Friend', () => {
+    const auto = make(combat({ monsters: [{ mob: 'thug', relationship: 'friend' }] }));
     auto.onCharacter(room(mob('thug', 'hostile')));
     drain();
-    expect(refusals()).toEqual(['thug — thug is set to never attack']);
+    expect(refusals()).toEqual(['thug — thug is marked friend in the monster table']);
   });
 
   /*
@@ -3069,19 +3069,6 @@ describe('the monster table', () => {
     auto.onCharacter(state({ room }));
     drain();
     expect(sent).toEqual(['a wererat shaman']);
-  });
-
-  /* The character's own rule is the more specific statement. */
-  it('lets a monster rule outrank a monster-table row', () => {
-    const auto = make(
-      combat({
-        monsters: [{ mob: 'wererat shaman', priority: 'first' }],
-        mobRules: [{ mob: 'wererat shaman', treat: 'last' }]
-      })
-    );
-    auto.onCharacter(state({ room }));
-    drain();
-    expect(sent).toEqual(['a giant rat']);
   });
 
   /* MegaMUD's partial names: `guardsman` answers for `nasty guardsman`. */
@@ -3393,7 +3380,7 @@ describe('the monster table, fighting', () => {
 
     it('keeps the room spell back while an avoided monster stands in the room', () => {
       const auto = make(
-        combat({ refreshRounds: 0, mobRules: [{ mob: 'wolf', treat: 'never' }] }),
+        combat({ refreshRounds: 0, monsters: [{ mob: 'wolf', relationship: 'friend' }] }),
         true,
         spells({ attack: '', areaAttack: 'pcloud', areaMinMobs: 1 })
       );
@@ -3608,7 +3595,7 @@ describe('a monster that protects another', () => {
   it('puts the guard ahead of the priority list too, since the server does', () => {
     fightIn(
       [kobold, shaman([10])],
-      combat({ mobRules: [{ mob: 'wererat shaman', treat: 'first' }] })
+      combat({ monsters: [{ mob: 'wererat shaman', priority: 'first' }] })
     );
     expect(sent).toEqual(['a kobold thief']);
   });
@@ -3638,11 +3625,11 @@ describe('a monster that protects another', () => {
   it('declines what a refused guard protects, with the guard’s reason', () => {
     fightIn(
       [shaman([10]), kobold],
-      combat({ mobRules: [{ mob: 'kobold thief', treat: 'never' }] })
+      combat({ monsters: [{ mob: 'kobold thief', relationship: 'friend' }] })
     );
     expect(sent).toEqual([]);
     expect(refusals()).toContain(
-      'wererat shaman — kobold thief protects wererat shaman and is refused itself: kobold thief is set to never attack'
+      'wererat shaman — kobold thief protects wererat shaman and is refused itself: kobold thief is marked friend in the monster table'
     );
   });
 
@@ -3691,7 +3678,7 @@ describe('a monster that protects another', () => {
 
   it('does not hit back through a guard set to never attack', () => {
     const auto = make(
-      combat({ engage: 'none', mobRules: [{ mob: 'kobold thief', treat: 'never' }] })
+      combat({ engage: 'none', monsters: [{ mob: 'kobold thief', relationship: 'friend' }] })
     );
     auto.onCharacter(
       state({
@@ -3713,7 +3700,7 @@ describe('a monster that protects another', () => {
         rows(fighter('orc captain', 200, [bite(8, 16)]), [725], [727]),
         rows(fighter('orc lieutenant', 150, [bite(6, 12)]), [727])
       ],
-      combat({ mobRules: [{ mob: 'orc lieutenant', treat: 'never' }] })
+      combat({ monsters: [{ mob: 'orc lieutenant', relationship: 'friend' }] })
     );
     expect(sent).toEqual([]);
   });

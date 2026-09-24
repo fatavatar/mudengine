@@ -538,6 +538,8 @@ notices:
       many: '"automation.combat.mobRules" was written into {count} files ({fileList}), empty: one
         row per monster, saying whether to leave it alone and where it comes in the attack order.
         Nothing changes until you name one.'
+    mobRulesBecameMonsterRows: 'The monster rules and the monster rows are one list now, Monster
+      Details: a Never Attack rule is a Friend, and a band is the row''s priority. Moved in {fileList}.'
     mobRulesFolded:
       one: '"automation.combat.avoid" and "combat.mobPriority" became one "combat.mobRules" list in
         {fileList}. An avoided monster is now a row set to never attack; every ranked monster kept
@@ -3218,31 +3220,14 @@ settings:
     attackVerbLabel: Attack Command
     attackVerbPlaceholder: a
     attackWithPlaceholder: a
-    mobRuleAdd: Add a monster
-    mobRuleDefault: Default — follow the game logic
-    mobRuleDuplicate: Already listed above. A monster is treated one way; this row does nothing.
-    mobRuleFirst: First — always attack this first
-    mobRuleHigh: High — before everything below
-    mobRuleLast: Last — after everything else
-    mobRuleLegend: Monster Rules
-    mobRuleLow: Low — after the game logic
-    mobRuleNameAria: 'Monster for rule {number}'
-    mobRuleNamePlaceholder: Monster name
-    mobRuleNever: Never Attack — leave it alone
-    mobRuleNote:
-      One row per monster you care about. Never Attack is refused before anything else; the
-      other five are the order the rest are attacked in, and where one of these is in the room
-      the band decides outright and the usual weighing is skipped. Anything unlisted counts as
-      Default.
-    mobRuleRemoveAria: 'Remove rule {number}'
-    mobRuleRemoveTitle: Remove this monster
-    mobRuleTreatAria: 'How monster {number} is treated'
     monsterRowsLegend: Monster Details
     monsterRowsNone: No monster rows of this character's own. The realm's table applies as it is.
     monsterRowsNote:
       What this character does differently about particular monsters, laid over the realm's
-      monster table one field at a time — a spell to fight one with, a band, a relationship. A
-      field left blank keeps what the realm says.
+      monster table one field at a time — a relationship, a band, a spell to fight one with. A
+      Friend is never attacked, even when it swings first; where a monster with a band is in the
+      room the band decides outright and the usual weighing is skipped. A field left blank keeps
+      what the realm says.
     maxMonsterExpHint: Will not attack anything worth more experience than this. 0 is off,
       unknown monsters will be attacked.
     maxMonsterExpLabel: Max Monster Experience
@@ -3316,6 +3301,11 @@ settings:
     undoTitle: Undo the last change
   global:
     combat:
+      monsterRowsNone: No monster rows here. Each realm's table and each character's own rows apply.
+      monsterRowsNote:
+        Rows every character follows, laid over each realm's imported monster table and under the
+        character's own rows, one field at a time. A Friend is never attacked, even when it swings
+        first; a band puts a monster first or last.
       advancedPacing: looking around and how fast to send
       pacingMinGapLabel: Least Gap, ms
       pacingNote:
@@ -3981,10 +3971,6 @@ settings:
     loopsNote:
       Every character that plays here can walk these, without being told to. A character may
       add loops of its own on its own page.
-    mobRuleNote:
-      Every character that plays here follows these, under any row of its own. A monster set to
-      Never Attack is left alone; where one of the others is in the room the band decides
-      outright and the usual weighing is skipped.
     nameHint: What your characters call this realm. Renaming it moves every character that plays here.
     nameLabel: Name
     namePlaceholder: Paradigm Game 1 PVE
@@ -4760,7 +4746,6 @@ automation:
     # between `*Combat Off*` and `*Combat Engaged*` is where it used to happen.
     refusedEngagedWith: 'already swinging at {target}, which is still here'
     refusedRelationship: '{target} is marked {relationship} in the monster table'
-    refusedNever: '{target} is set to never attack'
     # The realm lists {guard} as moving to protect {target}, and the server
     # hands a blow at {target} to it; {why} is the guard's own refusal.
     refusedGuarded: '{guard} protects {target} and is refused itself: {why}'

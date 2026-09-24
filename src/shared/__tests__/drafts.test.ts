@@ -57,7 +57,6 @@ describe('a saved server', () => {
       loops: [],
       database: '',
       // Absent above: a realm rules nothing until somebody playing it says so.
-      mobRules: [],
       hangPenalties: null
     });
   });
@@ -494,7 +493,7 @@ describe('a character', () => {
           retaliate: false,
           maxMobs: 3,
           refreshRounds: 3,
-          mobRules: [{ mob: 'town guard', treat: 'never' }],
+          monsters: [{ mob: 'town guard', relationship: 'friend' }],
           politeAttacks: true
         }
       });
@@ -508,8 +507,7 @@ describe('a character', () => {
         minMobs: 0,
         maxMonsterExperience: 0,
         // Stated above, keyed the way the wire spells it.
-        mobRules: [{ mob: 'town guard', treat: 'never' }],
-        monsters: [],
+        monsters: [{ mob: 'town guard', relationship: 'friend' }],
         engage: 'all',
         retaliate: false,
         // Absent above, and off: it spends a command per fight.
@@ -546,15 +544,15 @@ describe('a character', () => {
       const draft = asProfileDraft({
         ...good,
         combat: {
-          mobRules: [
-            { mob: 'giant rat', treat: 'never' },
-            { mob: 'town guard', treat: 'never' }
+          monsters: [
+            { mob: 'giant rat', relationship: 'friend' },
+            { mob: 'town guard', relationship: 'friend' }
           ]
         }
       });
-      expect(draft?.combat.mobRules).toEqual([
-        { mob: 'giant rat', treat: 'never' },
-        { mob: 'town guard', treat: 'never' }
+      expect(draft?.combat.monsters).toEqual([
+        { mob: 'giant rat', relationship: 'friend' },
+        { mob: 'town guard', relationship: 'friend' }
       ]);
     });
 
@@ -591,11 +589,11 @@ describe('a character', () => {
     it('clamps rather than refusing the whole save', () => {
       const draft = asProfileDraft({
         ...good,
-        combat: { maxMobs: 999, mobRules: 'town guard' }
+        combat: { maxMobs: 999, monsters: 'town guard' }
       });
       expect(draft?.combat.maxMobs).toBe(20);
       // Not a list at all: nothing rather than a guess at what was meant.
-      expect(draft?.combat.mobRules).toEqual([]);
+      expect(draft?.combat.monsters).toEqual([]);
     });
   });
 });

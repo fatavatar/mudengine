@@ -24,7 +24,7 @@ import type { Home } from '../app/home';
 import { t } from '../app/i18n';
 import {
   ownHangPenalties,
-  ownMobRules,
+  ownMonsterRules,
   PROFILE_ACCENTS,
   resolveProfile,
   type ProfileAccent
@@ -765,20 +765,6 @@ export class SettingsEditor {
         if (draft.database.length > 0) document.setIn(['database'], draft.database);
         else if (document.hasIn(['database'])) document.deleteIn(['database']);
 
-        /*
-         * And the realm's own rules for its monsters, on the same rule: an
-         * empty list is what a realm with no key already has, so the key is
-         * removed rather than written as `[]`.
-         */
-        if (draft.mobRules.length > 0) {
-          document.setIn(
-            ['mobRules'],
-            draft.mobRules.map((row) => ({ mob: row.mob, treat: row.treat }))
-          );
-        } else if (document.hasIn(['mobRules'])) {
-          document.deleteIn(['mobRules']);
-        }
-
         // And whether a hang-up here is charged: absent leaves it to the
         // options file, so null removes the key rather than writing one.
         if (draft.hangPenalties !== null) document.setIn(['hangPenalties'], draft.hangPenalties);
@@ -1210,7 +1196,7 @@ export class SettingsEditor {
          * stale the first time the first one changes, which is the rule the
          * options template already keeps: defaults live in exactly one place.
          */
-        // The character's own answer about penalties, read raw as `mobRules`
+        // The character's own answer about penalties, read raw as `monsters`
         // is below: the resolved one may be the realm's or the options file's.
         hangUp: {
           ...(effective?.automation.safety.hangUp ?? DEFAULT_CONFIG.automation.safety.hangUp),
@@ -1223,20 +1209,20 @@ export class SettingsEditor {
           effective?.automation.safety.fleeGoto ?? DEFAULT_CONFIG.automation.safety.fleeGoto,
         pvp: effective?.automation.safety.pvp ?? DEFAULT_CONFIG.automation.safety.pvp,
         /*
-         * The resolved combat block, except for the monster list, which is
-         * the character's **own** rows from the file as written (todo 01).
+         * The resolved combat block, except for the monster rows, which are
+         * the character's **own** from the file as written (todo 01).
          *
-         * `mobRules` is the one list here merged across the three scopes
-         * rather than replaced, so the resolved one holds the realm's rows and
-         * the global file's as well. Seeding the form with those and saving it
-         * back would write them into this character's own file — pinning down
-         * rules it was only inheriting, so that changing the realm's list
-         * afterwards would silently not reach it. The same distinction
-         * `login.steps` above keeps, for the same reason.
+         * `monsters` is the one list here merged across scopes rather than
+         * replaced, so the resolved one holds the options file's rows as well.
+         * Seeding the form with those and saving it back would write them into
+         * this character's own file — pinning down rows it was only
+         * inheriting, so that changing the global ones afterwards would
+         * silently not reach it. The same distinction `login.steps` above
+         * keeps, for the same reason.
          */
         combat: {
           ...(effective?.automation.combat ?? DEFAULT_CONFIG.automation.combat),
-          mobRules: ownMobRules(record)
+          monsters: ownMonsterRules(record)
         },
         party: effective?.automation.party ?? DEFAULT_CONFIG.automation.party,
         health: effective?.automation.health ?? DEFAULT_CONFIG.automation.health,

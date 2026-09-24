@@ -240,20 +240,6 @@ export interface Server {
    */
   database: string;
   /**
-   * The realm's own rules for its monsters, merged under every character's.
-   *
-   * **On the realm, because a monster is.** A rule names a monster by the name
-   * this realm's data spells it, so a list written for one realm means nothing
-   * on another — and every character playing here wants the same answer to
-   * *which of these do I leave alone, and which first*. Stating it per
-   * character would be the same list written out once per character, which is
-   * what `login` and `database` above are on the realm to avoid.
-   *
-   * Merged rather than replaced: see `mergeMobRules`. A character's own row
-   * for a monster wins, and a monster only the realm names still counts.
-   */
-  mobRules: MobRule[];
-  /**
    * Whether a hang-up here is charged, for every character playing here that
    * does not say for itself; null leaves it to the options file. See
    * `HangUpConfig.penalties`.
@@ -921,43 +907,28 @@ export interface CombatConfig {
    */
   refreshRounds: number;
   /**
-   * How named monsters are treated, one row each — MegaMUD's *Attack Priority
-   * List* and its *avoid* list, as one list rather than two.
-   *
-   * **This replaces the weighing rather than ranking against it.** Where the
-   * room holds a listed monster, the band decides and `src/shared/menace.ts`
-   * is not consulted: somebody who writes *shamans first* means first, not
-   * first unless the arithmetic disagrees, and a ranking that the realm's own
-   * numbers could overturn is one nobody can predict from reading it. Within
-   * one band the room's own listing order decides, which is the order that
-   * was there before any weighing existed.
-   *
-   * A monster no row names is in `default`, so the list is somewhere to add
-   * the one monster that matters and never a ranking of the whole realm.
-   * Every refusal — `never`, the evil-point cost, the health and experience
-   * caps, the disposition gate — still applies **first**: a band says which of
-   * the monsters worth attacking to attack, never that one is worth attacking.
-   *
-   * **`never` is the one treatment that is not a band.** It is the refusal the
-   * flat `avoid` list used to be, moved onto the row so that leaving a monster
-   * alone and saying where it comes in the order are one question asked once,
-   * in one place, about one monster — and so that it inherits the same
-   * narrowest-wins merge the bands do, which a replaced-wholesale list could
-   * not give it.
-   *
-   * Merged across the three scopes by monster, narrowest winning, unlike
-   * every other list here — see `mergeMobRules`.
-   */
-  mobRules: MobRule[];
-  /**
    * What this character says about particular monsters — MegaMUD's *Monster
    * Details*: relationship, band, rest and backstab flags, and a spell to
    * fight each with (`MonsterRule`).
    *
-   * Laid **field by field** over the realm's imported table
-   * (`servers/<id>/monsters.yaml`) when a session is configured, so a row here
-   * need state only what this character does differently — a shaman's attack
-   * spell for a monster the realm marks Flee keeps the Flee.
+   * **The one list about named monsters** (2026-09-24). Upstream's
+   * `mobRules` — `never` and five bands — said two of these fields, in a
+   * second panel beside this one: `never` is a Friend (never attacked, even
+   * when it swings first) and a band is `priority`. Folded in by
+   * `theMobRulesBecameMonsterRows`.
+   *
+   * **A band replaces the weighing rather than ranking against it.** Where the
+   * room holds a monster with a priority, the band decides and
+   * `src/shared/menace.ts` is not consulted: somebody who writes *shamans
+   * first* means first. Every refusal still applies first — a band says
+   * which of the monsters worth attacking to attack, never that one is.
+   *
+   * Laid **field by field**: the realm's imported table
+   * (`servers/<id>/monsters.yaml`) under the options file's rows, and those
+   * under the character's own (`withGlobalMonsters`, `withRealmMonsters`) —
+   * so a row need state only what it does differently, and a shaman's
+   * attack spell for a monster the realm marks Flee keeps the Flee. The
+   * player's own words, either file, outrank a table imported from MegaMUD.
    */
   monsters: MonsterRule[];
   /**
@@ -2751,7 +2722,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       politeAttacks: false,
       maxMobs: 0,
       refreshRounds: 3,
-      mobRules: [],
       monsters: [],
       maxTargetHealth: 0,
       minMobs: 0,
@@ -3449,7 +3419,6 @@ function normalizeServer(value: unknown): Server | null {
      * reported.
      */
     database: str(value['database'], ''),
-    mobRules: normalizeMobRules(value['mobRules']),
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null
   };
 }
@@ -4307,7 +4276,6 @@ function normalizeCombat(value: unknown): CombatConfig {
     // Capped low on purpose: every round is a fraction of a second, so a client
     // asked to look every round would spend most of a fight looking.
     refreshRounds: int(raw['refreshRounds'], d.refreshRounds, 0, 20),
-    mobRules: normalizeMobRules(raw['mobRules']),
     monsters: asMonsterRules(raw['monsters']),
     minMobs: int(raw['minMobs'], d.minMobs, 0, 99),
     maxMonsterExperience: int(raw['maxMonsterExperience'], d.maxMonsterExperience, 0, 100_000_000),
@@ -4333,10 +4301,8 @@ function normalizeCombat(value: unknown): CombatConfig {
  * case that argues hardest for dropping it: defaulted, it would read as *leave
  * this alone* and attack it.
  *
- * The **first** row for a monster wins: these rows are merged across three
- * scopes by `mergeMobRules` before they get here, so by this point the
- * narrowest scope's row is already in front and anything behind it is the
- * broader scope it overrode.
+ * The **first** row for a monster wins. Read now only by the migration that
+ * folds these rows into `monsters` (`theMobRulesBecameMonsterRows`).
  */
 export function normalizeMobRules(value: unknown): MobRule[] {
   const rows: MobRule[] = [];
@@ -4351,41 +4317,6 @@ export function normalizeMobRules(value: unknown): MobRule[] {
     seen.add(mob);
     rows.push({ mob, treat });
     if (rows.length >= 64) break;
-  }
-  return rows;
-}
-
-/**
- * One monster list from several scopes, with the narrower winning per monster.
- *
- * The one list in `automation:` that is merged rather than replaced, and the
- * exception is deliberate. `overlay` replaces an array wholesale because a
- * character that restates `automation.rules` means *those* rules — but a
- * monster list is addressed by monster, exactly as loops are addressed by
- * name, so the same argument that made `mergeLoops` additive applies: a
- * character that wants the realm's ranking plus one row of its own should not
- * have to restate the realm's, and would have no way to keep the copy in step.
- *
- * Removing a broader scope's row is therefore done by **overriding** it —
- * naming the monster again at `default`, which is what "follow the game logic"
- * already means — rather than by deleting it, which is the trade `mergeNamed`
- * makes everywhere else it is used.
- *
- * Lists are given broadest first; the first row for a monster wins, so callers
- * pass global, then realm, then character.
- */
-export function mergeMobRules(...lists: readonly (readonly MobRule[])[]): MobRule[] {
-  const rows: MobRule[] = [];
-  const seen = new Set<string>();
-  // Reversed: the narrowest scope is stated last and has to arrive first, so
-  // that `normalizeMobRules`' first-wins rule keeps it.
-  for (const list of [...lists].reverse()) {
-    for (const row of list) {
-      const mob = mobKey(row.mob);
-      if (mob.length === 0 || seen.has(mob)) continue;
-      seen.add(mob);
-      rows.push({ mob, treat: row.treat });
-    }
   }
   return rows;
 }

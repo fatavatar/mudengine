@@ -358,7 +358,6 @@ describe('servers, one directory each', () => {
     locate: 'rm',
     loops: [],
     database: '',
-    mobRules: [],
     hangPenalties: null,
     ...draft
   });
@@ -479,7 +478,6 @@ describe('servers, one directory each', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      mobRules: [],
       hangPenalties: null
     });
     expect(servers()).toEqual([
@@ -554,7 +552,6 @@ describe('credentials in the messages', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      mobRules: [],
       hangPenalties: null
     });
     for (const file of fs.readdirSync(dir)) {
@@ -964,7 +961,6 @@ describe('the loops a character owns', () => {
       locate: 'rm',
       loops: [arena],
       database: '',
-      mobRules: [],
       hangPenalties: null
     });
     editor.saveProfile('vaelor', draft());
@@ -1046,7 +1042,6 @@ describe('filing one loop from the Loops modal', () => {
       locate: 'rm',
       loops: [],
       database: '',
-      mobRules: [],
       hangPenalties: null
     });
     expect(editor.addLoop('server', 'GreaterMUD (local)', sewers)).toEqual({ ok: true });
@@ -1171,28 +1166,28 @@ connection:
    * assertion alone.
    */
   /*
-   * The monster list is the one `automation:` list merged across scopes
+   * The monster rows are the one `automation:` list merged across scopes
    * rather than replaced, so the resolved one holds the global file's rows as
-   * well as the realm's. Seeding the form with those and saving it back would
-   * write them into this character's own file -- pinning down rules it was
-   * only inheriting, so a later change to the global list would silently not
-   * reach it (todo 01).
+   * well. Seeding the form with those and saving it back would write them
+   * into this character's own file -- pinning down rows it was only
+   * inheriting, so a later change to the global rows would silently not reach
+   * it (todo 01).
    */
-  it('shows a character only its own monster rules, not the ones it inherits', () => {
+  it('shows a character only its own monster rows, not the ones it inherits', () => {
     const wide = global();
-    wide.automation.combat.mobRules = [{ mob: 'red dragon', treat: 'low' }];
+    wide.automation.combat.monsters = [{ mob: 'red dragon', priority: 'low' }];
     expect(editor.saveGlobal(wide)).toEqual({ ok: true });
     expect(editor.saveProfile('thorn', draft())).toEqual({ ok: true });
 
     const thorn = editor.snapshot().characters.find((entry) => entry.id === 'thorn');
     // Its own file states none, so its form shows none -- and a save cannot
     // write the global row into it.
-    expect(thorn?.combat.mobRules).toEqual([]);
+    expect(thorn?.combat.monsters).toEqual([]);
     expect(
       (
         parse(fs.readFileSync(home.profile('thorn').file, 'utf8'))['automation'] as
           Record<string, Record<string, unknown>> | undefined
-      )?.['combat']?.['mobRules']
+      )?.['combat']?.['monsters']
     ).toEqual([]);
   });
 

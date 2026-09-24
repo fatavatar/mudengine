@@ -45,7 +45,12 @@ import { credentialsNamed } from '../../shared/login';
 import { asLoops, loopCategory, type Loop } from '../../shared/loops';
 import { t } from '../app/i18n';
 import { ACTIONABLE_REMOTES } from '../../shared/remotes';
-import { DEFAULT_CONFIG, normalizeBands } from '../../shared/config';
+import {
+  DEFAULT_CONFIG,
+  normalizeBands,
+  normalizeMobRules,
+  type MobRule
+} from '../../shared/config';
 import {
   DEFAULT_ALERT_DEBOUNCE_SECONDS,
   NOTICE_CHANNELS,
@@ -56,6 +61,7 @@ import { DEFAULT_INTERNAL } from '../../shared/internal';
 import { DENOMINATIONS } from '../../shared/character';
 import { SERVER_FILE, type Home } from '../app/home';
 import { directoryNames } from './dirs';
+import { MONSTERS_FILE, MONSTERS_HEADER } from './RealmMonsterStore';
 import { discoveryKey, type Discovery } from '../../shared/memory';
 import { realmKey } from '../world/RealmLore';
 import type { ShippedWorld } from '../../shared/worlds';
@@ -252,6 +258,12 @@ function migrateAll(options: MigrationOptions): void {
   statedTheFreedomCure(home, note);
   statedTheRegions(home, note);
   statedTheMonsterRows(home, note);
+  /*
+   * **After `statedTheMonsterRows`**, which writes `monsters: []` beside the
+   * `mobRules` this takes away, so the rows land in the list the paragraph
+   * already explains.
+   */
+  theMobRulesBecameMonsterRows(home, note);
   statedTheMeditateTarget(home, note, options.template);
   statedTheFleeGoto(home, note, options.template);
 }
@@ -1476,7 +1488,10 @@ function statedTheMobRules(home: Home, note: (message: string) => void): void {
   for (const file of files) {
     edit(file, (document) => {
       const combat = document.getIn(['automation', 'combat'], true);
-      if (!isMap(combat) || combat.has('mobRules')) return false;
+      // Nor where the monster rows are stated: the two lists became one
+      // (`theMobRulesBecameMonsterRows`), and an empty `mobRules` written back
+      // would be taken away again on every start.
+      if (!isMap(combat) || combat.has('mobRules') || combat.has('monsters')) return false;
 
       const pair = document.createPair('mobRules', []) as Pair;
       if (isScalar(pair.key)) pair.key.commentBefore = MOB_RULES_COMMENT;
@@ -6103,6 +6118,109 @@ function statedTheFleeGoto(
       ? t('notices.migration.fleeGotoStated.one', params)
       : t('notices.migration.fleeGotoStated.many', params)
   );
+}
+
+/**
+ * `mobRules` became monster rows (2026-09-24): the two lists about named
+ * monsters were one question asked in two panels.
+ *
+ * Upstream's `mobRules` said two things about a monster — `never`, and one of
+ * five bands — and this fork's `monsters` rows (MegaMUD's *Monster Details*)
+ * say both and more: `never` is a Friend, never attacked even when it swings
+ * first, and a band is `priority`. So every row moves, at the scope it was
+ * written at: the options file's and each character's into
+ * `automation.combat.monsters`, and a realm's `server.yaml` list into its
+ * imported table, `servers/<id>/monsters.yaml`, created if the realm had
+ * none.
+ *
+ * **The rule wins where the two rows disagree**, as it did while both were
+ * read: a band beat a monster row's priority (`AutoCombat.bandOf`), and a
+ * `never` left the monster alone whatever its relationship. Except a Flee or
+ * a Hang up, which stay: those already keep the character out of the fight,
+ * and turning one into a Friend would throw away the running or the
+ * disconnect. Idempotent: the key is gone once it has moved.
+ */
+function theMobRulesBecameMonsterRows(home: Home, note: (message: string) => void): void {
+  const moved: string[] = [];
+
+  /** A monster row with a rule laid over it, as plain data for the file. */
+  const laid = (row: Record<string, unknown>, rule: MobRule): Record<string, unknown> => {
+    if (rule.treat !== 'never') return { ...row, priority: rule.treat };
+    const kept = row['relationship'] === 'escape' || row['relationship'] === 'hangup';
+    return kept ? row : { ...row, relationship: 'friend' };
+  };
+  /** Rules folded into a list of rows, a rule's monster keeping its place. */
+  const fold = (rows: unknown, rules: MobRule[]): Array<Record<string, unknown>> => {
+    const out = (Array.isArray(rows) ? rows : [])
+      .filter((row): row is Record<string, unknown> => isRecord(row))
+      .map((row) => ({ ...row }));
+    for (const rule of rules) {
+      const at = out.findIndex((row) => row['mob'] === rule.mob);
+      if (at === -1) out.push(laid({ mob: rule.mob }, rule));
+      else out[at] = laid(out[at]!, rule);
+    }
+    return out;
+  };
+
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  for (const file of files) {
+    edit(file, (document) => {
+      const combat = document.getIn(['automation', 'combat'], true);
+      if (!isMap(combat) || !combat.has('mobRules')) return false;
+      const listed = combat.get('mobRules', true);
+      const rules = normalizeMobRules(isSeq(listed) ? listed.toJSON() : []);
+      const current = combat.get('monsters', true);
+      const rows = fold(isSeq(current) ? current.toJSON() : [], rules);
+      combat.delete('mobRules');
+      // An empty list moves nothing: the rows somebody wrote keep their layout.
+      if (rules.length === 0) {
+        moved.push(file);
+        return true;
+      }
+      if (isSeq(current)) {
+        current.items = (document.createNode(rows) as YAMLSeq).items;
+      } else if (rows.length > 0) {
+        combat.set('monsters', document.createNode(rows));
+      }
+      moved.push(file);
+      return true;
+    });
+  }
+
+  for (const id of directories(home.serversDir)) {
+    const file = home.server(id).file;
+    let rules: MobRule[] = [];
+    edit(file, (document) => {
+      if (!document.has('mobRules')) return false;
+      const listed = document.get('mobRules', true);
+      rules = normalizeMobRules(isSeq(listed) ? listed.toJSON() : []);
+      document.delete('mobRules');
+      return true;
+    });
+    if (rules.length === 0) continue;
+    const table = path.join(home.server(id).dir, MONSTERS_FILE);
+    if (fs.existsSync(table)) {
+      edit(table, (document) => {
+        const current = document.get('monsters', true);
+        const rows = fold(isSeq(current) ? current.toJSON() : [], rules);
+        document.set('monsters', document.createNode(rows));
+        return true;
+      });
+    } else {
+      const document = new Document({ source: null, monsters: fold([], rules) });
+      document.commentBefore = MONSTERS_HEADER;
+      try {
+        fs.writeFileSync(table, String(document), 'utf8');
+      } catch {
+        // Read by the store that opens it next, which reports a missing file
+        // as an empty table; the rules are still in `server.yaml.bak`.
+      }
+    }
+    moved.push(table);
+  }
+
+  if (moved.length === 0) return;
+  note(t('notices.migration.mobRulesBecameMonsterRows', { fileList: moved.join(', ') }));
 }
 
 function statedTheConfusionWait(home: Home, note: (message: string) => void): void {
