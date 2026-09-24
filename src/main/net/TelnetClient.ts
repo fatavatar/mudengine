@@ -16,6 +16,7 @@ import {
   DEFAULT_QUIRKS,
   type QuirkOptions
 } from './stream-quirks';
+import { answerQueries } from './terminal-queries';
 import type {
   ConnectionTarget,
   NegotiatedOptions,
@@ -63,6 +64,8 @@ export class TelnetClient extends EventEmitter {
 
   /** Trailing fragment of an incomplete escape sequence, carried between chunks. */
   private escapeCarry = '';
+  /** The cursor's column in what the server has sent, for the answer to `ESC[6n`. */
+  private column = 0;
   private size: TerminalSize = { ...FALLBACK_SIZE };
   /** Last geometry actually put on the wire, so repeats are not resent. */
   private reported: TerminalSize | null = null;
@@ -113,6 +116,7 @@ export class TelnetClient extends EventEmitter {
 
     this.encoding = target.encoding;
     this.escapeCarry = '';
+    this.column = 0;
     this.reported = null;
     this.closingIntentionally = false;
     if (this.nawsTimer) {
@@ -324,10 +328,27 @@ export class TelnetClient extends EventEmitter {
       const { emit, hold } = splitTrailingEscape(combined);
       this.escapeCarry = hold;
 
-      if (emit.length > 0) this.emit('data', applyQuirks(emit, this.quirks));
+      if (emit.length > 0) {
+        this.answer(emit);
+        this.emit('data', applyQuirks(emit, this.quirks));
+      }
     }
 
     for (let i = 0; i < result.promptMarks.length; i += 1) this.emit('prompt');
+  }
+
+  /** Answers what the server asked the terminal; see `terminal-queries`. */
+  private answer(text: string): void {
+    const { replies, column } = answerQueries(text, this.column, this.size.rows);
+    this.column = column;
+    for (const reply of replies) {
+      this.send(reply);
+      this.emit('telnet', {
+        at: Date.now(),
+        direction: 'out',
+        summary: `answered ${JSON.stringify(reply).slice(1, -1)}`
+      });
+    }
   }
 
   private teardown(): void {

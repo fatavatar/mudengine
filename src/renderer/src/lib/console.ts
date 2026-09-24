@@ -9,10 +9,13 @@
  * them on its own schedule, so **who writes next** is a decision as delicate
  * as where a notice breaks its line.
  *
- * Both are here rather than inline in `TerminalView` for the reason
+ * And what a console never sends back: an answer to the server's questions.
+ *
+ * They are here rather than inline in `TerminalView` for the reason
  * `clipboardIntent` is its own function: a decision buried in a callback that
  * needs a canvas to observe is a decision nothing can test.
  */
+import type { IDisposable, IFunctionIdentifier, Terminal } from '@xterm/xterm';
 
 /** The gutter bar and the ink, in one place so a notice cannot be drawn twice. */
 const CYAN = '\x1b[36m';
@@ -139,4 +142,48 @@ export function consoleWriter(term: ConsoleTarget): ConsoleWriter {
         });
       })
   };
+}
+
+/**
+ * The questions a terminal answers by typing: where the cursor is (`CSI 6n`),
+ * what kind of terminal it is (`CSI c`, `CSI > c`), a status, a mode, a
+ * setting, a colour.
+ */
+const QUERIES: {
+  csi: IFunctionIdentifier[];
+  dcs: IFunctionIdentifier[];
+  osc: number[];
+} = {
+  csi: [
+    { final: 'c' },
+    { prefix: '>', final: 'c' },
+    { final: 'n' },
+    { prefix: '?', final: 'n' },
+    { intermediates: '$', final: 'p' },
+    { prefix: '?', intermediates: '$', final: 'p' }
+  ],
+  dcs: [{ intermediates: '$', final: 'q' }],
+  osc: [4, 10, 11, 12]
+};
+
+/**
+ * A console never answers the server's questions (2026-09-24).
+ *
+ * xterm answers them through `onData`, the path typing takes, so the answer
+ * went to the game as if typed. The BBS asks `ESC[6n` at every login, the
+ * backscroll keeps the question, and every page that opened replayed it and
+ * answered again: skinny said `[72;5R` eight times. A console is one of any
+ * number of views of a session main owns, so an answer from a view is one per
+ * open page live and none with the page closed; the login does without.
+ *
+ * Only an OSC colour *query* is declined; the same OSC setting a colour is
+ * left to xterm.
+ */
+export function declineQueries(term: Pick<Terminal, 'parser'>): IDisposable {
+  const held = [
+    ...QUERIES.csi.map((id) => term.parser.registerCsiHandler(id, () => true)),
+    ...QUERIES.dcs.map((id) => term.parser.registerDcsHandler(id, () => true)),
+    ...QUERIES.osc.map((id) => term.parser.registerOscHandler(id, (data) => data.includes('?')))
+  ];
+  return { dispose: () => held.forEach((one) => one.dispose()) };
 }
