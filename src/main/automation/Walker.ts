@@ -73,7 +73,7 @@ import {
 } from '../../shared/world';
 import type { Block } from '../../shared/blocks';
 import { REREAD_ROOM } from '../../shared/commands';
-import { isBlinding, type CharacterState } from '../../shared/character';
+import { isBlinding, type CharacterState, type PartyMember } from '../../shared/character';
 import { manaHolding, resumeAtHealth, type AutomationConfig } from '../../shared/config';
 import { splitSpells } from '../../shared/spell-messages';
 import { t } from '../app/i18n';
@@ -3599,6 +3599,8 @@ export class Walker {
     if (this.holdForHealth(state)) return true;
     // Mana, on the same terms — see `holdForMana`.
     if (this.holdForMana(state)) return true;
+    // A member of the party this character leads, on the same terms — see `holdForParty`.
+    if (this.holdForParty(state)) return true;
     // Then a condition the server has stated, on the same terms.
     if (this.holdForAffliction(state)) return true;
     // Then the trap the step ahead fires, on the same terms again.
@@ -4280,6 +4282,68 @@ export class Walker {
      * health arrives on every status line anyway, so the answer is never more
      * than one tick stale.
      */
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  /** When the party hold began, and whether `waitNoLongerMinutes` has spent it. */
+  private partyHoldSince: number | null = null;
+  private partyHoldSpent = false;
+
+  /**
+   * MegaMUD's *Wait For Party Members*: leading, the walk stands still while
+   * any member's health on the party listing is under
+   * `party.waitForMembersBelow`, whether or not they sent `@wait`. On the
+   * health hold's own terms — outside `walk.maxHolds`, re-asked on the beat's
+   * timer — and bounded by `party.waitNoLongerMinutes` instead, after which
+   * the walk goes on until every member is back above the line and the hold
+   * can be earned again. Only for a walk that holds for health at all.
+   */
+  private holdForParty(state: CharacterState): boolean {
+    const low = this.holdWhenHurt
+      ? lowestMember(state, this.config.party.waitForMembersBelow)
+      : null;
+    if (low === null) {
+      this.partyHoldSince = null;
+      this.partyHoldSpent = false;
+      if (this.hold === 'party') {
+        this.hold = null;
+        if (!this.quiet) this.events.notice?.(t('automation.walk.partyResumed'));
+        this.publish();
+      }
+      return false;
+    }
+    if (this.partyHoldSpent) return false;
+    const now = Date.now();
+    this.partyHoldSince ??= now;
+    const minutes = this.config.party.waitNoLongerMinutes;
+    if (minutes > 0 && now - this.partyHoldSince >= minutes * 60_000) {
+      this.partyHoldSpent = true;
+      this.events.notice?.(t('automation.remotes.waitedLongEnough', { minutes, who: low.name }));
+      if (this.hold === 'party') {
+        this.hold = null;
+        this.publish();
+      }
+      return false;
+    }
+    if (this.hold === null) {
+      this.hold = 'party';
+      if (!this.quiet) {
+        this.events.notice?.(
+          t('automation.walk.partyHolding', {
+            name: low.name,
+            percent: Math.round((low.health ?? 0) * 100)
+          })
+        );
+      }
+      this.publish();
+    }
     this.holdTimer = setTimeout(() => {
       this.holdTimer = null;
       if (this.status !== 'walking') return;
@@ -5159,4 +5223,23 @@ function locate(state: CharacterState): string | null {
   const { map, number } = state.room;
   if (map === null || number === null) return null;
   return roomId(map, number);
+}
+
+/**
+ * The member of the party this character leads whose health on the listing is
+ * lowest and under `below`, or null — leading, a real member (not an
+ * invitation, not this character), and a figure the listing stated. Following,
+ * null: the leader decides when the party moves.
+ */
+export function lowestMember(state: CharacterState, below: number): PartyMember | null {
+  if (below <= 0 || state.party.following !== null) return null;
+  const me = state.name?.toLowerCase() ?? null;
+  let lowest: PartyMember | null = null;
+  for (const member of state.party.members) {
+    if (member.invited || member.health === null) continue;
+    if (me !== null && member.name.toLowerCase() === me) continue;
+    if (member.health >= below) continue;
+    if (lowest === null || member.health < (lowest.health ?? 1)) lowest = member;
+  }
+  return lowest;
 }

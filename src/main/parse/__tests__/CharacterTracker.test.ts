@@ -2786,6 +2786,43 @@ describe('the party this character travels with', () => {
     expect(tracker.current.party.following).toBe('Vaelor');
   });
 
+  /*
+   * Skinny Inc prints the join with no full stop (2026-09-24), and read as
+   * nothing the follower knew nothing of its leader until a listing.
+   */
+  it('reads the join and the parting with or without their full stop', () => {
+    const { tracker, feed } = feeder();
+    feed('[HP=24/MA=18]:');
+    feed('You are now following Fatty');
+    expect(tracker.current.party.following).toBe('Fatty');
+    feed('You are no longer following Fatty');
+    expect(tracker.current.party.following).toBeNull();
+    feed('You are now following Fatty.');
+    expect(tracker.current.party.following).toBe('Fatty');
+  });
+
+  /*
+   * skinny behind Fatty, 2026-09-24: the leader's `stops to rest` outlived
+   * the rest, and the follower sat down in every room it was walked into.
+   */
+  it('stands a member up when they walk out of the room', () => {
+    const tracker = roster();
+    const hear = (text: string): void => {
+      const { block } = new Classifier().classify({
+        seq: 9,
+        at: 9,
+        text,
+        plain: text,
+        terminator: 'newline'
+      });
+      tracker.apply(block);
+    };
+    hear('Soul stops to rest.');
+    expect(tracker.current.party.members[1]?.activity).toEqual({ state: 'resting' });
+    hear('Soul just left to the south.');
+    expect(tracker.current.party.members[1]?.activity).toBeNull();
+  });
+
   /* A party of one is not a party. The server still prints your own row. */
   it('reports no party when there is nobody else in it', () => {
     const { tracker, feed } = feeder();

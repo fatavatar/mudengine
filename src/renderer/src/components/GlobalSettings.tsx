@@ -179,6 +179,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   ],
   party: [
     { id: 'party-follow', label: t('settings.party.legend') },
+    { id: 'party-leading', label: t('settings.party.leadLegend') },
     { id: 'party-healing', label: t('settings.party.healLegend') },
     { id: 'party-remotes', label: t('settings.party.remotesLegend') }
   ],
@@ -1576,6 +1577,90 @@ export default function GlobalSettings({
                 name="global-party-rest"
                 onChange={(value) =>
                   automation({ party: { ...draft.automation.party, restWithLeader: value } })
+                }
+              />
+              <CheckField
+                checked={draft.automation.party.ignorePartyWhenFollowing}
+                hint={t('settings.party.ignorePartyHint')}
+                label={t('settings.party.ignorePartyLabel')}
+                name="global-party-ignore-party"
+                onChange={(value) =>
+                  automation({
+                    party: { ...draft.automation.party, ignorePartyWhenFollowing: value }
+                  })
+                }
+              />
+            </fieldset>
+            <fieldset className="settings-menus" data-fieldset="party-leading">
+              <legend>{t('settings.party.leadLegend')}</legend>
+              <p className="settings-note">{t('settings.party.leadNote')}</p>
+              <div className="settings-inline">
+                <NumberField
+                  hint={t('settings.party.waitBelowHint')}
+                  label={t('settings.party.waitBelowLabel')}
+                  name="global-party-wait-below"
+                  onChange={(value) =>
+                    automation({
+                      party: { ...draft.automation.party, waitForMembersBelow: fraction(value) }
+                    })
+                  }
+                  bar={barOfHealth(draft.automation.party.waitForMembersBelow)}
+                  value={percent(draft.automation.party.waitForMembersBelow)}
+                />
+                <NumberField
+                  hint={t('settings.party.waitMinutesHint')}
+                  label={t('settings.party.waitMinutesLabel')}
+                  name="global-party-wait-minutes"
+                  onChange={(value) =>
+                    automation({
+                      party: {
+                        ...draft.automation.party,
+                        waitNoLongerMinutes: Number.parseInt(value, 10) || 0
+                      }
+                    })
+                  }
+                  value={String(draft.automation.party.waitNoLongerMinutes)}
+                />
+                <NumberField
+                  hint={t('settings.party.parEveryHint')}
+                  label={t('settings.party.parEveryLabel')}
+                  name="global-party-par-every"
+                  onChange={(value) =>
+                    automation({
+                      party: {
+                        ...draft.automation.party,
+                        parEverySeconds: Number.parseInt(value, 10) || 0
+                      }
+                    })
+                  }
+                  value={String(draft.automation.party.parEverySeconds)}
+                />
+              </div>
+              <CheckField
+                checked={draft.automation.party.ignoreWaitWhenLeading}
+                hint={t('settings.party.ignoreWaitHint')}
+                label={t('settings.party.ignoreWaitLabel')}
+                name="global-party-ignore-wait"
+                onChange={(value) =>
+                  automation({ party: { ...draft.automation.party, ignoreWaitWhenLeading: value } })
+                }
+              />
+              <CheckField
+                checked={draft.automation.party.parAfterRound}
+                hint={t('settings.party.parAfterRoundHint')}
+                label={t('settings.party.parAfterRoundLabel')}
+                name="global-party-par-after-round"
+                onChange={(value) =>
+                  automation({ party: { ...draft.automation.party, parAfterRound: value } })
+                }
+              />
+              <CheckField
+                checked={draft.automation.party.requestPartyHealth}
+                hint={t('settings.party.requestHealthHint')}
+                label={t('settings.party.requestHealthLabel')}
+                name="global-party-request-health"
+                onChange={(value) =>
+                  automation({ party: { ...draft.automation.party, requestPartyHealth: value } })
                 }
               />
             </fieldset>

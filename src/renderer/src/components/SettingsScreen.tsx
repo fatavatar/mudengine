@@ -498,6 +498,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   ],
   party: [
     { id: 'party-follow', label: t('settings.party.legend') },
+    { id: 'party-leading', label: t('settings.party.leadLegend') },
     { id: 'party-healing', label: t('settings.party.healLegend') },
     { id: 'party-remotes', label: t('settings.party.remotesLegend') }
   ],
@@ -593,6 +594,14 @@ interface CharacterForm {
   partyRest: boolean;
   /** `party.askForHealBelow`, as a percentage string. */
   partyAskHeal: string;
+  /** `party.waitForMembersBelow`, as a percentage string. */
+  partyWaitBelow: string;
+  partyWaitMinutes: string;
+  partyIgnoreWait: boolean;
+  partyIgnoreParty: boolean;
+  partyRequestHealth: boolean;
+  partyParEvery: string;
+  partyParAfterRound: boolean;
   combatRefresh: string;
   /** This character's own monster rows (`combat.monsters`). */
   combatMonsters: MonsterRule[];
@@ -795,6 +804,13 @@ function formOf(entry: ProfileEditable): CharacterForm {
     partyDefend: entry.party.defendParty,
     partyRest: entry.party.restWithLeader,
     partyAskHeal: percent(entry.party.askForHealBelow),
+    partyWaitBelow: percent(entry.party.waitForMembersBelow),
+    partyWaitMinutes: String(entry.party.waitNoLongerMinutes),
+    partyIgnoreWait: entry.party.ignoreWaitWhenLeading,
+    partyIgnoreParty: entry.party.ignorePartyWhenFollowing,
+    partyRequestHealth: entry.party.requestPartyHealth,
+    partyParEvery: String(entry.party.parEverySeconds),
+    partyParAfterRound: entry.party.parAfterRound,
     // A percentage on screen and a fraction in the file, like every other
     // threshold here: one representation on disk, the one people think in on
     // the form.
@@ -1002,7 +1018,14 @@ function draftOf(form: CharacterForm): ProfileDraft {
       assistLeader: form.partyAssist,
       defendParty: form.partyDefend,
       restWithLeader: form.partyRest,
-      askForHealBelow: fractionOf(form.partyAskHeal)
+      askForHealBelow: fractionOf(form.partyAskHeal),
+      waitForMembersBelow: fractionOf(form.partyWaitBelow),
+      waitNoLongerMinutes: Number.parseInt(form.partyWaitMinutes, 10) || 0,
+      ignoreWaitWhenLeading: form.partyIgnoreWait,
+      ignorePartyWhenFollowing: form.partyIgnoreParty,
+      requestPartyHealth: form.partyRequestHealth,
+      parEverySeconds: Number.parseInt(form.partyParEvery, 10) || 0,
+      parAfterRound: form.partyParAfterRound
     },
     health: {
       restBelow: fractionOf(form.restBelow),
@@ -1337,6 +1360,13 @@ function emptyForm(
     partyDefend: party.defendParty,
     partyRest: party.restWithLeader,
     partyAskHeal: percent(party.askForHealBelow),
+    partyWaitBelow: percent(party.waitForMembersBelow),
+    partyWaitMinutes: String(party.waitNoLongerMinutes),
+    partyIgnoreWait: party.ignoreWaitWhenLeading,
+    partyIgnoreParty: party.ignorePartyWhenFollowing,
+    partyRequestHealth: party.requestPartyHealth,
+    partyParEvery: String(party.parEverySeconds),
+    partyParAfterRound: party.parAfterRound,
     combatRefresh: String(combat.refreshRounds),
     combatMonsters: combat.monsters.map((row) => ({ ...row })),
     combatMaxTargetHealth: String(combat.maxTargetHealth),
@@ -3542,6 +3572,63 @@ export default function SettingsScreen({
                           label={t('settings.party.restLabel')}
                           name="party-rest"
                           onChange={(value) => patch({ partyRest: value })}
+                        />
+                        <CheckField
+                          checked={form.partyIgnoreParty}
+                          hint={t('settings.party.ignorePartyHint')}
+                          label={t('settings.party.ignorePartyLabel')}
+                          name="party-ignore-party"
+                          onChange={(value) => patch({ partyIgnoreParty: value })}
+                        />
+                      </fieldset>
+                      <fieldset className="settings-menus" data-fieldset="party-leading">
+                        <legend>{t('settings.party.leadLegend')}</legend>
+                        <p className="settings-note">{t('settings.party.leadNote')}</p>
+                        <div className="settings-inline">
+                          <NumberField
+                            hint={t('settings.party.waitBelowHint')}
+                            label={t('settings.party.waitBelowLabel')}
+                            name="party-wait-below"
+                            onChange={(value) => patch({ partyWaitBelow: value })}
+                            bar={barOfHealth(form.partyWaitBelow)}
+                            figure={ofHealth(form.partyWaitBelow)}
+                            value={form.partyWaitBelow}
+                          />
+                          <NumberField
+                            hint={t('settings.party.waitMinutesHint')}
+                            label={t('settings.party.waitMinutesLabel')}
+                            name="party-wait-minutes"
+                            onChange={(value) => patch({ partyWaitMinutes: value })}
+                            value={form.partyWaitMinutes}
+                          />
+                          <NumberField
+                            hint={t('settings.party.parEveryHint')}
+                            label={t('settings.party.parEveryLabel')}
+                            name="party-par-every"
+                            onChange={(value) => patch({ partyParEvery: value })}
+                            value={form.partyParEvery}
+                          />
+                        </div>
+                        <CheckField
+                          checked={form.partyIgnoreWait}
+                          hint={t('settings.party.ignoreWaitHint')}
+                          label={t('settings.party.ignoreWaitLabel')}
+                          name="party-ignore-wait"
+                          onChange={(value) => patch({ partyIgnoreWait: value })}
+                        />
+                        <CheckField
+                          checked={form.partyParAfterRound}
+                          hint={t('settings.party.parAfterRoundHint')}
+                          label={t('settings.party.parAfterRoundLabel')}
+                          name="party-par-after-round"
+                          onChange={(value) => patch({ partyParAfterRound: value })}
+                        />
+                        <CheckField
+                          checked={form.partyRequestHealth}
+                          hint={t('settings.party.requestHealthHint')}
+                          label={t('settings.party.requestHealthLabel')}
+                          name="party-request-health"
+                          onChange={(value) => patch({ partyRequestHealth: value })}
                         />
                       </fieldset>
                       <fieldset className="settings-menus" data-fieldset="party-healing">

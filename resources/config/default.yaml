@@ -1825,6 +1825,37 @@ automation:
     # tuning.remotes.healAskAgainMs while still under it. 0 never asks.
     askForHealBelow: 0
 
+    # Leading, stand still while any member's health on the party listing is
+    # under this share -- MegaMUD's Wait For Party Members -- whether or not they
+    # sent @wait. How fresh that figure is depends on parEverySeconds below.
+    # Ignored while following. 0 never waits.
+    waitForMembersBelow: 0
+
+    # Leading, the most minutes to stand still for the party -- a @wait whose @ok
+    # never came, or a member whose health never rose -- before walking on:
+    # MegaMUD's If Leading Wait No Longer Than. 0 waits as long as it takes.
+    waitNoLongerMinutes: 0
+
+    # Leading, walk on through a follower's @wait -- MegaMUD's Ignore @wait If
+    # Leading. waitForMembersBelow still stops the walk for a member's health.
+    ignoreWaitWhenLeading: false
+
+    # Following, refuse the leader's @party <command> -- MegaMUD's Ignore @party
+    # If Following, for a leader trusted to help but not to type for you.
+    ignorePartyWhenFollowing: false
+
+    # Telepath @health to whoever joins, for their real health and mana rather
+    # than the listing's percentage -- MegaMUD's Request Party Health.
+    requestPartyHealth: true
+
+    # Ask for the party listing every this many seconds in a fight, and twice
+    # that out of one, while in a party -- MegaMUD's Par Frequency (15 there).
+    # 0 asks only when the party changes (onPartyChange). Never under 5.
+    parEverySeconds: 0
+
+    # And after every combat round -- MegaMUD's Send PAR after combat round.
+    parAfterRound: false
+
   # Keeping a character alive, rather than playing it.
   safety:
     # Running away.

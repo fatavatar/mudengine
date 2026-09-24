@@ -21,6 +21,8 @@ import {
   normalizeQuests,
   type GearConfig,
   normalizeTrain,
+  normalizeParty,
+  type PartyConfig,
   type RewritesUiConfig,
   type BlessingTarget,
   type DensityPreference,
@@ -434,12 +436,7 @@ export interface ProfileDraft {
    * never been near this screen keeps a file with none of them in it.
    */
   /** Following somebody — `automation.party`. Off, and why, in `PartyConfig`. */
-  party: {
-    assistLeader: boolean;
-    defendParty: boolean;
-    restWithLeader: boolean;
-    askForHealBelow: number;
-  };
+  party: PartyConfig;
   health: {
     restBelow: number;
     restTo: number;
@@ -888,12 +885,9 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
      * the network is parsed, not trusted, and the value on the other end of it
      * is a number a form put in a string.
      */
-    party: {
-      assistLeader: party['assistLeader'] === true,
-      defendParty: party['defendParty'] === true,
-      restWithLeader: party['restWithLeader'] === true,
-      askForHealBelow: unit(party['askForHealBelow'])
-    },
+    // Clamped by the config's own reader, which is the one place a valid
+    // party setting is decided.
+    party: normalizeParty(party),
     health: {
       /*
        * The shipped pair when a payload omits them, rather than 0.

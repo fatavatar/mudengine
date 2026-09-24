@@ -700,12 +700,21 @@ describe('following somebody', () => {
   const party = (raw: Record<string, unknown>) =>
     normalizeConfig({ automation: { party: raw } }).automation.party;
 
-  it('ships entirely off', () => {
+  // Off, bar asking a joiner's @health, which MegaMUD ships on and this
+  // client already did.
+  it('ships entirely off, bar asking a joiner for their health', () => {
     expect(party({})).toEqual({
       assistLeader: false,
       defendParty: false,
       restWithLeader: false,
-      askForHealBelow: 0
+      askForHealBelow: 0,
+      waitForMembersBelow: 0,
+      waitNoLongerMinutes: 0,
+      ignoreWaitWhenLeading: false,
+      ignorePartyWhenFollowing: false,
+      requestPartyHealth: true,
+      parEverySeconds: 0,
+      parAfterRound: false
     });
   });
 
@@ -715,14 +724,35 @@ describe('following somebody', () => {
         assistLeader: true,
         defendParty: true,
         restWithLeader: true,
-        askForHealBelow: 0.4
+        askForHealBelow: 0.4,
+        waitForMembersBelow: 0.5,
+        waitNoLongerMinutes: 5,
+        ignoreWaitWhenLeading: true,
+        ignorePartyWhenFollowing: true,
+        requestPartyHealth: false,
+        parEverySeconds: 15,
+        parAfterRound: true
       })
     ).toEqual({
       assistLeader: true,
       defendParty: true,
       restWithLeader: true,
-      askForHealBelow: 0.4
+      askForHealBelow: 0.4,
+      waitForMembersBelow: 0.5,
+      waitNoLongerMinutes: 5,
+      ignoreWaitWhenLeading: true,
+      ignorePartyWhenFollowing: true,
+      requestPartyHealth: false,
+      parEverySeconds: 15,
+      parAfterRound: true
     });
+  });
+
+  // The server acknowledges a command a status line; a listing every second
+  // would be most of what this character says.
+  it('never asks for the listing more often than every 5 seconds', () => {
+    expect(party({ parEverySeconds: 1 }).parEverySeconds).toBe(5);
+    expect(party({ parEverySeconds: 0 }).parEverySeconds).toBe(0);
   });
 
   // MegaMUD states it as a percentage (`PartyAskHeal%=50`), and so will people.

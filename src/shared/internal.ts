@@ -1497,7 +1497,16 @@ const TUNING_DEFAULTS = {
      * how often it re-reads the listing in a fight; a healer that could not
      * answer the first request hears the second about as often.
      */
-    healAskAgainMs: 15_000
+    healAskAgainMs: 15_000,
+    /**
+     * How long a follower that said `@wait` stays up before it tells the
+     * leader `@ok`. A heal cast from a rest stands the character up for the
+     * cast and it sits straight back down, a second later; `@ok` then `@wait`
+     * that close together is a leader told nothing (skinny to Fatty,
+     * 2026-09-24). Long enough for the rest to be taken again, short against
+     * a leader waiting.
+     */
+    okAfterMs: 5_000
   },
   /**
    * How many commands one press or one `@` may spend.

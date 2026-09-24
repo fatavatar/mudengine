@@ -121,6 +121,7 @@ import {
   withoutPlayer,
   withPartyListing,
   withRemoteVitals,
+  withMemberMoving,
   withRank,
   withResting
 } from './presence';
@@ -5364,10 +5365,16 @@ export class CharacterTracker {
 
       case 'player-leaves-room': {
         const player = g['player'];
-        if (!player || !s.room.occupants.some((who) => who.name === player)) return null;
+        if (!player) return null;
+        const moved = withMemberMoving(s, player);
+        const base = moved ?? s;
+        if (!base.room.occupants.some((who) => who.name === player)) return moved;
         return {
-          ...s,
-          room: { ...s.room, occupants: s.room.occupants.filter((who) => who.name !== player) }
+          ...base,
+          room: {
+            ...base.room,
+            occupants: base.room.occupants.filter((who) => who.name !== player)
+          }
         };
       }
 

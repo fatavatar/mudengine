@@ -4367,6 +4367,7 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     expect(file['remotes']?.['healAskAgainMs']).toBe(
       DEFAULT_INTERNAL.tuning.remotes.healAskAgainMs
     );
+    expect(file['remotes']?.['okAfterMs']).toBe(DEFAULT_INTERNAL.tuning.remotes.okAfterMs);
     expect(file['hunting']?.['measuredFightsMin']).toBe(
       DEFAULT_INTERNAL.tuning.hunting.measuredFightsMin
     );
@@ -5331,6 +5332,29 @@ describe('the asking line is stated', () => {
     )['party'] as Record<string, unknown>;
     expect(party['askForHealBelow']).toBe(0);
     expect(fs.readFileSync(home.options, 'utf8')).toContain('Ask For Healing');
+  });
+
+  /* MegaMUD's party pacing (2026-09-24), at its defaults, and a stated one kept. */
+  it('writes the party pacing at its defaults, and leaves a stated one alone', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  party:\n    assistLeader: false\n    parEverySeconds: 15\n',
+      'utf8'
+    );
+    migrateHome({ home, legacyOptions: [], note: () => undefined });
+    const party = (
+      parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>
+    )['party'] as Record<string, unknown>;
+    expect(party).toMatchObject({
+      waitForMembersBelow: 0,
+      waitNoLongerMinutes: 0,
+      ignoreWaitWhenLeading: false,
+      ignorePartyWhenFollowing: false,
+      requestPartyHealth: true,
+      parEverySeconds: 15,
+      parAfterRound: false
+    });
+    expect(fs.readFileSync(home.options, 'utf8')).toContain('party pacing');
   });
 
   /*

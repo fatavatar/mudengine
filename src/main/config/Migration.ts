@@ -4289,6 +4289,11 @@ function statedTheNewAutomation(home: Home, note: (message: string) => void): vo
       ) {
         changed = true;
       }
+      if (
+        addKeys(document, ['automation', 'party'], PARTY_LEADING_DEFAULTS, PARTY_LEADING_COMMENT)
+      ) {
+        changed = true;
+      }
       if (addKeys(document, ['automation', 'health'], [['useWards', true]], USE_WARDS_COMMENT)) {
         changed = true;
       }
@@ -4666,6 +4671,24 @@ const ASK_FOR_HEAL_COMMENT = ` Say @heal in the room when health falls below thi
  in a party -- MegaMUD's Ask For Healing. A member running MegaMUD or this
  client answers with a heal. Said on the crossing and again every
  tuning.remotes.healAskAgainMs while still under it. 0 never asks.`;
+
+/** MegaMUD's party pacing (2026-09-24), written at their defaults, all off but one. */
+const PARTY_LEADING_DEFAULTS: ReadonlyArray<readonly [string, number | boolean]> = [
+  ['waitForMembersBelow', 0],
+  ['waitNoLongerMinutes', 0],
+  ['ignoreWaitWhenLeading', false],
+  ['ignorePartyWhenFollowing', false],
+  ['requestPartyHealth', true],
+  ['parEverySeconds', 0],
+  ['parAfterRound', false]
+];
+const PARTY_LEADING_COMMENT = ` MegaMUD's party pacing. Leading: waitForMembersBelow stands still while a
+ member's listed health is under it (0 never), waitNoLongerMinutes gives up
+ on a @wait or a hurt member (0 never), ignoreWaitWhenLeading walks on
+ through @wait. Following: ignorePartyWhenFollowing refuses @party. Either:
+ requestPartyHealth telepaths @health to whoever joins, parEverySeconds asks
+ for the listing on a clock (0 only when the party changes), parAfterRound
+ after every combat round.`;
 
 const AREA_SPELL_DEFAULTS: ReadonlyArray<readonly [string, string | number]> = [
   ['areaAttack', ''],
@@ -6628,6 +6651,7 @@ function theTuningBlockGainedKeys(
     addKey('world', 'hazardSupplyCount', DEFAULT_INTERNAL.tuning.world.hazardSupplyCount);
     // The router's reach for a lever in another room (2026-09-24).
     addKey('world', 'leverDetourCost', DEFAULT_INTERNAL.tuning.world.leverDetourCost);
+    addKey('remotes', 'okAfterMs', DEFAULT_INTERNAL.tuning.remotes.okAfterMs);
     /*
      * This fork's own clocks (2026-09-22 to 09-23), which reached no file that
      * already stated their groups: which attack a `*Combat Engaged*` answers,

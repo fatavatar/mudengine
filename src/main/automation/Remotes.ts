@@ -278,8 +278,10 @@ interface Outstanding {
 }
 
 export class Remotes {
-  /** Whether this character was resting at the last state change. See `onCharacter`. */
-  private resting = false;
+  /** Whether the leader has been told `@wait` and not yet `@ok`. See `onCharacter`. */
+  private waitSaid = false;
+  /** When this character last stood up from a rest it had said `@wait` for. */
+  private upSince: number | null = null;
 
   /** Questions sent and not yet answered, by player. See {@link Outstanding}. */
   private readonly asked = new Map<string, Outstanding>();
@@ -318,6 +320,7 @@ export class Remotes {
    * is one round out of date in exactly the situation somebody asks.
    */
   onBlock(block: Block, state: CharacterState): void {
+    this.noteRound(block, state);
     if (!this.config.enabled || !this.config.remotes.enabled) return;
     const channel = CHANNELS.get(block.type);
     if (channel === undefined) return;
@@ -518,7 +521,8 @@ export class Remotes {
     for (const member of state.party.members) {
       if (member.invited) continue;
       if (me !== null && member.name.toLowerCase() === me) continue;
-      this.ask(member.name, 'health', state);
+      // MegaMUD's *Request Party Health*, on unless turned off.
+      if (this.config.party.requestPartyHealth) this.ask(member.name, 'health', state);
       /*
        * And which client they run, once, because it decides the wording of
        * every question after this one. Only while nothing has said: the answer
@@ -547,14 +551,87 @@ export class Remotes {
   onCharacter(state: CharacterState): void {
     if (this.config.enabled && this.config.remotes.enabled) this.sweep(Date.now());
     this.askForHeal(state);
+    this.askForListing(state);
     const resting = state.vitals.resting || state.vitals.meditating;
-    const was = this.resting;
-    this.resting = resting;
-    if (was === resting) return;
     if (!this.config.enabled || !this.config.remotes.enabled) return;
     const leader = state.party.following;
-    if (leader === null) return;
-    this.ask(leader, resting ? 'wait' : 'ok', state);
+    if (leader === null) {
+      this.waitSaid = false;
+      this.upSince = null;
+      return;
+    }
+    if (resting) {
+      this.upSince = null;
+      /*
+       * Not while the leader is resting too: that rest is the leader's, and
+       * this one is keeping it company (`party.restWithLeader`). skinny sat
+       * down with Fatty, said `@wait`, and Fatty — MegaMUD, waiting on it —
+       * rested in every room after, which sat skinny down again before the
+       * `@ok` was due (2026-09-24).
+       */
+      if (this.waitSaid || leaderResting(state, leader)) return;
+      if (this.ask(leader, 'wait', state)) this.waitSaid = true;
+      return;
+    }
+    /*
+     * `@ok` only once the character has stayed up: a heal cast from a rest
+     * stands it up for the cast and it sits straight back down, and a leader
+     * told `@ok` then `@wait` a second apart has been told nothing (skinny to
+     * Fatty, 2026-09-24). MegaMUD says `@ok` when the rest is over, not when a
+     * cast interrupted it.
+     */
+    if (!this.waitSaid) return;
+    const now = Date.now();
+    this.upSince ??= now;
+    if (now - this.upSince < tuning().remotes.okAfterMs) return;
+    if (this.ask(leader, 'ok', state)) {
+      this.waitSaid = false;
+      this.upSince = null;
+    }
+  }
+
+  /** When this client last sent the party listing on its own account. */
+  private listedAt = 0;
+
+  /**
+   * MegaMUD's *Par Frequency*: the party listing every `party.parEverySeconds`
+   * in a fight and twice that out of one, while in a party. The listing is
+   * the only place another member's health shows, and `holdForParty` and the
+   * party heals read nothing fresher than the last one. Off at 0, which
+   * leaves the listing to `onPartyChange`. Its own setting, not
+   * `remotes.enabled`: it asks the server, not a player.
+   */
+  private askForListing(state: CharacterState): void {
+    const every = this.config.party.parEverySeconds;
+    if (!this.config.enabled || every <= 0) return;
+    if (state.phase !== 'in-game' || !inAParty(state)) return;
+    const interval = (state.inCombat ? every : every * 2) * 1000;
+    if (Date.now() - this.listedAt < interval) return;
+    this.sendListing(t('automation.remotes.reasonParEvery', { seconds: every }));
+  }
+
+  /**
+   * MegaMUD's *Send PAR after combat round*: a blow in a fight, while in a
+   * party, asks for the listing — once a round, since a round's blows arrive
+   * together and the next round is `spells.castRoundMs` away.
+   */
+  private noteRound(block: Block, state: CharacterState): void {
+    if (!this.config.enabled || !this.config.party.parAfterRound) return;
+    if (!ROUND_BLOWS.has(block.type) || !state.inCombat || !inAParty(state)) return;
+    if (Date.now() - this.listedAt < tuning().spells.castRoundMs / 2) return;
+    this.sendListing(t('automation.remotes.reasonParRound'));
+  }
+
+  private sendListing(reason: string): void {
+    this.queue.enqueue({
+      command: 'party',
+      priority: 'probe',
+      coalesceKey: 'remote:par',
+      onSent: () => {
+        this.listedAt = Date.now();
+      },
+      reason
+    });
   }
 
   /**
@@ -704,7 +781,8 @@ export class Remotes {
 
   /** Forgotten with the connection: a fresh session has said nothing to anybody. */
   reset(): void {
-    this.resting = false;
+    this.waitSaid = false;
+    this.upSince = null;
     this.asked.clear();
     this.askedForHealAt = null;
     this.wantsHeal = false;
@@ -1073,6 +1151,14 @@ export class Remotes {
         // The leader telling every follower to do something — the same as
         // `@do`, minus the acknowledgement, which no capture shows for it.
         if (command.argument === null) return;
+        // MegaMUD's *Ignore @party If Following*: a leader trusted to help but
+        // not to type. Said, so the refusal is not a silence.
+        if (this.config.party.ignorePartyWhenFollowing && state.party.following !== null) {
+          this.events.notice?.(
+            t('automation.remotes.ignoredParty', { from, command: command.argument })
+          );
+          return;
+        }
         this.queue.enqueue({
           command: command.argument,
           priority: 'movement',
@@ -1297,8 +1383,31 @@ function partyMembers(state: CharacterState): string[] {
     .map((member) => member.name);
 }
 
+/** A round's blows, either way, which is what `noteRound` reads a round from. */
+const ROUND_BLOWS: ReadonlySet<string> = new Set([
+  'user-hits',
+  'user-misses',
+  'mob-hits',
+  'mob-misses'
+]);
+
+/** Whether the leader's row says it is resting or meditating. */
+function leaderResting(state: CharacterState, leader: string): boolean {
+  const row = state.party.members.find(
+    (member) => member.name.toLowerCase() === leader.toLowerCase()
+  );
+  const activity = row?.activity?.state;
+  return activity === 'resting' || activity === 'meditating';
+}
+
+/**
+ * In a party: somebody has joined, or this character follows somebody. The
+ * second on its own is what a follower knows before any listing — `join`
+ * says whom it follows and nothing about who else is there — and a follower
+ * that waited for a listing to count itself in a party never asked for one.
+ */
 function inAParty(state: CharacterState): boolean {
-  return partyMembers(state).length > 0;
+  return state.party.following !== null || partyMembers(state).length > 0;
 }
 
 /**

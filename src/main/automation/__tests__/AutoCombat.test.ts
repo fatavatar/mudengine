@@ -2586,6 +2586,7 @@ describe('fighting what the leader fights', () => {
     rank: null
   });
   const party = {
+    ...DEFAULT_CONFIG.automation.party,
     assistLeader: true,
     defendParty: false,
     restWithLeader: false,
@@ -2681,6 +2682,7 @@ describe('defending the party', () => {
     rank: null
   });
   const party = {
+    ...DEFAULT_CONFIG.automation.party,
     assistLeader: false,
     defendParty: true,
     restWithLeader: false,
@@ -3415,6 +3417,34 @@ describe('the monster table, fighting', () => {
       };
       expect(cast('c harm giant rat')).toEqual(['pcloud']);
       expect(cast('c blnd giant rat')).toEqual(['pcloud', 'pcloud']);
+    });
+
+    /*
+     * skinny, 2026-09-24: the attack spell cast into a fight the server still
+     * held is answered `*Combat Off*` then `*Combat Engaged*`. Read as a cast
+     * that ended the fight, the Off let the target go and `fury` went again —
+     * sixteen times in a second at one fungus tree, sixty-seven at a dragon.
+     */
+    it('does not take the attack spell’s own Off for the fight ending', () => {
+      const book = [{ name: 'unholy fury', short: 'fury', level: 1, cost: 16 }];
+      const auto = make(combat({ refreshRounds: 0 }), true, spells({ attack: 'fury' }));
+      auto.onCharacter(state({ room: rat, spellbook: book }));
+      drain();
+      expect(sent).toEqual(['fury giant rat']);
+      auto.onCharacter(
+        state({
+          room: rat,
+          spellbook: book,
+          inCombat: true,
+          combat: { ...EMPTY_CHARACTER.combat, engaged: true, target: 'giant rat' }
+        })
+      );
+      for (let pair = 0; pair < 5; pair += 1) {
+        auto.onBlock(block('combat-status', { status: 'Off' }), 'fury giant rat');
+        auto.onCharacter(state({ room: rat, spellbook: book, inCombat: false }));
+        drain();
+      }
+      expect(sent).toEqual(['fury giant rat']);
     });
 
     /*
