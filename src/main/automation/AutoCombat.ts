@@ -112,7 +112,7 @@ import {
 import type { RealmFamily } from '../../shared/realm';
 import { dodge } from '../../shared/prowess';
 import { attacksOnSight } from '../../shared/mobs';
-import { castOf, isShortIn, resolveSpell, spellCost } from '../../shared/spellcraft';
+import { castIn, resolveSpell, sameSpell, spellCost } from '../../shared/spellcraft';
 import {
   chooseAttackSpell,
   type SpellChoice,
@@ -2251,17 +2251,9 @@ export class AutoCombat {
     });
   }
 
-  /**
-   * A command as a cast, `c` or bare (`castOf`): a bare word is a spell when
-   * this character's listing, or the realm's table, has it as a short name.
-   */
+  /** A command as this character's cast — `shared/spellcraft`'s `castIn`. */
   private castIn(command: string): { word: string; argument: string } | null {
-    return castOf(
-      command,
-      (word) =>
-        isShortIn(word, this.state?.spellbook) ||
-        this.realmSpell(word)?.short?.toLowerCase() === word.toLowerCase()
-    );
+    return castIn(command, this.state?.spellbook, this.realmSpell);
   }
 
   /** The spell a command casts, or null. */
@@ -2753,24 +2745,10 @@ export class AutoCombat {
     };
   }
 
-  /**
-   * Whether two spellings name one spell — a configured name against the
-   * word a command carried or a confirmation printed. Null is the melee verb.
-   */
+  /** Whether two spellings name one spell (`shared/spellcraft`); null is the melee verb. */
   private sameSpell(a: string | null, b: string | null): boolean {
     if (a === null || b === null) return a === b;
-    const spelled = b.trim().toLowerCase();
-    return (
-      this.spellingsOf(a).includes(spelled) || this.spellingsOf(b).includes(a.trim().toLowerCase())
-    );
-  }
-
-  /** Every spelling the resolver knows for a configured spell, lowercase. */
-  private spellingsOf(spell: string): string[] {
-    const found = resolveSpell(spell, this.state?.spellbook, this.realmSpell);
-    return [spell, found.word, found.known?.name, found.known?.short, found.realm?.name]
-      .filter((name): name is string => typeof name === 'string')
-      .map((name) => name.trim().toLowerCase());
+    return sameSpell(a, b, this.state?.spellbook, this.realmSpell);
   }
 
   /**
@@ -3152,10 +3130,10 @@ export class AutoCombat {
    */
   private noteCast(block: Block): void {
     if (block.groups['caster'] !== 'You' || block.groups['announced'] !== undefined) return;
-    const said = (block.groups['spell'] ?? '').trim().toLowerCase();
+    const said = (block.groups['spell'] ?? '').trim();
     if (said.length === 0) return;
     const cast = this.liveCasts().find(
-      (live) => live.confirmedAt === null && this.spellingsOf(live.spell).includes(said)
+      (live) => live.confirmedAt === null && this.sameSpell(live.spell, said)
     );
     if (cast !== undefined) {
       cast.confirmedAt = Date.now();
@@ -3168,7 +3146,7 @@ export class AutoCombat {
      * what spends a row's count after the first.
      */
     const doing = this.combatAction;
-    if (typeof doing === 'string' && this.spellingsOf(doing).includes(said)) {
+    if (typeof doing === 'string' && this.sameSpell(doing, said)) {
       this.casts.set(doing, (this.casts.get(doing) ?? 0) + 1);
     }
   }

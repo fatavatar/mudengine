@@ -195,6 +195,56 @@ export function isShortIn(
   );
 }
 
+/**
+ * A command read as this character's cast (`castOf`): a bare word is a spell
+ * when the listing, or the realm's table, has it as a short name — the realm
+ * answering before the listing has been read.
+ */
+export function castIn(
+  command: string,
+  spellbook: ReadonlyArray<CastableSpell> | null | undefined,
+  realmSpell: (name: string) => WorldSpell | null
+): { word: string; argument: string } | null {
+  return castOf(
+    command,
+    (word) =>
+      isShortIn(word, spellbook) || realmSpell(word)?.short?.toLowerCase() === word.toLowerCase()
+  );
+}
+
+/**
+ * Whether two spellings name one spell — a configured name against the word
+ * a command sent, or the whole name a confirmation printed.
+ *
+ * The realm accepts `bles` wherever it accepts `bless` and a MegaMUD-trained
+ * player configures the abbreviation, while the server prints the whole name,
+ * so equality alone held a configured `bles` against a recorded `bless` for
+ * ever. The realm's row decides where it names both, by **id**; where it does
+ * not, every spelling the listing or the realm knows for either is compared.
+ * One answer for every module that asks (2026-09-24): `Blessings`,
+ * `AutoInvoke` and `AutoCombat` each had their own.
+ */
+export function sameSpell(
+  a: string,
+  b: string,
+  spellbook: ReadonlyArray<CastableSpell> | null | undefined,
+  realmSpell: (name: string) => WorldSpell | null
+): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (x === y) return true;
+  const first = realmSpell(a)?.id;
+  const second = realmSpell(b)?.id;
+  if (first !== undefined && second !== undefined) return first === second;
+  const spellings = (name: string): string[] => {
+    const found = resolveSpell(name, spellbook, realmSpell);
+    return [found.word, found.known?.name, found.known?.short, found.realm?.name]
+      .filter((spelling): spelling is string => typeof spelling === 'string')
+      .map((spelling) => spelling.trim().toLowerCase());
+  };
+  return spellings(a).includes(y) || spellings(b).includes(x);
+}
+
 /** `Abil-n` ids, as `abilities.ts` names them. */
 const CURE_POISON = 20;
 const DISPELL_MAGIC = 73;

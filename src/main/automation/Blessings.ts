@@ -53,7 +53,7 @@ import { t } from '../app/i18n';
 import type { ActiveBuff, CharacterState } from '../../shared/character';
 import type { BlessingConfig, SpellsConfig } from '../../shared/config';
 import type { Block } from '../../shared/blocks';
-import { resolveSpell, spellCost } from '../../shared/spellcraft';
+import { resolveSpell, sameSpell, spellCost } from '../../shared/spellcraft';
 import type { WorldSpell } from '../../shared/world';
 import { tuning } from '../app/tuning';
 
@@ -138,21 +138,9 @@ export class Blessings {
     this.enabled = enabled && config.autoBless;
   }
 
-  /**
-   * Whether a wire spelling and a configured spelling name the same spell.
-   *
-   * The realm accepts `bles` wherever it accepts `bless` and a MegaMUD-trained
-   * player configures the abbreviation, while the cast confirmation always
-   * prints the whole name — so equality alone would hold a configured `bles`
-   * against a recorded `bless` for ever, recasting on the retry clock all
-   * evening. A row the realm does not name answers null, and two nulls fall
-   * back to the words.
-   */
+  /** Whether a wire spelling and a configured one name the same spell (`shared/spellcraft`). */
   private sameSpell(wire: string, configured: string): boolean {
-    if (wire.trim().toLowerCase() === configured.trim().toLowerCase()) return true;
-    const a = this.realmSpell(wire)?.id ?? null;
-    const b = this.realmSpell(configured)?.id ?? null;
-    return a !== null && b !== null && a === b;
+    return sameSpell(wire, configured, null, this.realmSpell);
   }
 
   /** The one heal, blessing or cure a round allows. See `CastRound`. */

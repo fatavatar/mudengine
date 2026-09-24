@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  castIn,
   castOf,
   castWord,
   castsBare,
@@ -10,11 +11,13 @@ import {
   holdsMovement,
   isShortIn,
   resolveSpell,
+  sameSpell,
   spellCost,
   spellTargeting,
   type AbilityPairs,
   type CastableSpell
 } from '../spellcraft';
+import type { WorldSpell } from '../world';
 
 /* The live `powers` listing's own rows (2026-09-01), quoted rather than invented. */
 const book: CastableSpell[] = [
@@ -330,5 +333,35 @@ describe('castOf', () => {
     expect(castOf('swan', known)).toBeNull();
     expect(castOf('c', known)).toBeNull();
     expect(castOf('  ', known)).toBeNull();
+  });
+});
+
+/*
+ * One answer to *is this a cast* and *is this the same spell* (2026-09-24),
+ * for every module that asks — AutoCombat, the tracker, Blessings, AutoInvoke.
+ */
+describe('castIn and sameSpell', () => {
+  const listed = [{ name: 'pagan ritual', short: 'ritu' }];
+  const realm: Record<string, WorldSpell> = {
+    bless: { id: 3, name: 'bless', short: 'bles' },
+    bles: { id: 3, name: 'bless', short: 'bles' },
+    fury: { id: 9, name: 'unholy fury', short: 'fury' },
+    'unholy fury': { id: 9, name: 'unholy fury', short: 'fury' }
+  } as unknown as Record<string, WorldSpell>;
+  const realmSpell = (name: string): WorldSpell | null => realm[name.toLowerCase()] ?? null;
+
+  it('reads a bare short the listing or the realm owns as a cast', () => {
+    expect(castIn('ritu', listed, realmSpell)).toEqual({ word: 'ritu', argument: '' });
+    expect(castIn('fury rat', null, realmSpell)).toEqual({ word: 'fury', argument: 'rat' });
+    expect(castIn('look', listed, realmSpell)).toBeNull();
+  });
+
+  it('names one spell by the realm’s id, or by any spelling the listing knows', () => {
+    expect(sameSpell('bles', 'bless', null, realmSpell)).toBe(true);
+    expect(sameSpell('fury', 'Unholy Fury', null, realmSpell)).toBe(true);
+    expect(sameSpell('fury', 'bless', null, realmSpell)).toBe(false);
+    // The realm silent, the listing joins the short to its whole name.
+    expect(sameSpell('ritu', 'pagan ritual', listed, () => null)).toBe(true);
+    expect(sameSpell('ritu', 'mahe', listed, () => null)).toBe(false);
   });
 });
