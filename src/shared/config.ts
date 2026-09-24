@@ -1707,6 +1707,8 @@ export interface MovementConfig {
    * number, so this is never attempted against a barrier the character cannot
    * beat, `bashTries` caps it at three, and the alternative is a route that
    * stops dead at a lock the character was strong enough to walk through.
+   * `pickLocks` stays **off**: it is the same decision made with a skill this
+   * client cannot check the character has.
    */
   bashDoors: boolean;
   /** How many bashes, before the route gives up on the barrier. */
@@ -1722,13 +1724,9 @@ export interface MovementConfig {
    *
    * Gated on the realm's picklocks number within `PICK_MARGIN`. Tried before
    * bashing when both are available, because a failed pick costs a command and
-   * a failed bash costs a command and some health.
-   *
-   * **On by default** (2026-09-22). It was off because the client could not
-   * check the character had the skill; it now reads `Picklocks:` off the stat
-   * sheet (`progress.picklocks`), so it is the same decision `bashDoors` makes
-   * with strength. The router reads this switch too (`Traveller.forcing`), so a
-   * lock only a switched-off skill opens is planned round rather than into.
+   * a failed bash costs a command and some health. The router reads this and
+   * `bashDoors` too (`Traveller.forcing`): a lock only a switched-off skill
+   * opens is planned round, never into.
    */
   pickLocks: boolean;
   /** How many picks, before the route gives up on the barrier. */
@@ -1833,6 +1831,16 @@ export interface MovementConfig {
    */
   fightOnArrival: boolean;
   /**
+   * Ways and places routes keep out of, in the realm's own words (todo 806):
+   * a word a way's script phrase says (`go vortex`), or a room's name does
+   * (the Negative Power Plane). Configuration, not code: which places a
+   * player shuns is theirs, and a realm's name for one is data. The route
+   * panel offers a way that crosses one beside the way round it and the
+   * player picks; a walk nobody is watching is planned round them
+   * (`Traveller.keepOut`) unless it starts or ends inside one.
+   */
+  keepOutOf: string[];
+  /**
    * Walk on while poisoned. Off, the walk waits the poison out — MegaMUD's
    * `IgnorePoison` default. A cure under `spells.cures` ends the wait sooner.
    * Disease is not a movement matter and has no switch.
@@ -1844,20 +1852,6 @@ export interface MovementConfig {
    * character's commands misfire, and a walk spends them. See `afflictionHolding`.
    */
   walkWhileConfused: boolean;
-  /**
-   * Plan routes through the swirling vortexes (`go vortex`). **Off by
-   * default**: the vortexes lead into the Black Wasteland and on to the
-   * Negative Power Plane, far more dangerous than the ordinary ways between
-   * the places they join, and MegaMUD's own paths stay out of them. A route
-   * that starts or ends past one still needs this on.
-   */
-  useVortexes: boolean;
-  /**
-   * Plan routes across the Negative Power Plane. **Off by default**, for the
-   * reason `useVortexes` is. A route starting or ending on the Plane may
-   * cross it whatever this says — the character is there, or asked to go.
-   */
-  enterNegativePlane: boolean;
   /**
    * Pick up a key an exit of this room needs, when it is lying on the floor of
    * it — and only then.
@@ -2858,7 +2852,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       openTries: 1,
       bashDoors: true,
       bashTries: 3,
-      pickLocks: true,
+      pickLocks: false,
       pickTries: 3,
       sneak: false,
       provideLight: true,
@@ -2870,9 +2864,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       walkWhileBlind: false,
       walkWhilePoisoned: false,
       walkWhileConfused: false,
-      useVortexes: false,
-      enterNegativePlane: false,
       fightOnArrival: true,
+      keepOutOf: ['vortex', 'Negative Power Plane'],
       collectKeys: true
     },
     hunting: {
@@ -3542,6 +3535,17 @@ function normalizeServers(value: unknown): Server[] {
   return servers;
 }
 
+/** A list with case-insensitive repeats dropped, the first spelling kept. */
+function uniqueWords(words: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return words.filter((word) => {
+    const key = word.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function stringList(value: unknown, fallback: string[]): string[] {
   if (typeof value === 'string') return value.trim() ? [value.trim()] : fallback;
   if (!Array.isArray(value)) return fallback;
@@ -4098,9 +4102,10 @@ function normalizeMovement(value: unknown): MovementConfig {
     walkWhileBlind: bool(raw['walkWhileBlind'], d.walkWhileBlind),
     walkWhilePoisoned: bool(raw['walkWhilePoisoned'], d.walkWhilePoisoned),
     walkWhileConfused: bool(raw['walkWhileConfused'], d.walkWhileConfused),
-    useVortexes: bool(raw['useVortexes'], d.useVortexes),
-    enterNegativePlane: bool(raw['enterNegativePlane'], d.enterNegativePlane),
     fightOnArrival: bool(raw['fightOnArrival'], d.fightOnArrival),
+    // One word once, however it was spelt: two spellings of one word are one
+    // place kept out of.
+    keepOutOf: uniqueWords(stringList(raw['keepOutOf'], d.keepOutOf)),
     collectKeys: bool(raw['collectKeys'], d.collectKeys)
   };
 }

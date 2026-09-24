@@ -11,10 +11,12 @@ import { type LocalMap } from '@shared/map';
 import { errorMessage } from '@shared/values';
 import {
   asRoomReference,
+  chosenWay,
   describeBlock,
   DIRECTION_NAME,
   itemsWanted,
   lairsAlong,
+  needsAlong,
   roomId,
   trapsAlong,
   type Direction,
@@ -28,13 +30,73 @@ import { keepFocus } from '../lib/focus';
 import { tuning } from '../lib/tuning';
 import type { Replanned, WalkStart } from '@shared/movement';
 
-/** Every item's name, for the one sentence that offers to fetch them all. */
+/** Which of the plan's routes is on screen — see `chosen`. */
+type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'another' | 'keyed' | 'keptOut';
+
+/**
+ * What walking a way is expected to cost, in words, for the two ways a kept-out
+ * choice sets side by side (todo 806): the lairs the router priced it by — a
+ * room expected to kill named outright, else how many and the worst share of
+ * the bar — then the traps and the room spells. The figures the head draws for
+ * the way on screen, for both ways at once.
+ */
+function survival(way: Route): string {
+  const lairs = lairsAlong(way.steps);
+  const traps = trapsAlong(way.steps);
+  const spells = (way.hazards ?? []).filter((hazard) => hazard.corridor === undefined).length;
+  // A lair nobody could weigh is not a lair that costs nothing.
+  const unweighed = way.steps.filter((step) => step.lairUnweighed === true).length;
+  const parts = [
+    lairs.deadly !== null
+      ? t('cards.route.keptOut.deadly', { roomName: lairs.deadly.name })
+      : lairs.count === 0
+        ? unweighed > 0
+          ? null
+          : t('cards.route.keptOut.noLairs')
+        : [
+            lairs.count === 1
+              ? t('cards.route.lairs.one')
+              : t('cards.route.lairs.many', { lairCount: lairs.count }),
+            lairs.worst === null
+              ? null
+              : t('cards.route.lairWorst', { percent: Math.round(lairs.worst * 100) })
+          ]
+            .filter((part) => part !== null)
+            .join(' · '),
+    unweighed === 0
+      ? null
+      : unweighed === 1
+        ? t('cards.route.keptOut.unweighed.one')
+        : t('cards.route.keptOut.unweighed.many', { count: unweighed }),
+    traps.count === 0
+      ? null
+      : traps.count === 1
+        ? t('cards.route.traps.one')
+        : t('cards.route.traps.many', { trapCount: traps.count }),
+    spells === 0
+      ? null
+      : spells === 1
+        ? t('cards.route.keptOut.spells.one')
+        : t('cards.route.keptOut.spells.many', { count: spells })
+  ];
+  return parts.filter((part) => part !== null).join(' · ');
+}
+
+/**
+ * The way round what the player keeps out of, as it would be walked: the way
+ * itself, or where there is none without a key the pack lacks, the way once
+ * it is fetched (`Route.unlocks`). Null where there is no way round at all.
+ */
+function roundWay(route: Route): Route | null {
+  const round = route.keptOut?.round;
+  if (round === undefined) return null;
+  return round.blocked ? (round.unlocks ?? null) : round;
+}
+
+/** Every item's name, for the one sentence that names what is fetched. */
 function named(items: ReadonlyArray<{ name: string }>): string {
   return items.map((item) => item.name).join(', ');
 }
-
-/** Which of the plan's routes is on screen — see `chosen`. */
-type Way = 'plan' | 'round' | 'carrying' | 'viaItem' | 'keyed' | 'another';
 
 /**
  * Whether an alternative steps over none of the walls the plan crosses — the
@@ -66,7 +128,7 @@ export interface RoutePanelProps {
   /**
    * Collects what the way needs first, then walks it (todo 07).
    *
-   * Offered on whichever way is on screen, where it names an item to go and
+   * Offered on whichever way is on screen, where it names items to go and
    * get — the doors it crosses, the spells its rooms cast (`itemsWanted`) —
    * every one of them, fetched in turn.
    */
@@ -213,6 +275,13 @@ function chips(step: RouteStep) {
       and names the worst; **this is where the reader finds out which rooms
       they are**, which is the half that was missing — a count at the top of
       a hundred-step plan is a number with nowhere to look. */}
+      {/* And a way or place the player keeps out of (todo 806), named by the
+      word on their list, so the reader sees where the way through goes. */}
+      {step.keptOut !== undefined && (
+        <span className="chip bad" title={t('cards.route.stepKeptOutTitle')}>
+          {t('cards.route.stepKeptOut', { word: step.keptOut })}
+        </span>
+      )}
       {step.danger !== undefined && (
         <span className={step.deadly === true ? 'chip bad' : 'chip warn'}>
           {step.deadly === true
@@ -299,11 +368,19 @@ export default function RoutePanel({
    * Which of the plan's routes is on screen: the plan itself, the way round
    * the worst of it (`Route.otherWay`), the way with the right items
    * (`Route.carrying`), the way that spends a charge to skip the walk
-   * (`Route.viaItem`), or a way that is simply not the plan
-   * (`Route.another`). A choice among routes main already planned, never a
+   * (`Route.viaItem`), a way that is simply not the plan
+   * (`Route.another`), or the way through a door once its key is fetched
+   * (`Route.unlocks`). A choice among routes main already planned, never a
    * re-plan: the panel is a reader, and *Show it* swaps what is read.
    */
   const [chosen, setChosen] = useState<Way>('plan');
+  /**
+   * Which of the two ways a kept-out choice offers the reader has picked
+   * (todo 806): through what `movement.keepOutOf` names, or round it. Null
+   * until they pick, and nothing walks while it is — the choice is theirs,
+   * and a default would be the client making it. Dropped with the plan.
+   */
+  const [crossing, setCrossing] = useState<'through' | 'round' | null>(null);
   /**
    * Whether to go and get what the way needs before walking it (todo 07).
    *
@@ -319,12 +396,8 @@ export default function RoutePanel({
    * route it was made on and comparing by identity, which left the box drawn
    * ticked over a fresh plan while quietly deciding nothing — a control
    * stating the opposite of what it would do.
-   *
-   * **Ticked by default** (2026-09-22): a way that needs a key the pack lacks
-   * stops dead at that door, so walking it without the key is the exception
-   * somebody opts into by unticking — never the thing a press does unasked.
    */
-  const [collectFirst, setCollectFirst] = useState(true);
+  const [collectFirst, setCollectFirst] = useState(false);
   /**
    * Whether to stop in the room before the destination rather than enter it.
    *
@@ -354,13 +427,15 @@ export default function RoutePanel({
         ? (route.otherWay ?? route)
         : chosen === 'carrying'
           ? (route.carrying ?? route)
-          : chosen === 'keyed'
-            ? (route.unlocks ?? route)
-            : chosen === 'viaItem'
-              ? (route.viaItem ?? route)
-              : chosen === 'another'
-                ? (route.another ?? route)
-                : route;
+          : chosen === 'viaItem'
+            ? (route.viaItem ?? route)
+            : chosen === 'another'
+              ? (route.another ?? route)
+              : chosen === 'keyed'
+                ? (route.unlocks ?? route)
+                : chosen === 'keptOut'
+                  ? (roundWay(route) ?? route)
+                  : route;
   /**
    * How large a room is drawn in the picture of where the route ends.
    *
@@ -465,16 +540,11 @@ export default function RoutePanel({
    */
   useEffect(() => {
     setPicked(null);
-    /*
-     * The way through a door whose key is worth fetching is **shown first**
-     * where the router offers one (2026-09-23): the long way round is what a
-     * player picks when they would rather not go and get the key, and it is
-     * one press away in the list below.
-     */
-    setChosen(route !== null && !route.blocked && route.unlocks !== undefined ? 'keyed' : 'plan');
+    setChosen('plan');
+    setCrossing(null);
     setOffering(false);
     setUnfolded(new Set());
-    setCollectFirst(true);
+    setCollectFirst(false);
   }, [route]);
   // A pick belongs to the list it was made on, and so does an opened run — and
   // a tick belongs to the door the way on screen goes through, which another
@@ -482,7 +552,7 @@ export default function RoutePanel({
   useEffect(() => {
     setPicked(null);
     setUnfolded(new Set());
-    setCollectFirst(true);
+    setCollectFirst(false);
   }, [chosen]);
   /*
    * And the tick that says *do not enter the room at the end* belongs to that
@@ -580,6 +650,12 @@ export default function RoutePanel({
 
   const walk = useCallback(
     (plan: Route, run = false): void => {
+      // A way through what the player keeps out of is walked only once they
+      // have chosen between it and the way round (todo 806).
+      if (route?.keptOut !== undefined && crossing === null) {
+        setRefused(t('cards.route.keptOut.chooseFirst'));
+        return;
+      }
       /*
        * *Collect it first* is a different press: main goes and gets every
        * item the way asks for, one after another, and walks it once the pack
@@ -591,7 +667,13 @@ export default function RoutePanel({
        * `hazards` onto a walk that stops three rooms along — so *Walk here*
        * would leave to go shopping for a key for a door it never reaches.
        */
-      const needed = collectFirst && plan === shown ? itemsWanted(plan) : [];
+      /*
+       * A way planned as though the pack held something (`Route.needs`) is
+       * collected for whatever the tick says — walked without it, it stops at
+       * the door — and `itemsWanted` names only what *its* steps reach, so a
+       * prefix of it that stops short of the door fetches nothing.
+       */
+      const needed = collectFirst && plan === shown ? itemsWanted(plan) : needsAlong(plan);
       /*
        * *Stop before entering* drops the last step, by the same rule: about
        * the whole way on screen, never a prefix, because *Walk here* has
@@ -614,7 +696,9 @@ export default function RoutePanel({
         setRefused(t('cards.route.alreadyBefore', { roomName: plan.steps[0]!.name }));
         return;
       }
-      const walked: Route = trimmed === null ? plan : { ...plan, steps: trimmed };
+      // And the kept-out choice taken off: it has been made, and main walks
+      // no route still carrying one (todo 806).
+      const walked: Route = chosenWay(trimmed === null ? plan : { ...plan, steps: trimmed });
       /*
        * The errand answers in the older shape: it walks to a shop and plans the
        * way on from there itself, so a plan handed to it cannot be stale and
@@ -648,7 +732,7 @@ export default function RoutePanel({
         })
         .catch((error) => setRefused(errorMessage(error)));
     },
-    [collectFirst, stopShort, onCollectThenWalk, onWalk, onClose, shown]
+    [collectFirst, crossing, stopShort, onCollectThenWalk, onWalk, onClose, route, shown]
   );
 
   /**
@@ -679,8 +763,10 @@ export default function RoutePanel({
     [onPeek, shown, walk]
   );
 
+  /** Whether a kept-out choice is still waiting on the reader. See `crossing`. */
+  const choosing = route?.keptOut !== undefined && crossing === null;
   /** True when there is a plan on screen that could actually be walked. */
-  const walkable = shown !== null && !shown.blocked && shown.steps.length > 0;
+  const walkable = shown !== null && !shown.blocked && shown.steps.length > 0 && !choosing;
 
   /*
    * The two presses from the keyboard: Alt R runs it, Alt G walks it. At the
@@ -929,15 +1015,13 @@ export default function RoutePanel({
                       <li>{route.reason ?? t('cards.route.noRouteFallback')}</li>
                     )}
                   </ul>
-                  {/* A way only a key opens is an errand, not a dead end: main
-                  planned where it goes once the pack holds the key
-                  (`Route.unlocks`), and this sends the character to get it and
-                  then walks that. Offered only when the keys alone are enough —
-                  `itemsWanted` answers nothing for a way that is gated as well. */}
+                  {/* A way only its keys open is an errand, not a dead end:
+                  main planned where it goes once the pack holds them
+                  (`Route.unlocks`), and this fetches them and walks that. */}
                   {(() => {
-                    const wanted = itemsWanted(route);
                     const unlocks = route.unlocks;
-                    if (wanted.length === 0 || unlocks === undefined) return null;
+                    const wanted = unlocks === undefined ? [] : itemsWanted(unlocks);
+                    if (unlocks === undefined || wanted.length === 0) return null;
                     return (
                       <div className="route-fetch">
                         <button
@@ -951,6 +1035,7 @@ export default function RoutePanel({
                               .catch((error) => setRefused(errorMessage(error)));
                           }}
                           onMouseDown={keepFocus}
+                          title={t('cards.route.fetchThenWalkTooltip')}
                           type="button"
                         >
                           {t('cards.route.fetchThenWalk', { itemName: named(wanted) })}
@@ -963,6 +1048,81 @@ export default function RoutePanel({
                 <div className="empty">{t('cards.route.alreadyHere')}</div>
               ) : (
                 <>
+                  {/* The way through what the player keeps out of, and the
+                  way round it, side by side (todo 806): steps and what each
+                  is expected to cost, and nothing walks until one is picked.
+                  A choice the client would otherwise make for them. */}
+                  {route.keptOut !== undefined &&
+                    (() => {
+                      const { words, round } = route.keptOut;
+                      const wordList = words.join(', ');
+                      const way = roundWay(route);
+                      const fetching = way === null ? [] : itemsWanted(way);
+                      return (
+                        <div
+                          aria-label={t('cards.route.keptOut.groupAria', { wordList })}
+                          className="route-choice"
+                          role="group"
+                        >
+                          <span className="route-choice-ask">
+                            {t('cards.route.keptOut.ask', { wordList })}
+                          </span>
+                          <button
+                            aria-pressed={crossing === 'through' && chosen === 'plan'}
+                            className="route-way"
+                            onClick={() => {
+                              setCrossing('through');
+                              setChosen('plan');
+                            }}
+                            onMouseDown={keepFocus}
+                            type="button"
+                          >
+                            <strong>{t('cards.route.keptOut.through', { wordList })}</strong>
+                            <span>
+                              {t('cards.route.routeSummary', { stepCount: route.steps.length })}
+                            </span>
+                            <span className="route-way-cost">{survival(route)}</span>
+                          </button>
+                          <button
+                            aria-pressed={chosen === 'keptOut'}
+                            className="route-way"
+                            disabled={way === null}
+                            onClick={() => {
+                              setCrossing('round');
+                              setChosen('keptOut');
+                            }}
+                            onMouseDown={keepFocus}
+                            type="button"
+                          >
+                            <strong>
+                              {way === null
+                                ? t('cards.route.keptOut.noRound')
+                                : fetching.length > 0
+                                  ? t('cards.route.keptOut.roundFetching', {
+                                      itemList: named(fetching)
+                                    })
+                                  : t('cards.route.keptOut.round')}
+                            </strong>
+                            {way === null ? (
+                              <span className="route-way-cost">
+                                {(round.blocks ?? []).length > 0
+                                  ? round.blocks!.map(describeBlock).join('; ')
+                                  : (round.reason ?? t('cards.route.noRouteFallback'))}
+                              </span>
+                            ) : (
+                              <>
+                                <span>
+                                  {t('cards.route.routeSummary', {
+                                    stepCount: way.steps.length
+                                  })}
+                                </span>
+                                <span className="route-way-cost">{survival(way)}</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })()}
                   <div className="route-summary">
                     {/* How far, and nothing else. The router's cost is the
                     number it sorted the ways by, not a number anybody walks
@@ -975,13 +1135,15 @@ export default function RoutePanel({
                       <span className="chip off">
                         {chosen === 'round'
                           ? t('cards.route.showing.round')
-                          : chosen === 'keyed'
-                            ? t('cards.route.showing.keyed')
-                            : chosen === 'viaItem'
-                              ? t('cards.route.showing.viaItem')
-                              : chosen === 'another'
-                                ? t('cards.route.showing.another')
-                                : t('cards.route.showing.carrying')}
+                          : chosen === 'viaItem'
+                            ? t('cards.route.showing.viaItem')
+                            : chosen === 'another'
+                              ? t('cards.route.showing.another')
+                              : chosen === 'keyed'
+                                ? t('cards.route.showing.keyed')
+                                : chosen === 'keptOut'
+                                  ? t('cards.route.showing.keptOut')
+                                  : t('cards.route.showing.carrying')}
                       </span>
                     )}
                     {/* The traps, counted at the head of the list where the
@@ -1066,8 +1228,8 @@ export default function RoutePanel({
                           route.otherWay,
                           route.carrying,
                           route.viaItem,
-                          route.unlocks,
-                          route.another
+                          route.another,
+                          route.unlocks
                         ].some(
                           (other) =>
                             other !== undefined &&
@@ -1182,7 +1344,7 @@ export default function RoutePanel({
                     — because the reader's question is the same one either way,
                     and the alternative it used to hang off is absent exactly
                     when the plan itself is the way through the locked door.
-                    The item is named here: the sentence that names it sits
+                    Every item is named here: the sentence that names them sits
                     below this row, and a tick that says only *it* is a tick
                     about something the reader has to go and look for.
 
@@ -1193,12 +1355,17 @@ export default function RoutePanel({
                     {(() => {
                       const wanted = itemsWanted(shown);
                       if (wanted.length === 0) return null;
+                      // A way planned as though the pack held it is collected
+                      // whatever the tick says, so the tick says so and holds.
+                      const required = (shown.needs?.length ?? 0) > 0;
                       return (
                         <button
-                          aria-pressed={collectFirst}
+                          aria-pressed={required || collectFirst}
                           className="chip pick route-collect"
+                          disabled={required}
                           onClick={() => setCollectFirst(!collectFirst)}
                           onMouseDown={keepFocus}
+                          title={required ? t('cards.route.collectRequiredTooltip') : undefined}
                           type="button"
                         >
                           {t('cards.route.collectFirst', { itemName: named(wanted) })}
@@ -1255,6 +1422,7 @@ export default function RoutePanel({
                       control on that. */}
                       <button
                         className="route-run"
+                        disabled={choosing}
                         onClick={() => walk(shown, true)}
                         title={t('cards.route.runTooltip')}
                         type="button"
@@ -1266,6 +1434,7 @@ export default function RoutePanel({
                       {/* Also the form's default action, so Enter walks it. */}
                       <button
                         className="primary"
+                        disabled={choosing}
                         title={t('cards.route.walkTooltip')}
                         type="submit"
                       >
@@ -1293,8 +1462,8 @@ export default function RoutePanel({
                           route.otherWay,
                           route.carrying,
                           route.viaItem,
-                          route.unlocks,
-                          route.another
+                          route.another,
+                          route.unlocks
                         ].some(
                           (other) => other !== undefined && avoidsWalls(other, route.walls!)
                         ) && <span>{t('cards.route.noOtherWay')}</span>}
@@ -1349,11 +1518,10 @@ export default function RoutePanel({
                   for, and the plan itself joins the list once something else
                   is on screen, so there is always a way back. */}
                   {(() => {
-                    const items: Array<{
-                      key: Way;
-                      sentence: string;
-                    }> = [];
-                    if (chosen !== 'plan') {
+                    const items: Array<{ key: Way; sentence: string }> = [];
+                    // The two kept-out cards own the switch between the way
+                    // through and the way round, so neither is listed here.
+                    if (chosen !== 'plan' && route.keptOut === undefined) {
                       items.push({
                         key: 'plan',
                         sentence: t('cards.route.alternative.plan', {
@@ -1379,16 +1547,6 @@ export default function RoutePanel({
                         sentence: t('cards.route.alternative.carrying', {
                           itemList: [...named.values()].join(', '),
                           stepCount: route.carrying.steps.length
-                        })
-                      });
-                    }
-                    // And through the door, once its key has been fetched.
-                    if (!route.blocked && route.unlocks !== undefined && chosen !== 'keyed') {
-                      items.push({
-                        key: 'keyed',
-                        sentence: t('cards.route.alternative.keyed', {
-                          itemList: (route.unlocks.needs ?? []).map((item) => item.name).join(', '),
-                          stepCount: route.unlocks.steps.length
                         })
                       });
                     }
@@ -1431,6 +1589,20 @@ export default function RoutePanel({
                           stepCount: route.another.steps.length,
                           freshCount: route.another.steps.filter((step) => !onPlan.has(step.to))
                             .length
+                        })
+                      });
+                    }
+                    /*
+                     * And through the door, once what opens it is fetched —
+                     * named with what is fetched, because that is the price:
+                     * the steps are shorter and the errand is not.
+                     */
+                    if (route.unlocks !== undefined && chosen !== 'keyed') {
+                      items.push({
+                        key: 'keyed',
+                        sentence: t('cards.route.alternative.keyed', {
+                          itemList: named(route.unlocks.needs ?? []),
+                          stepCount: route.unlocks.steps.length
                         })
                       });
                     }

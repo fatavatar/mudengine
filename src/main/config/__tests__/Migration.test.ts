@@ -2416,10 +2416,10 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       // like the two below: the shipped file states it beside `maxHolds`, and
       // `addKey` writes to the end of a block somebody may have rearranged.
       'followSettleMs',
-      // The item errand's two clocks: how long a said phrase is waited on,
-      // and how often the pack is asked meanwhile.
+      // How long an item errand waits on a summons it asked for (todo 806).
       'errandAskMs',
-      'errandPackCheckMs',
+      // And how deep a walk fetches levers behind levers (todo 807).
+      'leverErrandDepth',
       // How long a walk waits in a room too dark to read for the light that
       // fixes it. Appended by its own later pass: this file states no
       // `heldFallbackMs` to sit beside.
@@ -2478,7 +2478,7 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       lightWaitMs: DEFAULT_INTERNAL.tuning.walk.lightWaitMs,
       followSettleMs: DEFAULT_INTERNAL.tuning.walk.followSettleMs,
       errandAskMs: DEFAULT_INTERNAL.tuning.walk.errandAskMs,
-      errandPackCheckMs: DEFAULT_INTERNAL.tuning.walk.errandPackCheckMs
+      leverErrandDepth: DEFAULT_INTERNAL.tuning.walk.leverErrandDepth
     });
     expect(text).toContain("longer than this realm's own slowest answer");
     expect(text).not.toContain('so this is already the');
@@ -3700,6 +3700,25 @@ describe('the new automation settings', () => {
     expect(automation['safety']).toBeUndefined();
   });
 
+  /*
+   * The ways and places routes keep out of (todo 806): the shipped words into
+   * a stated `movement:` block, with the paragraph, and a list the user has
+   * written — an empty one included — left as it is.
+   */
+  it('states what routes keep out of in a movement block, and keeps a stated list', () => {
+    fs.writeFileSync(home.options, 'automation:\n  movement:\n    sneak: false\n', 'utf8');
+    const profile = home.profile('vaelor');
+    fs.mkdirSync(profile.dir, { recursive: true });
+    fs.writeFileSync(profile.file, 'automation:\n  movement:\n    keepOutOf: []\n', 'utf8');
+    migrate();
+    expect(read(home.options)['movement']?.['keepOutOf']).toEqual([
+      'vortex',
+      'Negative Power Plane'
+    ]);
+    expect(fs.readFileSync(home.options, 'utf8')).toContain('routes keep out of');
+    expect(read(profile.file)['movement']?.['keepOutOf']).toEqual([]);
+  });
+
   it('keeps the notes the user wrote, says so once, and is idempotent', () => {
     migrate();
     const once = fs.readFileSync(home.options, 'utf8');
@@ -4390,7 +4409,7 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     expect(file['combat']?.['areaSettleMs']).toBe(combat.areaSettleMs);
     expect(file['spells']?.['roundGapMs']).toBe(spells.roundGapMs);
     expect(file['spells']?.['castRoundMs']).toBe(spells.castRoundMs);
-    expect(file['walk']?.['errandPackCheckMs']).toBe(walk.errandPackCheckMs);
+    expect(file['walk']?.['errandAskMs']).toBe(walk.errandAskMs);
   });
 
   /*
@@ -4588,11 +4607,11 @@ describe('waiting a condition out', () => {
  * other two where they are stated.
  */
 /*
- * The vortexes and the Negative Power Plane (2026-09-23): two switches, both
- * off, written into every file with a movement block so the setting is
- * somewhere a person can find it.
+ * The vortexes and the Negative Power Plane (2026-09-23): this fork's two
+ * switches, moved onto upstream's `keepOutOf` list (2026-09-24). A switch
+ * turned on takes its word off the list; both keys go.
  */
-describe('the regions route planning keeps out of', () => {
+describe('the regions route planning kept out of', () => {
   const profile = (): string => home.profile('vaelor').file;
   const movementOf = (): Record<string, unknown> =>
     (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
@@ -4605,36 +4624,36 @@ describe('the regions route planning keeps out of', () => {
     fs.mkdirSync(path.dirname(profile()), { recursive: true });
   });
 
-  it('writes both, off, after walkWhileConfused, with the paragraph', () => {
+  it('takes a switched-on region off the list, drops both switches, and runs once', () => {
     fs.writeFileSync(
       profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileConfused: true\n    openDoors: true\n',
+      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileConfused: false\n' +
+        '    useVortexes: true\n    enterNegativePlane: false\n',
       'utf8'
     );
     migrate();
     const movement = movementOf();
-    expect(movement['useVortexes']).toBe(false);
-    expect(movement['enterNegativePlane']).toBe(false);
-    const keys = Object.keys(movement);
-    expect(keys.indexOf('useVortexes')).toBe(keys.indexOf('walkWhileConfused') + 1);
-    expect(fs.readFileSync(profile(), 'utf8')).toContain('swirling vortexes');
-    expect(said.some((m) => m.includes('Negative Power Plane'))).toBe(true);
-  });
-
-  it('leaves a stated switch alone, adds only the missing one, and does not run twice', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n    useVortexes: true\n',
-      'utf8'
-    );
-    migrate();
-    expect(said.filter((m) => m.includes('Negative Power Plane'))).toHaveLength(1);
+    expect(movement['useVortexes']).toBeUndefined();
+    expect(movement['enterNegativePlane']).toBeUndefined();
+    expect(movement['keepOutOf']).toEqual(['Negative Power Plane']);
+    expect(said.filter((m) => m.includes('Keep Out Of'))).toHaveLength(1);
     // Each run starts its own record of what was said.
     migrate();
-    expect(said.filter((m) => m.includes('Negative Power Plane'))).toHaveLength(0);
+    expect(said.filter((m) => m.includes('Keep Out Of'))).toHaveLength(0);
+    expect(movementOf()['keepOutOf']).toEqual(['Negative Power Plane']);
+  });
+
+  it('keeps both words where both switches were off', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  movement:\n' +
+        '    useVortexes: false\n    enterNegativePlane: false\n',
+      'utf8'
+    );
+    migrate();
     const movement = movementOf();
-    expect(movement['useVortexes']).toBe(true);
-    expect(movement['enterNegativePlane']).toBe(false);
+    expect(Object.keys(movement)).not.toContain('useVortexes');
+    expect(movement['keepOutOf']).toEqual(['vortex', 'Negative Power Plane']);
   });
 });
 

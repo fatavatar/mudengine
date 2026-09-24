@@ -3,7 +3,7 @@
  *
  * A route that crosses a keyed door already says what it needs — `Route.walls`
  * where this plan itself crosses it, `hazards[].needs` where a room's spell
- * wants something carried (`itemWanted` reads both). This closes the loop: the
+ * wants something carried (`itemsWanted` reads both). This closes the loop: the
  * realm knows where an item comes from (a shop that stocks it, a monster that
  * drops it), so the client goes and gets it and then walks the route that
  * wanted it.
@@ -27,7 +27,8 @@ import type { CharacterState } from '../../shared/character';
 import type { SupplyItem } from '../../shared/config';
 import type { Loop } from '../../shared/loops';
 import { carriedCount } from '../../shared/supplies';
-import type { BuyingPlace, DropSources, RoomId, Route } from '../../shared/world';
+import type { BuyingPlace, DropSources, ItemAsk, RoomId, Route } from '../../shared/world';
+import { noteListing, packAfter, packCheck, type PackCheck } from './PackAfter';
 
 /**
  * Where the realm says an item comes from: the counters, and the lairs with
@@ -46,27 +47,14 @@ export interface ItemSources extends DropSources {
    */
   shops: readonly BuyingPlace[];
   /**
-   * Rooms where saying something gets it, nearest first — a handover (`ask
-   * sleazy shopkeeper orb`) or a script that summons a dropper (`touch
-   * statue`). See `WorldGraph.itemAsks`.
+   * Rooms where saying something gets it, nearest first — a script's handover
+   * or a room script that summons a dropper (todo 806). `WorldGraph.itemAsks`.
    */
-  asks: ReadonlyArray<{ room: RoomId; roomName: string; say: string }>;
+  asks: readonly ItemAsk[];
 }
 
 export interface ItemPlanner {
   here(): RoomId | null;
-  /** Walk to one room. Null once walking — or already standing there. */
-  walkTo(room: RoomId): string | null;
-  /** Whether a walk is under way. */
-  walking(): boolean;
-  /** Send what is said to get the item, in the room it is said in. */
-  say(command: string): void;
-  /**
-   * Ask the realm what the pack holds (`i`). A handover is said in the giver's
-   * own words, which nothing reads, so the listing is how the errand learns
-   * the thing arrived.
-   */
-  checkPack(): void;
   /**
    * Where the realm says this item comes from, from where the character stands
    * on the way to `to` — the counters by what stopping at each would add to
@@ -91,6 +79,18 @@ export interface ItemPlanner {
   walk(route: Route, run: boolean): string | null;
   /** Whether the player's own supply list names this item, so it is kept. */
   kept(name: string): boolean;
+  /** Walk to one room, as a leg. Null once walking, or when already there. */
+  walkTo(room: RoomId): string | null;
+  /** Whether a walk is under way. */
+  walking(): boolean;
+  /** Send what is said for the item, in the room it is said in. Whether the queue took it. */
+  say(command: string, onSent: () => void): boolean;
+  /** Whether that phrase is still waiting in the queue — its lapse is the only clock on it. */
+  saying(): boolean;
+  /** Ask for the pack listing that answers a handover (`PackAfter`). Whether the queue took it. */
+  listPack(onSent: () => void): boolean;
+  /** Take back a phrase or a listing still waiting in the queue. */
+  takeBack(): void;
 }
 
 export interface ItemEvents {
@@ -104,33 +104,21 @@ interface Wanted {
 }
 
 /**
- * `rest` is what the way still wants after the item in hand: a way can ask
- * for several things (2026-09-23 — three for the long way to the Dark-Elf
- * Castle), and walking it with the first alone stops at the second.
- *
  * `owes` is the route walked once the pack holds the thing — or null for a
  * quest run's fetch (todo 103), which wants the item and nothing walked
  * afterwards: the run plans its own next leg from wherever the errand ends.
- * `run` is *Run it* (todo 06), carried to the walk the errand ends in.
+ * `rest` is what the way still wants after the item in hand: a way can ask for
+ * several things, and walking it with the first alone stops at the second.
  */
 type Phase =
   | { kind: 'idle' }
-  /**
-   * At the counter, then — `checkedAt` set — waiting on the pack listing that
-   * says whether the purchase is really carried.
-   */
-  | {
-      kind: 'buying';
-      item: Wanted;
-      rest: Wanted[];
-      owes: Route | null;
-      run: boolean;
-      checkedAt: number | null;
-    }
+  | { kind: 'buying'; item: Wanted; rest: Wanted[]; owes: Route | null; run: boolean }
   | { kind: 'hunting'; item: Wanted; rest: Wanted[]; owes: Route | null; run: boolean }
   /**
-   * Going to say something for it: walking to `place`, then — `saidAt` set —
-   * waiting for the pack to hold it, asking for the pack at `checkedAt`.
+   * Going to say something for it (todo 806): walking to `place`, then —
+   * `said` — waiting for the pack to hold it: a handover read off a listing
+   * asked after the phrase (`pack`), a summons off the loot that follows the
+   * fight, for `walk.errandAskMs`.
    */
   | {
       kind: 'asking';
@@ -138,9 +126,11 @@ type Phase =
       rest: Wanted[];
       owes: Route | null;
       run: boolean;
-      place: { room: RoomId; roomName: string; say: string };
-      saidAt: number | null;
-      checkedAt: number | null;
+      place: ItemAsk;
+      said: boolean;
+      /** When the queue first refused the phrase, which bounds the retrying. */
+      refusedAt: number | null;
+      pack: PackCheck;
     }
   /**
    * The pack holds it and the way is still being offered to the walker.
@@ -179,9 +169,10 @@ export class ItemErrand {
    *
    * Returns a refusal for the window that asked — this is a press, so the
    * person is looking at the answer — and null once something is under way.
-   * **The pack is asked first**: what the character is already carrying is
-   * not fetched again, and a way whose every item is in the pack is walked
-   * now — the commonest case for a key collected on an earlier trip. `run` is
+   * **The pack is asked first**: what the character already carries is not
+   * fetched again, and a way whose every item is in the pack is walked now,
+   * which is the commonest case for a key collected on an earlier trip. Each
+   * item is fetched once: the list is the way's, deduplicated by id. `run` is
    * *Run it*, carried to the walk the errand ends in.
    */
   collect(
@@ -192,7 +183,9 @@ export class ItemErrand {
   ): string | null {
     if (this.phase.kind !== 'idle') return t('automation.collect.refusalBusy');
     if (state.phase !== 'in-game') return t('automation.collect.refusalNotInRealm');
-    const missing = items.filter((item) => carriedCount(state, item.name) === 0);
+    const missing = [...new Map(items.map((item) => [item.id, item])).values()].filter(
+      (item) => carriedCount(state, item.name) === 0
+    );
     const first = missing[0];
     if (first === undefined) {
       if (owes === null) return null;
@@ -242,7 +235,7 @@ export class ItemErrand {
       };
       const refused = this.planner.buy(row);
       if (refused !== null) return this.refuse(item, refused);
-      this.phase = { kind: 'buying', item, rest, owes, run, checkedAt: null };
+      this.phase = { kind: 'buying', item, rest, owes, run };
       /*
        * Two literal calls rather than one sentence with a figure that is
        * sometimes zero: *0 steps off the way* is a number where the reader
@@ -266,8 +259,8 @@ export class ItemErrand {
       return null;
     }
     /*
-     * **Asked before hunted**: a handover or a summoning script is a fixed
-     * place and one phrase, and a lair is a lap of fights on a chance. A
+     * **Asked before hunted** (todo 806): a handover or a summoning script is
+     * one place and one phrase, and a lair is a lap of fights on a chance. A
      * summons is still a fight — the statue has to die for the gate key — but
      * one fight in one known room.
      */
@@ -275,7 +268,8 @@ export class ItemErrand {
     if (ask !== undefined) {
       const refused = this.planner.walkTo(ask.room);
       if (refused !== null) return this.refuse(item, refused);
-      this.planner.alsoTake(item.name);
+      // A summoned dropper's loot is picked up for as long as the errand runs.
+      if (ask.summons !== undefined) this.planner.alsoTake(item.name);
       this.phase = {
         kind: 'asking',
         item,
@@ -283,11 +277,15 @@ export class ItemErrand {
         owes,
         run,
         place: ask,
-        saidAt: null,
-        checkedAt: null
+        said: false,
+        refusedAt: null,
+        pack: packCheck()
       };
+      const where = { item: item.name, say: ask.say, room: ask.roomName };
       this.events.notice?.(
-        t('automation.collect.asking', { item: item.name, say: ask.say, room: ask.roomName })
+        ask.steps === 0
+          ? t('automation.collect.askingHere', where)
+          : t('automation.collect.asking', { ...where, steps: ask.steps })
       );
       return null;
     }
@@ -329,8 +327,13 @@ export class ItemErrand {
     }
     this.phase = { kind: 'hunting', item, rest, owes, run };
     // Three literal calls, as `buying` above: *0 steps away* is a number
-    // where the reader wants a fact, and *1 steps* is not English.
-    const where = { item: item.name, mob: lair.mob, room: lair.name };
+    // where the reader wants a fact, and *1 steps* is not English. A dropper
+    // only ever summoned is named with what summons it (todo 806).
+    const mob =
+      lair.via === undefined
+        ? lair.mob
+        : t('automation.collect.summonedBy', { mob: lair.mob, summoner: lair.via });
+    const where = { item: item.name, mob, room: lair.name };
     this.events.notice?.(
       lair.steps === 0
         ? t('automation.collect.huntingHere', where)
@@ -350,21 +353,10 @@ export class ItemErrand {
   abandon(reason: string): void {
     if (this.phase.kind === 'idle') return;
     const { item } = this.phase;
+    if (this.phase.kind === 'asking') this.planner.takeBack();
     this.give();
     this.phase = { kind: 'idle' };
     this.refuse(item, t('automation.collect.abandoned', { item: item.name, why: reason }));
-  }
-
-  /**
-   * The session's clock. Waiting on a thing asked for can be quiet — nothing
-   * on the wire, so no state — and the pack is asked for, and the wait given
-   * up, by time.
-   */
-  tick(state: CharacterState): void {
-    const waiting =
-      (this.phase.kind === 'asking' && this.phase.saidAt !== null) ||
-      (this.phase.kind === 'buying' && this.phase.checkedAt !== null);
-    if (waiting) this.onCharacter(state);
   }
 
   /** Every state change: has the pack got it yet? */
@@ -395,16 +387,22 @@ export class ItemErrand {
       this.phase = { ...this.phase, why: refused };
       return;
     }
-    if (this.phase.kind === 'buying') {
-      this.onBuying(this.phase, state);
-      return;
-    }
     if (carriedCount(state, item.name) > 0) {
       this.deliver(item, owes, run, state);
       return;
     }
     if (this.phase.kind === 'asking') {
       this.onAsking(this.phase);
+      return;
+    }
+    /*
+     * The shopping errand gave up — unsold, too dear, no route. It has already
+     * said why in its own words, so this says only that the route is not being
+     * walked, which is the fact the player is waiting on.
+     */
+    if (this.phase.kind === 'buying' && !this.planner.buying()) {
+      this.phase = { kind: 'idle' };
+      this.refuse(item, t('automation.collect.refusalNotBought', { item: item.name }));
       return;
     }
     // And the lap stopping means the fights are over one way or another.
@@ -417,12 +415,14 @@ export class ItemErrand {
 
   /**
    * The pack holds it: stop collecting, say which happened, and go on to the
-   * next thing the way wants — or, with nothing left, walk on (or run on).
+   * next thing the way wants — or, with nothing left, walk on or run on.
    */
   private deliver(item: Wanted, owes: Route | null, run: boolean, state: CharacterState): void {
     const hunting = this.phase.kind === 'hunting';
     const rest =
-      this.phase.kind === 'idle' || this.phase.kind === 'delivering' ? [] : this.phase.rest;
+      this.phase.kind === 'buying' || this.phase.kind === 'hunting' || this.phase.kind === 'asking'
+        ? this.phase.rest
+        : [];
     this.give();
     this.phase = { kind: 'idle' };
     if (hunting) this.planner.stopLoop(t('automation.collect.stoppedGotIt', { item: item.name }));
@@ -443,8 +443,9 @@ export class ItemErrand {
       because: t('automation.collect.becauseDoor', { item: item.name }),
       acted: true
     });
-    // Whatever the way still wants and the pack still lacks — something the
-    // last errand picked up along the way is not fetched twice.
+    // What the way still wants and the pack still lacks: something the last
+    // errand picked up along the way is not fetched twice. A refusal there is
+    // said by `fetch`, and the way is not walked.
     const still = rest.filter((next) => carriedCount(state, next.name) === 0);
     const next = still[0];
     if (next !== undefined) {
@@ -475,76 +476,69 @@ export class ItemErrand {
   }
 
   /**
-   * The counter is done with: ask the pack, and go on by what it lists.
-   *
-   * **The listing decides, not the purchase line.** The line is read where it
-   * can be, but a realm words it as it likes — `for 6 Krabby Patties, 44
-   * platinum pieces, 80 gold crowns.` matched nothing, so the amber talisman
-   * bought for the way to the Dark-Elf Castle never read as carried and the
-   * way was never walked (reported 2026-09-23). A shopping errand that gave
-   * up — unsold, too dear, no route — is asked about the same way: it has
-   * said why in its own words, and the pack is what says whether it matters.
-   */
-  private onBuying(phase: Extract<Phase, { kind: 'buying' }>, state: CharacterState): void {
-    const { item, owes, run } = phase;
-    if (this.planner.buying()) return;
-    if (phase.checkedAt === null) {
-      this.planner.checkPack();
-      this.phase = { ...phase, checkedAt: this.now() };
-      return;
-    }
-    const listed = state.inventory.listedAt !== null && state.inventory.listedAt > phase.checkedAt;
-    // No listing yet: wait for one, up to a check's spacing, then go on what
-    // the pack is believed to hold.
-    if (!listed && this.now() - phase.checkedAt < tuning().walk.errandPackCheckMs) return;
-    if (carriedCount(state, item.name) > 0) {
-      this.deliver(item, owes, run, state);
-      return;
-    }
-    this.phase = { kind: 'idle' };
-    this.refuse(item, t('automation.collect.refusalNotBought', { item: item.name }));
-  }
-
-  /**
    * Saying it once the character stands where it is said, and giving up when
    * it cannot be said or nothing comes of it. The pack holding the item is
    * read before this, by `onCharacter`, as for every other errand.
    */
   private onAsking(phase: Extract<Phase, { kind: 'asking' }>): void {
-    const { item, place } = phase;
-    if (phase.saidAt === null) {
+    const { item, place, pack } = phase;
+    if (!phase.said) {
       if (this.planner.walking()) return;
       if (this.planner.here() !== place.room) {
-        this.give();
-        this.phase = { kind: 'idle' };
-        this.refuse(item, t('automation.collect.refusalNotReached', { room: place.roomName }));
+        this.fail(item, t('automation.collect.refusalNotReached', { room: place.roomName }));
         return;
       }
-      /*
-       * **Said, then the pack asked for.** A handover is announced in the
-       * giver's words — the gnome commander's orb never read as carried, and
-       * the errand stood there until it gave up (reported 2026-09-23). The
-       * realm answers in order, so the listing comes after whatever the
-       * phrase got.
-       */
-      this.planner.say(place.say);
-      this.planner.checkPack();
-      this.phase = { ...phase, saidAt: this.now(), checkedAt: this.now() };
+      if (!this.planner.say(place.say, () => void (pack.sentAt = this.now()))) {
+        /*
+         * A refused enqueue is *not now*, never *never* (todo 113) — a held
+         * stat screen refuses everything — but not for ever either: past the
+         * errand's own window it is said, and nothing is walked.
+         */
+        const refusedAt = phase.refusedAt ?? this.now();
+        if (this.now() - refusedAt >= tuning().walk.errandAskMs) {
+          this.fail(item, t('automation.collect.refusalUnsent', { say: place.say }));
+        } else if (phase.refusedAt === null) {
+          this.phase = { ...phase, refusedAt };
+        }
+        return;
+      }
+      this.phase = { ...phase, said: true };
       return;
     }
-    // And again while it waits: a summons is a fight before it is an item.
-    const checkedAt = phase.checkedAt ?? phase.saidAt;
-    if (this.now() - checkedAt >= tuning().walk.errandPackCheckMs) {
-      this.planner.checkPack();
-      this.phase = { ...phase, checkedAt: this.now() };
+    // Still in the queue, or dropped from it: the queue's own lapse — its
+    // expiry, or a held screen clearing it — is the only clock on that.
+    if (pack.sentAt === null) {
+      if (!this.planner.saying()) {
+        this.fail(item, t('automation.collect.refusalUnsent', { say: place.say }));
+      }
+      return;
     }
-    if (this.now() - phase.saidAt < tuning().walk.errandAskMs) return;
+    const nothing = t('automation.collect.refusalAskedNothing', {
+      item: item.name,
+      say: place.say
+    });
+    if (place.summons !== undefined) {
+      // A summons is a fight before it is an item, and the loot sentence
+      // keeps the pack true, so only the clock says nothing came of it.
+      if (this.now() - pack.sentAt >= tuning().walk.errandAskMs) this.fail(item, nothing);
+      return;
+    }
+    const read = packAfter(pack, this.now(), (onSent) => this.planner.listPack(onSent));
+    if (read === 'read') this.fail(item, nothing);
+    else if (read === 'unanswered') this.fail(item, t('automation.collect.refusalPackUnread'));
+  }
+
+  /** A listing landed, answering `answering` — the handover's, if it is ours. */
+  noteListing(answering: string | null): void {
+    noteListing(this.phase.kind === 'asking' ? this.phase.pack : null, answering);
+  }
+
+  /** The errand ends here, nothing walked: said and traced. */
+  private fail(item: Wanted, why: string): void {
+    this.planner.takeBack();
     this.give();
     this.phase = { kind: 'idle' };
-    this.refuse(
-      item,
-      t('automation.collect.refusalAskedNothing', { item: item.name, say: place.say })
-    );
+    this.refuse(item, why);
   }
 
   /** Stop taking what was only ever wanted for this errand. */

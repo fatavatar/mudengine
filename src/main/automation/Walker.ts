@@ -90,22 +90,6 @@ import { openableHere } from '../../shared/world';
  */
 type Forcing = 'bash' | 'pick' | 'open' | 'key';
 
-/** A walk to pull levers, and where to go once they are pulled. See `Walker.errands`. */
-interface Errand {
-  /** The lever rooms still to visit, in the order they are to be visited. */
-  rooms: Array<{ at: RoomId; say: string[] }>;
-  back: RoomId;
-  backName: string;
-}
-
-/**
- * How many levers-behind-levers one walk will fetch. The deepest chain in the
- * shipped realm is the Treetops of map 16, five deep; the bound is there for a
- * realm whose data loops, which `detoured` catches too but only one gate at a
- * time.
- */
-const MAX_ERRAND_DEPTH = 8;
-
 /**
  * The nudge's coalesce key — by intent, so a walk cannot queue two of them.
  *
@@ -456,32 +440,31 @@ export class Walker {
    */
   private levered = 0;
   /**
-   * The lever this walk has gone to fetch, and the journey it interrupted.
+   * The levers this walk has gone to fetch, and the journey each interrupted.
    *
    * A route that reaches a gate it cannot open asks the realm what does open
    * it (`leversFor`); where the answer is a lever in another room, the walk
    * **goes and pulls it** and then plans on to where it was going. That is one
-   * errand, held here, and it is the reason the arrival at the lever's room is
-   * not an arrival: `ended` must not fire, or a loop reading it would book the
-   * leg as arrived and advance to the next stop while the gate is still shut.
+   * errand, and it is the reason the arrival at the lever's room is not an
+   * arrival: `ended` must not fire, or a loop reading it would book the leg as
+   * arrived and advance to the next stop while the gate is still shut.
    *
-   * Empty for every walk that is not fetching one, which is nearly all of them.
-   *
-   * **A stack, because a lever can be behind a lever.** Reported 2026-09-23 in
-   * the Treetops of map 16: 551 north opens to `tear bark` said in 569, which
-   * is entered through a hidden exit opened by `push knot` in 567, behind
-   * `pull vine` in 556, behind `move branch` in 561, behind `turn knot` in
-   * 547 — five errands deep. With one errand at a time the walk reached the
-   * first hidden exit on its way to 569, could not fetch *that* lever, turned
-   * back to the gate it started at and did the whole lap again until its
-   * rounds ran out. So a gate met on an errand's way pushes an errand of its
-   * own, whose `back` is the room the outer errand was walking to; finished,
-   * it pops and the outer errand's walk goes on. The top is the one in hand.
+   * **A stack, because a lever can be behind a lever** (todo 807): a gate met
+   * on an errand's way pushes an errand of its own, whose `back` is the room
+   * the errand beneath was walking to — so its arrival there is that errand's,
+   * handed down by `finishErrand`, and never the journey's. The top is the one
+   * in hand; `tuning.walk.leverErrandDepth` bounds it and `detoured` spends
+   * each gate once. Empty for nearly every walk.
    */
-  private errands: Errand[] = [];
+  private errands: Array<{
+    /** The lever rooms still to visit, in the order they are to be visited. */
+    rooms: Array<{ at: RoomId; say: string[] }>;
+    back: RoomId;
+    backName: string;
+  }> = [];
 
   /** The errand in hand: the top of the stack, or null. */
-  private get errand(): Errand | null {
+  private get errand(): (typeof this.errands)[number] | null {
     return this.errands.at(-1) ?? null;
   }
   /**
@@ -2193,17 +2176,18 @@ export class Walker {
     if (route === null) return false;
     if (step.direction === 'portal') return false;
     /*
-     * **An errand inside an errand is pushed, never swapped in.** A gate met
-     * on the way to a lever takes `back` from the route in flight, which
-     * during an errand is the way to the outer lever room — and that is the
-     * right place to come back to, because the outer errand is still on the
-     * stack underneath and takes the arrival there as its own. Replacing it
-     * instead (the old single errand) turned the lever room into the
-     * journey's destination and fired `ended(true)` on arriving: a false
-     * arrival. Bounded by depth, and `detoured` below spends each gate once,
-     * so a ring of levers cannot recurse for ever.
+     * **An errand met on an errand's way is pushed, never swapped in** (todo
+     * 807). `back` is taken from the route in flight, which during an errand
+     * is the way to the outer errand's lever room rather than to where the
+     * player asked to go — and that is the right place to come back to,
+     * because the outer errand is still on the stack beneath and takes the
+     * arrival there as its own. Swapping it in (the old single slot) made the
+     * lever room the journey's destination and fired `ended(true)` on reaching
+     * it, a loop booking a leg it never walked, so a second gate was left to
+     * the barrier ladder and a chain of five levers lapped its rooms until the
+     * rounds ran out. Bounded by depth; `detoured` spends each gate once.
      */
-    if (this.errands.length >= MAX_ERRAND_DEPTH) return false;
+    if (this.errands.length >= tuning().walk.leverErrandDepth) return false;
     const key = `${step.from}|${step.direction}`;
     if (this.detoured.has(key)) return false;
     const levers = this.events.leversFor?.(step.from, step.direction) ?? [];
@@ -2372,8 +2356,10 @@ export class Walker {
     if (errand === null) return false;
     const done = errand.rooms.shift();
     if (done === undefined) {
+      // An errand with nothing left to pull: its arrival, like the branch
+      // below, is the errand beneath's where there is one (todo 807).
       this.errands.pop();
-      return false;
+      return this.errand === null ? false : this.finishErrand(state);
     }
     /*
      * The levers go out before the fight is consulted, deliberately. They are
@@ -2432,13 +2418,15 @@ export class Walker {
        */
       if (next !== undefined) return this.finishErrand(state);
       /*
-       * The last leg of a nested errand ends in the room the errand beneath
-       * it was walking to — so this arrival is that errand's, and it is
-       * handed down rather than reported as the journey's.
+       * The last lever of a nested errand pulled where its way back begins:
+       * that room is the one the errand beneath was walking to, so this is
+       * its arrival, handed down — never the journey's (todo 807).
        */
       this.errands.pop();
       return this.errand === null ? false : this.finishErrand(state);
     }
+    // Walking back: the way to `back` is the errand beneath's own walk, and
+    // arriving is its arrival, or the journey's where there is none.
     if (next === undefined) this.errands.pop();
     this.walked += this.index;
     this.route = on;

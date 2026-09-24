@@ -1166,22 +1166,13 @@ const TUNING_DEFAULTS = {
      */
     errandHandoverMs: 15_000,
     /**
-     * How long the item errand waits for a thing it asked for by saying
-     * something (2026-09-23) — `ask sleazy shopkeeper orb`, or `touch statue`,
-     * which summons the obsidian statue that drops the gate key. A summons is a
-     * fight before it is an item, so minutes rather than seconds; past this the
-     * errand says it asked and nothing came, and walks nowhere.
+     * How long the item errand waits after saying the phrase that summons a
+     * monster which drops the item (todo 806) — `touch statue`, and the statue
+     * has to die. A summons is a fight before it is an item, so minutes; past
+     * it the errand says nothing came of it and walks nowhere. A handover is
+     * bounded by its pack listing instead (`PackAfter`).
      */
     errandAskMs: 180_000,
-    /**
-     * How often the item errand asks for the pack (`i`) while it waits on a
-     * thing it asked for (2026-09-23). A handover is said in the giver's own
-     * words — no pattern reads *the gnome commander gives you …* — so the
-     * listing is how the client learns the orb arrived; it is asked once
-     * straight after the phrase, and again at this spacing until the item is
-     * there or `errandAskMs` is up.
-     */
-    errandPackCheckMs: 10_000,
     /**
      * How long a walk stands still for a condition before spending one step
      * to find out whether it is over.
@@ -1372,6 +1363,13 @@ const TUNING_DEFAULTS = {
      * search is a skill check the realm expects to fail sometimes.
      */
     leverTries: 2,
+    /**
+     * How many levers-behind-levers one walk will fetch (todo 807): an errand
+     * met on an errand's way is pushed onto the one it serves. The deepest the
+     * fork reported is five (the Treetops' chain); the bound is for a realm
+     * whose data loops, which `detoured` catches one gate at a time.
+     */
+    leverErrandDepth: 8,
     /**
      * How long a walk stands at a shut door it could not force before running
      * the whole ladder again.
@@ -1932,6 +1930,13 @@ const TUNING_DEFAULTS = {
      * walker, which fetches it when the door refuses.
      */
     leverDetourCost: 60,
+    /**
+     * How many times the walk to the nearest place a key is had is counted
+     * when a way through its door is weighed against the way round
+     * (`Route.unlocks`): there and back. A drop is a fight and a chance on
+     * top, so the figure is a floor under the errand, not its cost.
+     */
+    keyFetchTrips: 2,
     /**
      * How many of a consumable a quest's plan buys against a room spell on
      * the way, where the realm says using one stops the spell.
