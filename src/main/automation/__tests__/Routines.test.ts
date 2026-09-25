@@ -843,3 +843,124 @@ describe('owning the status line', () => {
     expect(sent(off.queue)).toEqual([]);
   });
 });
+
+/*
+ * skinny entered the realm on the ground on 2026-09-25, the entry probe's
+ * `st` never went out, and every health figure read "unknown, so not low"
+ * while he walked a route at 17%. The required facts are asked for until the
+ * state has read them.
+ */
+describe('asking for what has not been read', () => {
+  const read = {
+    ...inRealm,
+    vitals: { ...inRealm.vitals, hp: 100, hpMax: 649 },
+    inventory: { ...inRealm.inventory, listedAt: 1 }
+  };
+  const asked = (enqueue: { mock: { calls: ReadonlyArray<readonly unknown[]> } }): string[] =>
+    enqueue.mock.calls
+      .map(([intent]) => (intent as { command: string }).command)
+      .filter((command) => command === 'st' || command === 'i');
+  const count = (commands: string[], command: string): number =>
+    commands.filter((each) => each === command).length;
+
+  it('asks again past the retry while no listing has come back', () => {
+    const { routines, queue } = make();
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    const first = count(asked(enqueue), 'st');
+    expect(first).toBeGreaterThan(0);
+    vi.advanceTimersByTime(10_000);
+    routines.onCharacter(inRealm);
+    expect(count(asked(enqueue), 'st')).toBe(first);
+    vi.advanceTimersByTime(25_000);
+    routines.onCharacter(inRealm);
+    expect(count(asked(enqueue), 'st')).toBe(first + 1);
+    routines.dispose();
+  });
+
+  it('asks only for what is still unread', () => {
+    const { routines, queue } = make();
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    const before = asked(enqueue);
+    vi.advanceTimersByTime(60_000);
+    // The pack has been listed, the sheet has not.
+    routines.onCharacter({ ...inRealm, inventory: { ...inRealm.inventory, listedAt: 1 } });
+    const after = asked(enqueue).slice(before.length);
+    expect(after).toEqual(['st']);
+    routines.dispose();
+  });
+
+  it('stops once the state has read them', () => {
+    const { routines, queue } = make();
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    const before = asked(enqueue).length;
+    vi.advanceTimersByTime(60_000);
+    routines.onCharacter(read);
+    expect(asked(enqueue)).toHaveLength(before);
+    routines.dispose();
+  });
+
+  // A realm whose sheet prints no hit points has answered; asking it for ever
+  // would be a command every half minute spent on the same silence.
+  it('stops once the listing has come back, whatever it said', () => {
+    const { routines, queue } = make();
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    routines.onBlock({ type: 'player-status', groups: {}, at: 0 } as never);
+    const before = count(asked(enqueue), 'st');
+    vi.advanceTimersByTime(60_000);
+    routines.onCharacter(inRealm);
+    expect(count(asked(enqueue), 'st')).toBe(before);
+    routines.dispose();
+  });
+
+  /* The entry probe is the first ask; this is the retry, never a second first. */
+  it('adds nothing to the entry probe on the way in', () => {
+    const { routines, queue } = make();
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    expect(count(asked(enqueue), 'st')).toBe(1);
+    expect(count(asked(enqueue), 'i')).toBe(1);
+    routines.dispose();
+  });
+
+  /* The player's choice: a probe list without `i` never has `i` added to it. */
+  it('retries only what the player asks on the way in', () => {
+    const { routines, queue } = make({ onEnterRealm: ['st'] });
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    vi.advanceTimersByTime(60_000);
+    routines.onCharacter(inRealm);
+    expect(count(asked(enqueue), 'i')).toBe(0);
+    expect(count(asked(enqueue), 'st')).toBe(2);
+    routines.dispose();
+  });
+
+  /* A level clears the maxima; unread again is retried again. */
+  it('retries a fact that was read and is unread again', () => {
+    const { routines, queue } = make();
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    routines.onCharacter(read);
+    const before = count(asked(enqueue), 'st');
+    const cleared = { ...read, vitals: { ...read.vitals, hpMax: null } };
+    routines.onCharacter(cleared);
+    expect(count(asked(enqueue), 'st')).toBe(before);
+    vi.advanceTimersByTime(35_000);
+    routines.onCharacter(cleared);
+    expect(count(asked(enqueue), 'st')).toBe(before + 1);
+    routines.dispose();
+  });
+
+  it('asks nothing with automation off', () => {
+    const { routines, queue } = make({ enabled: false });
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.onCharacter(inRealm);
+    vi.advanceTimersByTime(60_000);
+    routines.onCharacter(inRealm);
+    expect(asked(enqueue)).toEqual([]);
+    routines.dispose();
+  });
+});

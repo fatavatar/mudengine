@@ -400,6 +400,13 @@ tuning:
     # window are answered by the same listing.
     rosterAskMs: 60000
 
+    # How long the stat sheet or the pack may go unread after entering the
+    # realm before it is asked for again. The first ask can be lost -- entering
+    # on the ground, confused, behind a half-typed line -- and without the
+    # sheet no health figure is known to be low, so a rest, a walk's hold and
+    # @wait all let a character walk on at 17%.
+    unreadRetryMs: 30000
+
     # The floor between two looks at other players, and how long one is worth
     # sending. A room that fills up should not spend six commands at once on
     # something nobody asked for urgently -- and the answer is about somebody

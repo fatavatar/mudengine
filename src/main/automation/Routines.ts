@@ -52,7 +52,7 @@ import { t } from '../app/i18n';
 import type { AutomationConfig } from '../../shared/config';
 import type { CharacterState } from '../../shared/character';
 import type { Block, BlockType } from '../../shared/blocks';
-import { REFRESH, staleAfter, type StaleFact } from '../../shared/staleness';
+import { READ, REFRESH, staleAfter, unread, type StaleFact } from '../../shared/staleness';
 import { SET_STATLINE } from '../../shared/statline';
 import { tuning } from '../app/tuning';
 
@@ -124,6 +124,11 @@ export class Routines {
   private sheetTimer: NodeJS.Timeout | null = null;
   /** The wrong-book correction has run, so it can only run once. */
   private bookCorrected = false;
+  /**
+   * Each required fact asked for while unread: when, and whether its listing
+   * has come back since. Forgotten once the fact is read. See `askUnread`.
+   */
+  private readonly unreadAsks = new Map<StaleFact, { at: number; answered: boolean }>();
 
   constructor(
     private config: AutomationConfig,
@@ -149,6 +154,7 @@ export class Routines {
     this.askedBook = null;
     this.askedAbilities = false;
     this.bookCorrected = false;
+    this.unreadAsks.clear();
     this.lastSent = Date.now();
     this.inRealm = false;
     this.stopIdle();
@@ -221,6 +227,7 @@ export class Routines {
      * not be known until the stat sheet the batch itself asks for answers.
      */
     this.askSpellbook(state);
+    this.askUnread(state);
     /*
      * And the third drain of the roster flag, for a character that neither
      * goes quiet nor sees another arrival: the window opens mid-fight as
@@ -465,6 +472,9 @@ export class Routines {
    */
   onBlock(block: Block): void {
     if (!this.config.enabled) return;
+    for (const [fact, asked] of this.unreadAsks) {
+      if (READ[fact].answeredBy === block.type) asked.answered = true;
+    }
     if (block.type === 'spellbook-refused') {
       const book = block.groups?.['book'];
       if (this.bookCorrected || (book !== 'spells' && book !== 'powers')) return;
@@ -537,6 +547,39 @@ export class Routines {
      */
     const stale = staleAfter(block.type);
     if (stale.length > 0) this.refresh(stale, this.whyStale(block.type));
+  }
+
+  /**
+   * The facts nothing can be trusted without (`REQUIRED`), asked for again
+   * until read.
+   *
+   * The entry probe is the first ask, and its answer can be lost however the
+   * character came in — on the ground, confused, behind a half-typed line —
+   * so this asks whether, never why: a fact the state has still not read
+   * `tuning.queue.unreadRetryMs` after it was first seen unread is asked for
+   * through the same refresh a level-up uses, on the status lines that arrive
+   * anyway. Only a fact the player's own `onEnterRealm` asks for: this makes
+   * their ask land, and adds none they did not choose. And only while its
+   * listing has not come back since: a realm that answered without the figure
+   * has answered, and asking it for ever would be a command every half minute
+   * spent on the same silence.
+   */
+  private askUnread(state: CharacterState, now: number = Date.now()): void {
+    if (!this.config.enabled || !this.probed) return;
+    const asked = new Set(this.config.onEnterRealm);
+    const missing = unread(state).filter((fact) => asked.has(REFRESH[fact].command));
+    for (const fact of this.unreadAsks.keys()) {
+      if (!missing.includes(fact)) this.unreadAsks.delete(fact);
+    }
+    const due: StaleFact[] = [];
+    for (const fact of missing) {
+      const last = this.unreadAsks.get(fact);
+      if (last === undefined) this.unreadAsks.set(fact, { at: now, answered: false });
+      else if (!last.answered && now - last.at >= tuning().queue.unreadRetryMs) due.push(fact);
+    }
+    if (due.length === 0) return;
+    for (const fact of due) this.unreadAsks.set(fact, { at: now, answered: false });
+    this.refresh(due, t('automation.routines.reasonUnread'));
   }
 
   /** Asks for each stale fact once, in the words of whatever made it stale. */

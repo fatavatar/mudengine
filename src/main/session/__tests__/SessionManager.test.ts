@@ -4205,6 +4205,61 @@ describe('what the realm knows about a player, between characters', () => {
  * away — `just left upwards` was read as a monster, so Fatty stayed resting
  * too. A follower asks its leader to stop for what would stop its own walk.
  */
+/*
+ * skinny entered the realm on the ground (2026-09-25), the entry probe's `st`
+ * was never answered, and with no maximum every health figure read "unknown,
+ * so not low" while he walked a route at 17%. The sheet is asked for again.
+ */
+describe('a stat sheet that never came back', () => {
+  afterEach(() => setTuning(DEFAULT_INTERNAL.tuning));
+
+  it('is asked for again until the maximum is read', async () => {
+    setTuning({
+      ...DEFAULT_INTERNAL.tuning,
+      queue: { ...DEFAULT_INTERNAL.tuning.queue, unreadRetryMs: 150 }
+    });
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, { ...DEFAULT_CONFIG.automation, enabled: true });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const wire: string[] = [];
+    let hp = -11;
+    // A realm that answers every command with a status line and nothing else:
+    // the sheet is asked for and never comes back.
+    socket.on('data', (chunk) => {
+      for (const line of chunk.toString('latin1').split('\r\n').filter(Boolean)) {
+        wire.push(line);
+        socket.write(`[HP=${hp}/MA=500]:` + PROMPT_REPAINT);
+      }
+    });
+    const sheets = (): number => wire.filter((line) => line === 'st').length;
+
+    socket.write(
+      'Dark Temple\r\nAlso here: Champion of Blood.\r\nObvious exits: east\r\n[HP=-11/MA=500]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => sheets() === 1);
+    // Past the retry, the next status line asks again.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    hp = -10;
+    socket.write('[HP=-10/MA=500]:' + PROMPT_REPAINT);
+    await until(() => sheets() === 2);
+
+    hp = 109;
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   109/649   Armour Class: 112/4  Thievery:        0\r\n' +
+        '[HP=109/MA=500]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => manager!.character.vitals.hpMax === 649);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    socket.write('[HP=110/MA=500]:' + PROMPT_REPAINT);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sheets()).toBe(2);
+  });
+});
+
 describe('a follower asking its leader to wait', () => {
   it('asks for being held, and never for a rest kept with the leader', async () => {
     const { sink } = collect();

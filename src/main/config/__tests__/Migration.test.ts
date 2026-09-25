@@ -5286,6 +5286,19 @@ describe('the walker’s search count', () => {
     ).tuning.queue;
     expect(queue['fumbleRetryMs']).toBe(DEFAULT_INTERNAL.tuning.queue.fumbleRetryMs);
   });
+
+  /* And how long a required fact may go unread before it is asked again (2026-09-25). */
+  it('writes in the unread retry', () => {
+    fs.writeFileSync(home.internal, 'tuning:\n  queue:\n    rosterAskMs: 60000\n', 'utf8');
+    migrate();
+    const queue = (
+      parse(fs.readFileSync(home.internal, 'utf8')) as {
+        tuning: { queue: Record<string, unknown> };
+      }
+    ).tuning.queue;
+    expect(queue['unreadRetryMs']).toBe(DEFAULT_INTERNAL.tuning.queue.unreadRetryMs);
+    expect(queue['rosterAskMs']).toBe(60000);
+  });
 });
 
 /*

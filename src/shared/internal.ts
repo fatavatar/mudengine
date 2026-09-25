@@ -441,6 +441,15 @@ const TUNING_DEFAULTS = {
      */
     rosterAskMs: 60_000,
     /**
+     * How long a required fact the entry probe asked for may go unread before
+     * it is asked again (`REQUIRED` in `src/shared/staleness.ts`: the sheet
+     * and the pack). skinny entered the realm on the ground, the `st` never
+     * went out, and he walked a route at 17% with every health figure reading
+     * *unknown, so not low* (2026-09-25). Long enough for an answer on a busy
+     * realm; one `st` and one `i` a half minute is what an unread sheet costs.
+     */
+    unreadRetryMs: 30_000,
+    /**
      * The floor between two looks at other players.
      *
      * A room that fills up should not spend six commands at once on something
