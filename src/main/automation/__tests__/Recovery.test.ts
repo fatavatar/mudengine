@@ -771,6 +771,55 @@ describe('resting with the leader', () => {
     drain();
     expect(sent).toEqual([]);
   });
+
+  /*
+   * skinny, 2026-09-25: under `meditateBelow` in a fight, back over it before
+   * the fight let him sit, `@wait` for mana said — and then `rest` beside a
+   * resting Fatty. The stretch began at the crossing, so it is `med`.
+   */
+  it('meditates beside a resting leader for a mana stretch begun in a fight', () => {
+    const recovery = new Recovery(health({ meditateBelow: 0.5, meditateTo: 0.95 }), true, queue, {
+      ...DEFAULT_CONFIG.automation.party,
+      restWithLeader: true
+    });
+    recovery.observe(state({ hp: 100, hpMax: 100, mana: 40, manaMax: 100 }));
+    recovery.onCharacter(
+      state({ hp: 100, hpMax: 100, mana: 60, manaMax: 100, party: together({ state: 'resting' }) })
+    );
+    drain();
+    expect(sent).toEqual(['med']);
+  });
+});
+
+/*
+ * A floor crossed where nothing may sit down — a fight, a walk marching —
+ * still begins the stretch the walker and a follower's `@wait` hold to
+ * (2026-09-25). Seen by `observe`, on every status line.
+ */
+describe('a stretch begun where sitting down was not allowed', () => {
+  it('rests on to restTo after health came back over restBelow', () => {
+    const recovery = make(health({ restBelow: 0.35, restTo: 0.7 }));
+    recovery.observe(state({ hp: 30, hpMax: 100 }));
+    recovery.onCharacter(state({ hp: 60, hpMax: 100 }));
+    drain();
+    expect(sent).toEqual(['rest']);
+  });
+
+  it('meditates on to meditateTo after mana came back over meditateBelow', () => {
+    const recovery = make(health({ restBelow: 0, meditateBelow: 0.5, meditateTo: 0.95 }));
+    recovery.observe(state({ hp: 100, hpMax: 100, mana: 40, manaMax: 100 }));
+    recovery.onCharacter(state({ hp: 100, hpMax: 100, mana: 60, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual(['med']);
+  });
+
+  it('begins nothing above the floors', () => {
+    const recovery = make(health({ restBelow: 0.35, restTo: 0.7, meditateBelow: 0.5 }));
+    recovery.observe(state({ hp: 60, hpMax: 100, mana: 60, manaMax: 100 }));
+    recovery.onCharacter(state({ hp: 60, hpMax: 100, mana: 60, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual([]);
+  });
 });
 
 /*

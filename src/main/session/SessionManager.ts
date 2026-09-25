@@ -5458,8 +5458,11 @@ export class SessionManager {
     // And the key to a way out of this room, off this room's floor.
     this.keys.onCharacter(state);
     this.events.onCharacter(state);
-    // Telling a party leader this character has sat down, and that it is up
-    // again. A fact about this character, so it goes out with the others.
+    // Where a floor is crossed, a stretch of resting or meditating begins,
+    // whether or not sitting down is allowed there; see `Recovery.observe`.
+    this.recovery.observe(state);
+    // Telling a party leader this character has to stop, and that it is
+    // ready again. A fact about this character, so it goes out with the others.
     this.remotes.onCharacter(state);
     // And the members under the line, for the lap this character leads.
     this.paceForHealth(state);

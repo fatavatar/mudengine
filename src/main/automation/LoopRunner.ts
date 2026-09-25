@@ -50,6 +50,7 @@ import { fightIsRunning } from './Walker';
 import type { CharacterState } from '../../shared/character';
 import {
   DEFAULT_CONFIG,
+  healthHolding,
   manaHolding,
   resumeAtHealth,
   type HealthConfig,
@@ -986,16 +987,21 @@ export class LoopRunner {
       if (!spent) this.events.notice?.(t('automation.loops.afflictionOver'));
       this.publish();
     }
-    const fraction =
-      state.vitals.hp !== null && state.vitals.hpMax ? state.vitals.hp / state.vitals.hpMax : null;
+    const { hp, hpMax, mana, manaMax } = state.vitals;
+    const margin = tuning().loop.resumeMarginWhenUncapped;
+    const fraction = hp !== null && hpMax ? hp / hpMax : null;
+    // Unknown holds nothing and ends nothing: a hold waits for a figure.
     if (fraction !== null) {
       if (this.hurt) {
-        if (fraction < this.resumeAt()) return;
+        if (healthHolding(this.health, hp, hpMax, true, margin)) return;
         this.hurt = false;
         this.drained = false;
         this.events.notice?.(t('automation.loops.mended'));
         this.publish();
-      } else if (fraction < this.health.restBelow && this.status === 'running') {
+      } else if (
+        this.status === 'running' &&
+        healthHolding(this.health, hp, hpMax, false, margin)
+      ) {
         this.hurt = true;
         this.waiting = true;
         this.events.notice?.(t('automation.loops.tooHurt'));
@@ -1008,8 +1014,6 @@ export class LoopRunner {
      * above it lets it go (`resumeAtMana`). `Recovery` meditates while the lap
      * stands here, which it cannot do while the lap is marching.
      */
-    const { mana, manaMax } = state.vitals;
-    const margin = tuning().loop.resumeMarginWhenUncapped;
     if (this.drained) {
       if (manaHolding(this.health, mana, manaMax, true, margin)) return;
       this.drained = false;

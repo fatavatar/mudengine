@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { afflictionHolding, stillFled, type FledRoom } from '../walk';
-import { NO_AFFLICTIONS, type StatedEffect } from '../character';
+import { afflictionHolding, stillFled, stillFor, type FledRoom } from '../walk';
+import { EMPTY_CHARACTER, NO_AFFLICTIONS, type StatedEffect } from '../character';
+import { DEFAULT_CONFIG, healthHolding, type HealthConfig } from '../config';
 
 /*
  * The rooms an escape must not run back into, and *when* that list forgets.
@@ -102,5 +103,70 @@ describe("what the realm's messages say stands a walk still", () => {
         stated({ effects: ['confused'] })
       ])
     ).toBe('held');
+  });
+});
+
+/*
+ * What would stand a character still, on the walker's and the loop's own
+ * predicates, for a follower's `@wait` (2026-09-25) — so a follower asks its
+ * leader to stop at exactly the figures its own walk would, and walks on at
+ * the same ones.
+ */
+describe('why a character would stand still', () => {
+  const health: HealthConfig = {
+    ...DEFAULT_CONFIG.automation.health,
+    restBelow: 0.5,
+    restTo: 0.9,
+    meditateBelow: 0.3,
+    meditateTo: 0.8
+  };
+  const config = { health, movement: DEFAULT_CONFIG.automation.movement };
+  const at = (hp: number, mana: number | null = null, over = {}) => ({
+    ...EMPTY_CHARACTER,
+    ...over,
+    vitals: { ...EMPTY_CHARACTER.vitals, hp, hpMax: 100, mana, manaMax: mana === null ? null : 100 }
+  });
+
+  it('is health under the floor, and stays so to the ceiling', () => {
+    expect(stillFor(at(40), config, null, 0.1)).toBe('health');
+    expect(stillFor(at(70), config, null, 0.1)).toBeNull();
+    expect(stillFor(at(70), config, 'health', 0.1)).toBe('health');
+    expect(stillFor(at(95), config, 'health', 0.1)).toBeNull();
+  });
+
+  it('is mana on the same terms', () => {
+    expect(stillFor(at(100, 20), config, null, 0.1)).toBe('mana');
+    expect(stillFor(at(100, 50), config, 'mana', 0.1)).toBe('mana');
+    expect(stillFor(at(100, 85), config, 'mana', 0.1)).toBeNull();
+  });
+
+  // A ceiling carries on only what was stopped for: held, then freed at 70%,
+  // walks on, as the walker's one hold slot does.
+  it('reads a ceiling only for the reason being waited on', () => {
+    expect(stillFor(at(70), config, 'held', 0.1)).toBeNull();
+  });
+
+  it('puts what the server stated first', () => {
+    const held = at(40, null, { afflictions: { ...NO_AFFLICTIONS, held: 'yes' } });
+    expect(stillFor(held, config, null, 0.1)).toBe('held');
+  });
+
+  it('is not sitting down', () => {
+    const sitting = at(70);
+    sitting.vitals = { ...sitting.vitals, resting: true };
+    expect(stillFor(sitting, config, null, 0.1)).toBeNull();
+  });
+
+  /* `restTo` 0 is the single sit-down, not a zero-width band: the margin is. */
+  it('walks on a margin above the floor where there is no ceiling', () => {
+    const uncapped = { ...health, restTo: 0 };
+    expect(healthHolding(uncapped, 55, 100, true, 0.1)).toBe(true);
+    expect(healthHolding(uncapped, 65, 100, true, 0.1)).toBe(false);
+  });
+
+  it('holds for nothing unknown, and for nothing with the floor off', () => {
+    expect(healthHolding(health, null, 100, false, 0.1)).toBe(false);
+    expect(healthHolding(health, 40, null, false, 0.1)).toBe(false);
+    expect(healthHolding({ ...health, restBelow: 0 }, 1, 100, true, 0.1)).toBe(false);
   });
 });

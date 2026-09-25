@@ -216,6 +216,7 @@ export class Recovery {
    * Armed by the **wire**, not by the proposal: whoever sat the character down
    * — this module, or the player typing `rest` — the sitting is what `restTo`
    * continues, and a rest the player started is one they want the benefit of.
+   * And by health crossing `restBelow` wherever it is crossed (`observe`).
    * Cleared the moment health reaches the ceiling, and on `reset`.
    */
   private sitting = false;
@@ -224,7 +225,8 @@ export class Recovery {
    * `resumeAtMana`, the figure a walk held for mana walks on at. Without it a
    * cast that broke the meditation above `meditateBelow` left the character
    * standing for the rest of a hold that was waiting on the mana it was no
-   * longer regaining. Armed by the wire's `(Meditating)`, cleared at the figure.
+   * longer regaining. Armed by the wire's `(Meditating)` and by mana crossing
+   * `meditateBelow` (`observe`), cleared at the figure.
    */
   private meditatingOn = false;
   /**
@@ -372,6 +374,24 @@ export class Recovery {
    * safety decision here, for the same reason — it should be possible to see at
    * a glance exactly what had to be true.
    */
+  /**
+   * Starts a stretch where a floor is crossed, on every status line, whether
+   * or not sitting down is allowed there.
+   *
+   * The walker, the loop and a follower's `@wait` hold from the crossing to
+   * the ceiling (`healthHolding`, `manaHolding`); this module armed its
+   * stretch only once the character was seen sitting, and it is asked only
+   * where sitting is allowed. skinny went under `meditateBelow` in a fight,
+   * mana came back over it before the fight let him sit, and he told Fatty
+   * `@wait` for mana and then rested beside him instead of meditating
+   * (2026-09-25): the need was the party's and not this module's.
+   */
+  observe(state: CharacterState): void {
+    const { hp, hpMax, mana, manaMax } = state.vitals;
+    if (this.below(hp, hpMax, this.config.restBelow)) this.sitting = true;
+    if (this.below(mana, manaMax, this.config.meditateBelow)) this.meditatingOn = true;
+  }
+
   /**
    * Whether this line would sit the character down, or keep it sitting —
    * read without deciding, for `RestAway`, which asks before the rest is

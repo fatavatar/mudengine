@@ -6678,7 +6678,6 @@ function theTuningBlockGainedKeys(
     addKey('world', 'hazardSupplyCount', DEFAULT_INTERNAL.tuning.world.hazardSupplyCount);
     // The router's reach for a lever in another room (2026-09-24).
     addKey('world', 'leverDetourCost', DEFAULT_INTERNAL.tuning.world.leverDetourCost);
-    addKey('remotes', 'okAfterMs', DEFAULT_INTERNAL.tuning.remotes.okAfterMs);
     /*
      * This fork's own clocks (2026-09-22 to 09-23), which reached no file that
      * already stated their groups: which attack a `*Combat Engaged*` answers,
@@ -6756,6 +6755,13 @@ function theTuningBlockGainedKeys(
      * (`PackAfter`, todo 806): nothing asks for the pack on a clock now.
      */
     dropKey('walk', 'errandPackCheckMs');
+    /*
+     * The follower's settle before `@ok` (this fork, 2026-09-24), retired when
+     * `@wait` went by the walker's own figures (`stillFor`, 2026-09-25): a
+     * hold that ends at its ceiling cannot flicker, and waiting past it only
+     * kept a leader standing.
+     */
+    dropKey('remotes', 'okAfterMs');
     const tallyAt = tuning.items.findIndex((item) => keyText(item) === 'tally');
     if (tallyAt !== -1) {
       tuning.items.splice(tallyAt, 1);
