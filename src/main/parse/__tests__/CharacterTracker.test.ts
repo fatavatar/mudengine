@@ -6101,6 +6101,29 @@ describe('the opening of a PvP fight', () => {
       expect.arrayContaining(['giant wasp', 'Caligula'])
     );
   });
+
+  /*
+   * skinny, 2026-09-25: `swoops down` is two words, and the frame's one-word
+   * verb made each swoop another wyvern — 125 in one evening, and a room
+   * spell set for four went off on three. The room names who swung.
+   */
+  it('reads a swing by something listed as that thing, whatever its verb', () => {
+    const t = play([
+      '[HP=159]:',
+      'Dark Forest, Trail',
+      'Also here: Fatty, red wyvern, green wyvern, thin green wyvern.',
+      'Obvious exits: northeast, northwest',
+      '[HP=159]:',
+      'The red wyvern swoops down at Fatty!',
+      'The thin green wyvern swoops down at Fatty!'
+    ]);
+    expect(names(t.current.room.occupants)).toEqual([
+      'Fatty',
+      'red wyvern',
+      'green wyvern',
+      'thin green wyvern'
+    ]);
+  });
 });
 
 describe('loot and listings from other realms', () => {
