@@ -15,7 +15,16 @@
 import { describe, expect, it } from 'vitest';
 
 import { domainOf } from '../blocks';
-import { REFRESH, STALE_AFTER, staleAfter, type StaleFact } from '../staleness';
+import { EMPTY_CHARACTER } from '../character';
+import {
+  READ,
+  REFRESH,
+  REQUIRED,
+  STALE_AFTER,
+  staleAfter,
+  unread,
+  type StaleFact
+} from '../staleness';
 
 const FACTS: readonly StaleFact[] = ['sheet', 'experience', 'pack'];
 
@@ -53,5 +62,35 @@ describe('what a sentence made stale', () => {
   it('answers a sentence that invalidated nothing with nothing', () => {
     expect(staleAfter('room-name')).toEqual([]);
     expect(staleAfter('user-levels')).toEqual(['sheet', 'experience']);
+  });
+});
+
+/*
+ * The facts asked for until read (2026-09-25): skinny entered the realm on
+ * the ground, the entry probe's `st` never went out, and every health figure
+ * read "unknown, so not low" while he walked a route at 17%.
+ */
+describe('what has not been read', () => {
+  it('says how every fact is read and which listing answers it', () => {
+    expect(Object.keys(READ).sort()).toEqual([...FACTS].sort());
+    for (const fact of FACTS) expect(domainOf(READ[fact].answeredBy), fact).toBeTruthy();
+  });
+
+  it('requires the sheet and the pack', () => {
+    expect([...REQUIRED].sort()).toEqual(['pack', 'sheet']);
+    expect(unread(EMPTY_CHARACTER)).toEqual(['sheet', 'pack']);
+  });
+
+  it('reads each off the state, never off having asked', () => {
+    const seen = {
+      ...EMPTY_CHARACTER,
+      vitals: { ...EMPTY_CHARACTER.vitals, hpMax: 649 },
+      inventory: { ...EMPTY_CHARACTER.inventory, listedAt: 1 }
+    };
+    expect(unread(seen)).toEqual([]);
+    // Carrying nothing is read; nobody having looked is not.
+    expect(
+      unread({ ...seen, inventory: { ...seen.inventory, items: [], listedAt: null } })
+    ).toEqual(['pack']);
   });
 });

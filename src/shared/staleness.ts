@@ -22,6 +22,7 @@
  * inside one process.
  */
 import type { BlockType } from './blocks';
+import type { CharacterState } from './character';
 
 /**
  * A fact the client holds that exactly one command re-establishes.
@@ -92,4 +93,51 @@ export const STALE_AFTER: Partial<Record<BlockType, readonly StaleFact[]>> = {
 /** What this sentence made stale — empty for the ones that made nothing stale. */
 export function staleAfter(type: BlockType): readonly StaleFact[] {
   return STALE_AFTER[type] ?? [];
+}
+
+/**
+ * How each fact shows it has been read, and the block that answers its command.
+ *
+ * The other half of the table: a fact can be out of date because a sentence
+ * said so (`STALE_AFTER`), or because it was never read at all. The entry
+ * probe asks for all of them on the way in, and the answer can be lost —
+ * skinny entered the realm on the ground on 2026-09-25, the entry probe's `st`
+ * never went out, and every health figure read *unknown, so not low* while he
+ * walked a route at 17%. A confused character's fumble, a refusal and a
+ * half-typed line lose it the same way.
+ *
+ * `read` is the state's own word, never a memory of having asked. `answeredBy`
+ * is the listing the command prints, so a realm that answered without the
+ * figure — a sheet with no hit points on it — is not asked again for ever.
+ */
+export const READ: Record<
+  StaleFact,
+  {
+    read(state: Pick<CharacterState, 'vitals' | 'progress' | 'inventory'>): boolean;
+    answeredBy: BlockType;
+  }
+> = {
+  // The maxima are the sheet's alone on a realm whose prompt carries none.
+  sheet: { read: (state) => state.vitals.hpMax !== null, answeredBy: 'player-status' },
+  experience: { read: (state) => state.progress.expNeeded !== null, answeredBy: 'user-experience' },
+  // *Carrying nothing* and *nobody has looked* are different; `listedAt` says which.
+  pack: { read: (state) => state.inventory.listedAt !== null, answeredBy: 'user-inventory' }
+};
+
+/**
+ * The facts nothing can be trusted without, asked for until read.
+ *
+ * The sheet, because every health decision — a rest, a walk's hold, `@wait`
+ * — reads an unknown maximum as *not low*. The pack, because the router
+ * treats an exit gated on an item as shut until a listing has said, and the
+ * potions, the light and the encumbrance are read off it. Experience is not:
+ * a readout wrong for a while costs nothing.
+ */
+export const REQUIRED: readonly StaleFact[] = ['sheet', 'pack'];
+
+/** The required facts this state has not read yet. */
+export function unread(
+  state: Pick<CharacterState, 'vitals' | 'progress' | 'inventory'>
+): StaleFact[] {
+  return REQUIRED.filter((fact) => !READ[fact].read(state));
 }

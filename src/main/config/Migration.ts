@@ -6592,6 +6592,8 @@ function theTuningBlockGainedKeys(
     /* The look queue's floor and its shelf life (2026-09-07, todo 10). */
     addKey('queue', 'lookAskMs', DEFAULT_INTERNAL.tuning.queue.lookAskMs);
     addKey('queue', 'lookExpiresMs', DEFAULT_INTERNAL.tuning.queue.lookExpiresMs);
+    // The required facts asked for again until read (2026-09-25).
+    addKey('queue', 'unreadRetryMs', DEFAULT_INTERNAL.tuning.queue.unreadRetryMs);
     /* What a room's own spell costs, and when the router looks for another way
        (2026-09-09, todo 01), and how much shorter the way with the right items
        has to be to be offered (2026-09-10, todo 01). */

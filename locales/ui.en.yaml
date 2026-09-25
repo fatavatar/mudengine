@@ -5272,6 +5272,7 @@ automation:
     reasonLookAtPlayer: Looking at somebody this character has not seen before
     reasonRosterUnknown: a name arrived without a listing to explain it
     reasonSpellbook: reading the spellbook
+    reasonUnread: not read since entering the realm, and nothing is trusted without it
     reasonTrained: trained, so the sheet, the experience to the next level and the purse
       have all changed
     reasonStatsTrained: the stats were retrained, so the sheet has changed
