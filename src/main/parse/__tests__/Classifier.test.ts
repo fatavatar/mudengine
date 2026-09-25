@@ -673,6 +673,22 @@ describe('conversation, movement, items', () => {
     expect(expectType('Masta just left the Realm.', 'player-exits')['player']).toBe('Masta');
   });
 
+  // Worded apart for up and down, and read as a monster leaving until 2026-09-25.
+  it('reads a player climbing in or out as a player', () => {
+    expect(expectType('Fatty just left upwards.', 'player-leaves-room')['player']).toBe('Fatty');
+    expect(expectType('Fatty just left downwards.', 'player-leaves-room')['direction']).toBe(
+      'down'
+    );
+    expect(expectType('Fatty just left to the south.', 'player-leaves-room')['direction']).toBe(
+      'south'
+    );
+    expect(
+      expectType('Fatty walks into the room from above.', 'player-arrives-room')['direction']
+    ).toBe('above');
+    // What only looks like a direction is still the realm's own sentence.
+    expect(expectType('Fatty just left the Realm.', 'player-exits')['player']).toBe('Fatty');
+  });
+
   /*
    * The welcome banner charging for the last session, and the reason it has a
    * rule of its own: `^The …\byou\b…[.!]$` is the frame a monster's swing

@@ -4386,7 +4386,8 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     expect(file['remotes']?.['healAskAgainMs']).toBe(
       DEFAULT_INTERNAL.tuning.remotes.healAskAgainMs
     );
-    expect(file['remotes']?.['okAfterMs']).toBe(DEFAULT_INTERNAL.tuning.remotes.okAfterMs);
+    // Added on 2026-09-24 and retired the next day: a file that never had it gets none.
+    expect(file['remotes']?.['okAfterMs']).toBeUndefined();
     expect(file['hunting']?.['measuredFightsMin']).toBe(
       DEFAULT_INTERNAL.tuning.hunting.measuredFightsMin
     );
@@ -5158,6 +5159,42 @@ describe('the hunting survey’s reach', () => {
   it('says so, and does nothing on a second run', () => {
     migrate();
     expect(said.join(' ')).toContain('huntRadiusSteps');
+    const after = fs.readFileSync(home.internal, 'utf8');
+    migrate();
+    expect(fs.readFileSync(home.internal, 'utf8')).toBe(after);
+  });
+});
+
+/*
+ * The follower's settle before `@ok` retires (2026-09-25): `@wait` goes by the
+ * walker's own figures now, which end at their ceiling and cannot flicker.
+ */
+describe('the follower’s settle before @ok', () => {
+  const remotesBlock = (): Record<string, unknown> =>
+    (
+      parse(fs.readFileSync(home.internal, 'utf8')) as {
+        tuning: { remotes: Record<string, unknown> };
+      }
+    ).tuning.remotes;
+
+  beforeEach(() => {
+    fs.mkdirSync(path.dirname(home.internal), { recursive: true });
+    fs.writeFileSync(
+      home.internal,
+      'tuning:\n  remotes:\n    healAskAgainMs: 15000\n    okAfterMs: 5000\n',
+      'utf8'
+    );
+  });
+
+  it('takes the retired key out, says so, and leaves the block alone', () => {
+    migrate();
+    expect(remotesBlock()['okAfterMs']).toBeUndefined();
+    expect(remotesBlock()['healAskAgainMs']).toBe(15000);
+    expect(said.join(' ')).toContain('okAfterMs');
+  });
+
+  it('does nothing on a second run', () => {
+    migrate();
     const after = fs.readFileSync(home.internal, 'utf8');
     migrate();
     expect(fs.readFileSync(home.internal, 'utf8')).toBe(after);

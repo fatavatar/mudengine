@@ -74,7 +74,7 @@ import {
 import type { Block } from '../../shared/blocks';
 import { REREAD_ROOM } from '../../shared/commands';
 import { isBlinding, type CharacterState } from '../../shared/character';
-import { manaHolding, resumeAtHealth, type AutomationConfig } from '../../shared/config';
+import { healthHolding, manaHolding, type AutomationConfig } from '../../shared/config';
 import { splitSpells } from '../../shared/spell-messages';
 import { t } from '../app/i18n';
 import type { CommandQueue } from './CommandQueue';
@@ -2858,13 +2858,10 @@ export class Walker {
    * maximum is absence, not a low number.
    */
   private tooHurtToBash(): boolean {
-    const { restBelow } = this.config.health;
-    if (restBelow <= 0) return false;
     const state = this.events.stateNow?.();
     if (state === undefined) return false;
     const { hp, hpMax } = state.vitals;
-    if (hp === null || hpMax === null || hpMax <= 0) return false;
-    return hp / hpMax < restBelow;
+    return healthHolding(this.config.health, hp, hpMax, false, 0);
   }
 
   /**
@@ -4498,15 +4495,14 @@ export class Walker {
   /** Whether this character is below the figure it may travel at. */
   private wantsHealthHold(state: CharacterState): boolean {
     if (!this.holdWhenHurt) return false;
-    const { restBelow } = this.config.health;
-    if (restBelow <= 0) return false;
     const { hp, hpMax } = state.vitals;
-    if (hp === null || hpMax === null || hpMax <= 0) return false;
-    const floor =
-      this.hold === 'health'
-        ? resumeAtHealth(this.config.health, tuning().loop.resumeMarginWhenUncapped)
-        : restBelow;
-    return hp / hpMax < floor;
+    return healthHolding(
+      this.config.health,
+      hp,
+      hpMax,
+      this.hold === 'health',
+      tuning().loop.resumeMarginWhenUncapped
+    );
   }
 
   /**

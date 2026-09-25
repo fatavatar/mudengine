@@ -6,8 +6,8 @@
  * import. Dependency-free, like everything else here.
  */
 import type { RoomId } from './world';
-import type { Afflictions, StatedEffect } from './character';
-import type { MovementConfig } from './config';
+import type { Afflictions, CharacterState, StatedEffect } from './character';
+import { healthHolding, manaHolding, type HealthConfig, type MovementConfig } from './config';
 
 export type WalkStatus =
   /** Nothing planned. */
@@ -217,6 +217,40 @@ function statedHolds(
   if (entry.effects.includes('confused') && !movement.walkWhileConfused) return true;
   if (entry.effects.includes('losing-hp')) return true;
   return entry.action === 'wait' || entry.action === 'rest-hp' || entry.action === 'rest-mana';
+}
+
+/** Why a character would stand still rather than travel. */
+export type StillReason = NonNullable<ReturnType<typeof afflictionHolding>> | 'health' | 'mana';
+
+/**
+ * Why this character would stand still rather than travel, or null: the
+ * predicates the walker and the loop hold on, in the order they read them — a
+ * condition the server stated, then health, then mana. They keep their own
+ * hold per reason, with its notices and bounds; this is for a reader that
+ * wants only the answer. `holding` is the reason already
+ * being waited on, so that one alone is read at the figure that ends it
+ * (`resumeAtHealth`, `resumeAtMana`), as the walker's one hold slot does;
+ * `margin` is `tuning.loop.resumeMarginWhenUncapped`, which `shared/` cannot
+ * reach.
+ *
+ * A follower's `@wait` is this question asked of itself (2026-09-25): it asks
+ * the leader to stop exactly when its own walk would, and sitting down is not
+ * a reason — skinny said `@wait` on the step out of a rest kept with Fatty.
+ */
+export function stillFor(
+  state: Pick<CharacterState, 'afflictions' | 'heard' | 'vitals'>,
+  config: {
+    health: HealthConfig;
+    movement: Pick<MovementConfig, 'walkWhileBlind' | 'walkWhilePoisoned' | 'walkWhileConfused'>;
+  },
+  holding: StillReason | null,
+  margin: number
+): StillReason | null {
+  const stated = afflictionHolding(state.afflictions, config.movement, state.heard);
+  if (stated !== null) return stated;
+  const { hp, hpMax, mana, manaMax } = state.vitals;
+  if (healthHolding(config.health, hp, hpMax, holding === 'health', margin)) return 'health';
+  return manaHolding(config.health, mana, manaMax, holding === 'mana', margin) ? 'mana' : null;
 }
 
 /** A room this character ran out of, and the moment it did. See `stillFled`. */

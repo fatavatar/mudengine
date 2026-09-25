@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandQueue } from '../CommandQueue';
 import { Remotes } from '../Remotes';
 import { DEFAULT_CONFIG } from '../../../shared/config';
-import { EMPTY_CHARACTER, type CharacterState, type PartyMember } from '../../../shared/character';
+import {
+  EMPTY_CHARACTER,
+  NO_AFFLICTIONS,
+  type CharacterState,
+  type PartyMember
+} from '../../../shared/character';
 import { wireExit, wireItem } from '../../../shared/entities';
 import type { AutomationConfig } from '../../../shared/config';
 import type { Block } from '../../../shared/blocks';
@@ -539,45 +544,32 @@ describe('asking, which is the other half of the same vocabulary', () => {
 
   /*
    * `@wait` and `@ok` are the pacing pair, sent on the **crossing** rather than
-   * on every status line — a character resting for a minute is one message.
+   * on every status line — a character recovering for a minute is one message.
+   * On the walker's figures: under `restBelow` (0.35 here) to stop, back to
+   * `restTo` (0.7) to go on.
    */
-  it('tells the leader it has sat down, once, and that it is up again', () => {
-    const resting = who({
-      party: { engaged: {}, threatened: {}, following: 'Soul', members: [] },
-      vitals: { ...EMPTY_CHARACTER.vitals, resting: true }
-    });
-    const up = who({ party: { engaged: {}, threatened: {}, following: 'Soul', members: [] } });
-    peers.onCharacter(resting);
-    peers.onCharacter(resting);
-    peers.onCharacter(up);
+  it('tells the leader it has to stop, once, and that it is ready again', () => {
+    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
+    const at = (hp: number) =>
+      who({ party, vitals: { ...EMPTY_CHARACTER.vitals, hp, hpMax: 100 } });
+    peers.onCharacter(at(30));
+    peers.onCharacter(at(30));
+    // Past the floor it stopped at, short of the figure that ends it.
+    peers.onCharacter(at(50));
     drain();
-    // Up for the drain's five seconds, which is `okAfterMs`: now it is @ok.
-    peers.onCharacter(up);
+    expect(sent).toEqual(['/Soul @wait']);
+    peers.onCharacter(at(75));
     drain();
     expect(sent).toEqual(['/Soul @wait', '/Soul @ok']);
   });
 
   /*
-   * skinny to Fatty, 2026-09-24: a heal cast from a rest stood him up for the
-   * cast, and the leader was told @ok and then @wait a second apart.
+   * skinny behind Fatty: sat down because the leader had and said @wait, and
+   * a MegaMUD leader waiting on it rested in every room after (2026-09-24);
+   * then said it on the step out of that rest, still reading `(Resting)`
+   * after Fatty had walked off (2026-09-25). Sitting down is not a reason.
    */
-  it('does not say @ok for a cast that stood it up for a moment', () => {
-    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
-    const resting = who({ party, vitals: { ...EMPTY_CHARACTER.vitals, resting: true } });
-    peers.onCharacter(resting);
-    drain();
-    peers.onCharacter(who({ party }));
-    vi.advanceTimersByTime(1_000);
-    peers.onCharacter(resting);
-    drain();
-    expect(sent).toEqual(['/Soul @wait']);
-  });
-
-  /*
-   * skinny behind Fatty, 2026-09-24: sat down because the leader had, said
-   * @wait, and a MegaMUD leader waiting on it rested in every room after.
-   */
-  it('does not say @wait for a rest kept with a resting leader', () => {
+  it('does not say @wait for sitting down', () => {
     const leader = (activity: PartyMember['activity']): PartyMember => ({
       name: 'Soul',
       className: null,
@@ -588,24 +580,64 @@ describe('asking, which is the other half of the same vocabulary', () => {
       invited: false,
       vitals: null
     });
-    const resting = (activity: PartyMember['activity']) =>
+    const sitting = (activity: PartyMember['activity'], meditating = false) =>
       who({
         party: { engaged: {}, threatened: {}, following: 'Soul', members: [leader(activity)] },
-        vitals: { ...EMPTY_CHARACTER.vitals, resting: true }
+        vitals: {
+          ...EMPTY_CHARACTER.vitals,
+          hp: 60,
+          hpMax: 100,
+          resting: !meditating,
+          meditating
+        }
       });
-    peers.onCharacter(resting({ state: 'resting' }));
-    peers.onCharacter(resting({ state: 'meditating' }));
+    peers.onCharacter(sitting({ state: 'resting' }));
+    peers.onCharacter(sitting(null));
+    peers.onCharacter(sitting(null, true));
     drain();
     expect(sent).toEqual([]);
-    // The leader up and this one still sitting: that rest is its own.
-    peers.onCharacter(resting(null));
+  });
+
+  /* Held where it stands: it cannot follow, and no setting says otherwise. */
+  it('says @wait while held, and @ok once it can move', () => {
+    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
+    peers.onCharacter(who({ party, afflictions: { ...NO_AFFLICTIONS, held: 'yes' } }));
+    drain();
+    expect(sent).toEqual(['/Soul @wait']);
+    peers.onCharacter(who({ party, afflictions: { ...NO_AFFLICTIONS, held: 'no' } }));
+    drain();
+    expect(sent).toEqual(['/Soul @wait', '/Soul @ok']);
+  });
+
+  /* One @wait for one stop, whatever it turns into while it lasts. */
+  it('says @wait once when one reason gives way to another', () => {
+    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
+    const hurt = { ...EMPTY_CHARACTER.vitals, hp: 30, hpMax: 100 };
+    peers.onCharacter(who({ party, afflictions: { ...NO_AFFLICTIONS, held: 'yes' } }));
+    peers.onCharacter(who({ party, vitals: hurt, afflictions: { ...NO_AFFLICTIONS, held: 'no' } }));
+    drain();
+    expect(sent).toEqual(['/Soul @wait']);
+  });
+
+  /* Blind waits as the walk does, and walks as it does when told to. */
+  it('follows the movement settings for blindness', () => {
+    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
+    const blind = who({ party, afflictions: { ...NO_AFFLICTIONS, blind: 'yes' } });
+    const walking = new Remotes(
+      { ...config, movement: { ...config.movement, walkWhileBlind: true } },
+      queue
+    );
+    walking.onCharacter(blind);
+    drain();
+    expect(sent).toEqual([]);
+    peers.onCharacter(blind);
     drain();
     expect(sent).toEqual(['/Soul @wait']);
   });
 
   /* A leader telling itself to wait would be talking to nobody. */
   it('says nothing when this character is not following anybody', () => {
-    peers.onCharacter(who({ vitals: { ...EMPTY_CHARACTER.vitals, resting: true } }));
+    peers.onCharacter(who({ afflictions: { ...NO_AFFLICTIONS, held: 'yes' } }));
     drain();
     expect(sent).toEqual([]);
   });

@@ -4199,6 +4199,44 @@ describe('what the realm knows about a player, between characters', () => {
   });
 });
 
+/*
+ * skinny behind Fatty, 2026-09-25: rested because the leader had, and said
+ * `@wait` on the step out of it, still reading `(Resting)` after Fatty climbed
+ * away — `just left upwards` was read as a monster, so Fatty stayed resting
+ * too. A follower asks its leader to stop for what would stop its own walk.
+ */
+describe('a follower asking its leader to wait', () => {
+  it('asks for being held, and never for a rest kept with the leader', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      party: { ...DEFAULT_CONFIG.automation.party, restWithLeader: true },
+      remotes: { ...DEFAULT_CONFIG.automation.remotes, enabled: true }
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const wire = (): string => Buffer.concat(chunks).toString('latin1');
+
+    socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.phase === 'in-game');
+    socket.write('You are now following Soul.\r\n[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.party.following === 'Soul');
+    socket.write('Soul stops to rest.\r\n[HP=100/MA=50]: (Resting) ' + PROMPT_REPAINT);
+    await until(() => manager!.character.vitals.resting);
+    socket.write('Soul just left upwards.\r\n[HP=100/MA=50]: (Resting) ' + PROMPT_REPAINT);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(wire()).not.toContain('@wait');
+
+    socket.write('Your legs are paralyzed!\r\n[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => wire().includes('/Soul @wait'));
+    socket.write('You can move again!\r\n[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => wire().includes('/Soul @ok'));
+  });
+});
+
 describe('a follower pacing the loop', () => {
   /** A manager whose remotes answer Soul and Yang the pacing pair. */
   function pacedManager(

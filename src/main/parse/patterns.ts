@@ -1173,14 +1173,20 @@ export const RULES: Rule[] = [
    * A different fact from entering the realm, and the more urgent one: the
    * realm is large and this room is where a fight happens. Captured verbatim
    * from `npm run probe:party` — two characters, one walking to the other.
+   * Up and down are worded apart, `from above` and `just left upwards`, and
+   * the directions are named as the monster rules below name them; read as a
+   * monster until 2026-09-25, so a leader who climbed out of a rest was still
+   * resting as far as its follower knew.
    */
   {
     type: 'player-arrives-room',
-    pattern: /^(?<player>\w+) walks into the room from the (?<direction>[\w ]+)\.$/
+    pattern:
+      /^(?<player>\w+) walks into the room from (?:the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|above|below)\.$/
   },
   {
     type: 'player-leaves-room',
-    pattern: /^(?<player>\w+) just left to the (?<direction>[\w ]+)\.$/
+    pattern:
+      /^(?<player>\w+) just left (?:to the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:wards)?\.$/
   },
   {
     type: 'player-looks',

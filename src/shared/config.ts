@@ -4506,6 +4506,25 @@ export function resumeAtMana(health: HealthConfig, marginWhenUncapped: number): 
 }
 
 /**
+ * Whether health is under the figure a walk may travel at — `restBelow` going
+ * down, `resumeAtHealth` while already held. Unknown is not low. The walker,
+ * the loop and a follower's `@wait` read it, so none of them stops or goes on
+ * at a figure the others do not (2026-09-25).
+ */
+export function healthHolding(
+  health: HealthConfig,
+  hp: number | null,
+  hpMax: number | null,
+  held: boolean,
+  marginWhenUncapped: number
+): boolean {
+  if (health.restBelow <= 0) return false;
+  if (hp === null || hpMax === null || hpMax <= 0) return false;
+  const floor = held ? resumeAtHealth(health, marginWhenUncapped) : health.restBelow;
+  return hp / hpMax < floor;
+}
+
+/**
  * Whether mana is under the figure a walk may travel at — `meditateBelow`
  * going down, `resumeAtMana` while already held. Unknown is not low.
  */

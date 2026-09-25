@@ -48,7 +48,7 @@
  * somebody why their gang was being refused.
  */
 import type { LoopProgress } from '../../shared/loops';
-import type { WalkProgress } from '../../shared/walk';
+import { stillFor, type StillReason, type WalkProgress } from '../../shared/walk';
 import type { Block } from '../../shared/blocks';
 import { gangOnRoster, joinedTheParty, ownGang, type CharacterState } from '../../shared/character';
 import type { AutomationConfig, RemotesConfig } from '../../shared/config';
@@ -278,10 +278,8 @@ interface Outstanding {
 }
 
 export class Remotes {
-  /** Whether the leader has been told `@wait` and not yet `@ok`. See `onCharacter`. */
-  private waitSaid = false;
-  /** When this character last stood up from a rest it had said `@wait` for. */
-  private upSince: number | null = null;
+  /** Why the leader has been told `@wait`, until it is told `@ok`. See `onCharacter`. */
+  private waitingFor: StillReason | null = null;
 
   /** Questions sent and not yet answered, by player. See {@link Outstanding}. */
   private readonly asked = new Map<string, Outstanding>();
@@ -538,11 +536,19 @@ export class Remotes {
   /**
    * Tells the party leader this character has stopped, and when it is ready.
    *
-   * `@wait` and `@ok` are the pacing pair: a follower that has to sit down asks
-   * the leader to stop, and says so again when it can move. Sent on the
+   * `@wait` and `@ok` are the pacing pair: a follower that has to stop asks
+   * the leader to, and says so again when it can move. Sent on the
    * **crossing** rather than on every status line, for the same reason a vitals
-   * alert is: a character resting for a minute is one message, not one every
+   * alert is: a character recovering for a minute is one message, not one every
    * few hundred milliseconds.
+   *
+   * For exactly what would stand this character's own walk still, and until
+   * it would walk on (`stillFor`): held, blind or poisoned as the movement
+   * settings say, a condition the realm stated, health or mana under the
+   * figures the walker and the loop stop at. Never for sitting down
+   * (2026-09-25): a rest kept with a resting leader is the leader's, and skinny
+   * said `@wait` on the step out of one, still reading `(Resting)` after Fatty
+   * had walked off, which sat Fatty — MegaMUD, waiting on it — down again.
    *
    * Only as a *follower*. A party leader that told itself to wait would be
    * talking to nobody, and `party.following` is the field that says which this
@@ -552,41 +558,20 @@ export class Remotes {
     if (this.config.enabled && this.config.remotes.enabled) this.sweep(Date.now());
     this.askForHeal(state);
     this.askForListing(state);
-    const resting = state.vitals.resting || state.vitals.meditating;
     if (!this.config.enabled || !this.config.remotes.enabled) return;
     const leader = state.party.following;
     if (leader === null) {
-      this.waitSaid = false;
-      this.upSince = null;
+      this.waitingFor = null;
       return;
     }
-    if (resting) {
-      this.upSince = null;
-      /*
-       * Not while the leader is resting too: that rest is the leader's, and
-       * this one is keeping it company (`party.restWithLeader`). skinny sat
-       * down with Fatty, said `@wait`, and Fatty — MegaMUD, waiting on it —
-       * rested in every room after, which sat skinny down again before the
-       * `@ok` was due (2026-09-24).
-       */
-      if (this.waitSaid || leaderResting(state, leader)) return;
-      if (this.ask(leader, 'wait', state)) this.waitSaid = true;
-      return;
-    }
-    /*
-     * `@ok` only once the character has stayed up: a heal cast from a rest
-     * stands it up for the cast and it sits straight back down, and a leader
-     * told `@ok` then `@wait` a second apart has been told nothing (skinny to
-     * Fatty, 2026-09-24). MegaMUD says `@ok` when the rest is over, not when a
-     * cast interrupted it.
-     */
-    if (!this.waitSaid) return;
-    const now = Date.now();
-    this.upSince ??= now;
-    if (now - this.upSince < tuning().remotes.okAfterMs) return;
-    if (this.ask(leader, 'ok', state)) {
-      this.waitSaid = false;
-      this.upSince = null;
+    const margin = tuning().loop.resumeMarginWhenUncapped;
+    const reason = stillFor(state, this.config, this.waitingFor, margin);
+    if (reason === null) {
+      if (this.waitingFor !== null && this.ask(leader, 'ok', state)) this.waitingFor = null;
+    } else if (this.waitingFor !== null) {
+      this.waitingFor = reason;
+    } else if (this.ask(leader, 'wait', state)) {
+      this.waitingFor = reason;
     }
   }
 
@@ -781,8 +766,7 @@ export class Remotes {
 
   /** Forgotten with the connection: a fresh session has said nothing to anybody. */
   reset(): void {
-    this.waitSaid = false;
-    this.upSince = null;
+    this.waitingFor = null;
     this.asked.clear();
     this.askedForHealAt = null;
     this.wantsHeal = false;
@@ -1390,15 +1374,6 @@ const ROUND_BLOWS: ReadonlySet<string> = new Set([
   'mob-hits',
   'mob-misses'
 ]);
-
-/** Whether the leader's row says it is resting or meditating. */
-function leaderResting(state: CharacterState, leader: string): boolean {
-  const row = state.party.members.find(
-    (member) => member.name.toLowerCase() === leader.toLowerCase()
-  );
-  const activity = row?.activity?.state;
-  return activity === 'resting' || activity === 'meditating';
-}
 
 /**
  * In a party: somebody has joined, or this character follows somebody. The
