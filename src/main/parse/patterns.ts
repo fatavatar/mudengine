@@ -1044,11 +1044,22 @@ export const RULES: Rule[] = [
    * claimed by `user-misses` above and `The ... you` by `mob-misses`, so what
    * is left is a player at a monster or a monster at a player — the sixth of
    * the corpus that was unread (docs/capture-analysis.md §4).
+   *
+   * **Who swung is the room's to say**, as it is for a blow (`resolve`). The
+   * verb is not always one word: `The red wyvern swoops down at Fatty!` read
+   * as `red wyvern swoops` doing `down`, which joined the room as another
+   * wyvern 125 times in one evening, and a room spell set for four went off
+   * on three (skinny, 2026-09-25). The room and then the realm's table name
+   * the swinger; where neither can, the frame's own guess stands (`first`,
+   * everything before a one-word verb), which is how a monster nothing has
+   * listed still joins the room.
    */
   {
     type: 'player-misses',
     pattern:
-      /^\s*(?<attacker>(?!You\b)(?:The )?[\w'-]+(?: [\w'-]+)*?) (?<verb>\w+) at (?<target>(?!you\b)[\w' -]+?)(?: with (?:his|her|its|their) (?<weapon>[\w' -]+?))?!$/
+      /^\s*(?<line>(?<first>(?!You\b)(?:The )?[\w'-]+(?: [\w'-]+)*?) \w+) at (?<target>(?!you\b)[\w' -]+?)(?: with (?:his|her|its|their) (?<weapon>[\w' -]+?))?!$/,
+    resolve: 'attacker',
+    nameFallback: true
   },
   {
     type: 'player-misses',
