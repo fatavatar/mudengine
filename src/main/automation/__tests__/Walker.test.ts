@@ -5800,6 +5800,25 @@ describe('a text-exit party relay', () => {
   });
 
   /*
+   * Reported live (2026-09-28): the ordinary pacing floor between the relay
+   * and the leader's own move (676ms, one capture) was long enough for a
+   * follower's own client to hear the relay, replay it, and land in the new
+   * room before the leader's move even reached the wire — which MegaMUD's
+   * own party-follow mechanic answered by snapping the follower back to the
+   * leader's last room. `relayTextExit` marks both the relay and (were the
+   * leader sneaking) the re-sneak with `noGap`, so the move behind either
+   * one sends without waiting out a real, non-zero pacing gap — proven here
+   * by never advancing the fake clock at all.
+   */
+  it('sends the move right behind the relay, with no wait for a real pacing gap', () => {
+    const { begin } = trackedWalker({
+      pacing: { window: 20, minGapMs: 500, ackTimeoutMs: 3000 }
+    });
+    begin(PORTAL, leading(1, 1, ['Pip']));
+    expect(sent).toEqual(['.@party go crimson portal', 'go crimson portal']);
+  });
+
+  /*
    * Reported live (2026-09-28): a level-gated `go portal` relayed nothing.
    * `WorldGraph.linkPortals` prices a gated room-script portal as
    * `requirement.kind: 'level'`, not `'text'`, even though the step still

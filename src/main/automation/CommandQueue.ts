@@ -118,6 +118,24 @@ export interface Intent {
    */
   typed?: boolean;
   /**
+   * Skip `pacing.minGapMs` between this command and whichever one is next
+   * due — not a standing exemption, just the one gap right behind this send.
+   *
+   * For a pair that must reach the server essentially back to back, where
+   * the ordinary floor is itself the bug. Measured live (2026-09-28): the
+   * party relay's `minGapMs` gap ahead of the leader's own move through a
+   * text exit was long enough — 676ms in one capture — for a follower's own
+   * client to hear the relay, replay it, and land in the new room *before*
+   * the leader's move even reached the wire. MegaMUD's own party-follow
+   * mechanic answers a follower standing somewhere the leader has not yet
+   * gone to by snapping them back toward the leader's last room, undoing a
+   * crossing that had actually worked. `minGapMs` exists to protect a real,
+   * measured server limit (`CommandQueue`'s own header) and stays in force
+   * for everything else; this is the one pairing where the gap it leaves
+   * causes a different, worse failure than the flood it guards against.
+   */
+  noGap?: boolean;
+  /**
    * The command has just been written to the socket.
    *
    * For a proposer whose own deadline measures the **server's** silence. The
@@ -200,6 +218,12 @@ export class CommandQueue {
   private inFlight = 0;
   private seq = 0;
   private lastSentAt = 0;
+  /**
+   * Whether the last command actually written asked, via `noGap`, that the
+   * pacing floor be skipped for whatever sends next. Consumed by the next
+   * send either way — see `blockedFor` and `drain`.
+   */
+  private skipNextGap = false;
   /**
    * What has been written to the socket lately, oldest first, so an intent can
    * be put back when the server says it threw that one away.
@@ -485,6 +509,7 @@ export class CommandQueue {
     this.inFlight = 0;
     this.outstanding = [];
     this.typingHeld = false;
+    this.skipNextGap = false;
     // Nothing is in flight any more, so there is nothing a fumble could be
     // about — and replaying a command from before a disconnect is the one
     // thing `resendLast` must never do.
@@ -636,6 +661,7 @@ export class CommandQueue {
     this.inFlight += 1;
     this.outstanding.push(now);
     this.lastSentAt = now;
+    this.skipNextGap = next.noGap === true;
     /*
      * Trimmed **on the way in**, which is what makes the bound real: the only
      * other trim is inside `resendLast`, and that runs on a fumble — an event
@@ -691,6 +717,10 @@ export class CommandQueue {
      * login. Waiting there is pure latency.
      */
     if (this.inFlight === 0) return 0;
+
+    // The last send asked, via `noGap`, that whatever comes next skip this
+    // floor — see `Intent.noGap`. The window cap above still applies.
+    if (this.skipNextGap) return 0;
 
     const sinceLast = now - this.lastSentAt;
     return sinceLast >= this.config.pacing.minGapMs ? 0 : this.config.pacing.minGapMs - sinceLast;

@@ -4298,9 +4298,19 @@ export class Walker {
     const others = this.partyOthers(state);
     if (others.length === 0) return;
     const wasSneaking = state.stealth === 'sneaking';
+    /*
+     * `noGap` on both: measured live (2026-09-28) at 676ms behind the
+     * ordinary `minGapMs` floor, long enough for a follower's own client to
+     * hear the relay, replay it, and land in the new room before the
+     * leader's own move even reached the wire — which MegaMUD's own
+     * party-follow mechanic answers by snapping the follower back toward
+     * the leader's last (pre-crossing) room, undoing a crossing that had
+     * actually worked. See `Intent.noGap`.
+     */
     this.queue.enqueue({
       command: `.@party ${step.command}`,
       priority: 'movement',
+      noGap: true,
       reason: t('automation.walk.reasonPartyRelay', { command: step.command })
     });
     if (wasSneaking) {
@@ -4312,6 +4322,7 @@ export class Walker {
         command: 'sn',
         priority: 'movement',
         coalesceKey: 'sneak',
+        noGap: true,
         reason: t('automation.walk.reasonSneak')
       });
     }
