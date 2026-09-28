@@ -105,6 +105,8 @@ export interface Profile {
    * session's spell lore (`withStatedEffects`). Beside `coins` for its reason.
    */
   effects: StatedEffect[];
+  /** The realm's own sentences for a command thrown away (`server.yaml` `fumbles:`). */
+  fumbles: string[];
   /** Dial this character when the client starts. */
   autoConnect: boolean;
   /**
@@ -179,6 +181,7 @@ function resolveServer(
   fleeGoto: string;
   rules: Rule[];
   effects: StatedEffect[];
+  fumbles: string[];
 } | null {
   if (typeof value === 'string') {
     const found = byName(servers, value);
@@ -194,7 +197,8 @@ function resolveServer(
           coins: found.coins,
           fleeGoto: found.fleeGoto,
           rules: found.rules,
-          effects: found.effects
+          effects: found.effects,
+          fumbles: found.fumbles
         }
       : null;
   }
@@ -234,6 +238,7 @@ function resolveServer(
       // Nor does it hold a realm's rules or effects: those live in its directory.
       rules: [],
       effects: [],
+      fumbles: [],
       target: {
         host,
         port,
@@ -371,12 +376,13 @@ function ownSafety(raw: Record<string, unknown>, block: string, key: string): un
 }
 
 /** What a realm calls things, read by the session through `Vocabulary`: its locate word and its coins. */
-export type RealmWords = Pick<Profile, 'locate' | 'coins'>;
+export type RealmWords = Pick<Profile, 'locate' | 'coins' | 'fumbles'>;
 
 /** A realm that states no words of its own: asked with `rm`, and the stock coins. */
 export const UNSTATED_REALM_WORDS: RealmWords = Object.freeze({
   locate: DEFAULT_LOCATE,
-  coins: {}
+  coins: {},
+  fumbles: []
 });
 
 /**
@@ -504,6 +510,7 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
       locate: ownLocate(raw) ?? server.locate,
       coins: { ...server.coins, ...asCoinNames(raw['coins']) },
       effects: server.effects,
+      fumbles: server.fumbles,
       autoConnect: raw['autoConnect'] === true,
       // `!== false`, not `=== true`: this one is on unless the file says
       // otherwise. See the field.

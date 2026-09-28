@@ -18,7 +18,7 @@ describe('a MegaMUD response as commands', () => {
 });
 
 describe('a Messages table as rules and effects', () => {
-  const { rules, effects, dropped } = fromMessages([
+  const { rules, effects, fumbles, dropped } = fromMessages([
     { name: 'Promo', match: 'Check out the website', response: '^M' },
     { name: 'forest sounds', match: 'The leaves begin to rustle', action: 'look' },
     { name: 'forest sounds', match: 'A twig snaps', action: 'look' },
@@ -79,7 +79,7 @@ describe('a Messages table as rules and effects', () => {
     ]);
   });
 
-  it('makes a lasting row an effect: held, losing health, a lost command, names unique', () => {
+  it('makes a lasting row an effect: held or losing health, names unique', () => {
     expect(effects).toEqual([
       {
         name: 'fear',
@@ -100,9 +100,13 @@ describe('a Messages table as rules and effects', () => {
         starts: 'You are drenched in acid',
         ends: 'The acid dries up',
         means: ['hurting']
-      },
-      { name: 'Retch', starts: 'You retch uncontrollably!', ends: '', means: ['fumble'] }
+      }
     ]);
+  });
+
+  /* MegaMUD's *Last action failed*, with nothing lasting: the realm's own fumble. */
+  it('makes a lost command one of the realm’s fumbles', () => {
+    expect(fumbles).toEqual(['You retch uncontrollably!']);
   });
 
   it('names what it cannot carry, and carries nothing for an inert row', () => {

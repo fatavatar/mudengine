@@ -121,13 +121,19 @@ describe('FleeGoto', () => {
     expect(sent).toHaveLength(1);
   });
 
-  /* `sys goto` prints no room: an Enter behind it reprints where it landed. */
-  it('asks for the room once the teleport has gone', () => {
-    const { flee, tracker, looks, leave } = rig();
+  /* `sys goto` prints no room: one Enter once it has been quiet, as a walk nudges. */
+  it('nudges a teleport nothing has answered, once', () => {
+    const { flee, tracker, looks, leave, answer } = rig();
     flee.consider(tracker.current);
-    expect(looks).toHaveLength(0);
     leave();
-    expect(looks).toEqual([expect.objectContaining({ priority: 'emergency' })]);
+    answer('status-line', '[HP=15]:');
+    expect(looks).toHaveLength(0);
+    vi.advanceTimersByTime(tuning().walk.nudgeAfterMs + 1);
+    answer('status-line', '[HP=15]:');
+    answer('status-line', '[HP=15]:');
+    expect(looks).toEqual([
+      expect.objectContaining({ command: REREAD_ROOM, priority: 'emergency' })
+    ]);
   });
 
   it('sends nothing above its floor, nor on an unknown figure, nor out of a fight', () => {

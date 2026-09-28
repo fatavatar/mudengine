@@ -4056,15 +4056,14 @@ describe('draining when hurt', () => {
   it('breaks a room spell the room has emptied under', () => {
     const auto = make(rounds(), true, spells({ areaAttack: 'pclo', areaMinMana: 0 }));
     round(auto, 90, 3);
-    const empty = { ...block('spell-ineffective'), text: 'Your spell has no effect in this room!' };
-    auto.onBlock(empty);
+    auto.onBlock(block('spell-ineffective', { inRoom: 'in this room' }));
     drain();
     expect(sent).toEqual(['pclo', 'break']);
     // An immune monster is not an empty room: nothing is broken.
     const auto2 = make(rounds(), true, spells({ areaAttack: 'pclo', areaMinMana: 0 }));
     sent.length = 0;
     round(auto2, 90, 3);
-    auto2.onBlock({ ...block('spell-ineffective', { target: 'giant rat' }), text: 'x' });
+    auto2.onBlock(block('spell-ineffective', { target: 'giant rat' }));
     drain();
     expect(sent).toEqual(['pclo']);
   });

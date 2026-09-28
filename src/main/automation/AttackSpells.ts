@@ -55,6 +55,9 @@ export interface Proposal {
   reason: string;
 }
 
+/** A command a line leaves owed, which is no attack: `break`. */
+export type Owed = Omit<Proposal, 'action'>;
+
 /** The monster a spell is chosen for: the fight's target, or the one about to be opened on. */
 export interface SpellTarget {
   name: string;
@@ -275,8 +278,11 @@ export class AttackSpells {
     };
   }
 
-  /** A line was classified: an engagement, a cast confirmed or fizzled, or refused as having no effect. */
-  heard(block: Block, state: CharacterState | null): void {
+  /**
+   * A line was classified: an engagement, a cast confirmed or fizzled, or
+   * refused as having no effect. The one command it leaves owed, or null.
+   */
+  heard(block: Block, state: CharacterState | null): Owed | null {
     const book = state?.spellbook ?? null;
     this.book = book;
     if (block.type === 'combat-status' && block.groups['status'] === 'Engaged')
@@ -287,10 +293,11 @@ export class AttackSpells {
       this.awaiting?.afterOff === true
     )
       this.awaiting = { ...this.awaiting, afterOff: false };
-    else if (block.type === 'spell-ineffective') this.noteIneffective();
+    else if (block.type === 'spell-ineffective') return this.noteIneffective(block);
     else if (block.type === 'spell-failed') this.noteFizzle(block.groups['spell'] ?? '', book);
     else if (block.type === 'spell-cast') this.noteCast(block, book);
     else if (block.type === 'user-hits') this.noteHit(block, book);
+    return null;
   }
 
   /**
@@ -675,20 +682,6 @@ export class AttackSpells {
   }
 
   /** The spell the server is repeating, while it is one. */
-  /**
-   * `Your spell has no effect in this room!` while a room spell repeats: the
-   * room is empty, and the server goes on casting it here and into every room
-   * after until told to stop (skinny, 2026-09-23). MegaMUD answers it with
-   * `break`. The spell, for the caller to send that; null for anything else.
-   */
-  emptied(block: Block): string | null {
-    const cast = this.repeated;
-    if (block.type !== 'spell-ineffective' || !/in this room!$/.test(block.text)) return null;
-    if (cast === null || !cast.area) return null;
-    this.fightEnded();
-    return cast.spell;
-  }
-
   private get repeated(): Extract<Action, { kind: 'spell' }> | null {
     return this.repeating?.kind === 'spell' ? this.repeating : null;
   }
@@ -699,9 +692,21 @@ export class AttackSpells {
    * one it is about. Said once per spell per target, because what the client
    * does next is a decision a person should be able to read back.
    */
-  private noteIneffective(): void {
+  private noteIneffective(block: Block): Owed | null {
     const cast = this.repeated;
-    if (cast === null || this.ineffective.has(this.keyOf(cast.spell))) return;
+    /*
+     * `in this room` under a room spell is the room emptied, not the spell
+     * refused: the server casts it on here and into every room after until
+     * told to stop (skinny, 2026-09-23), and MegaMUD answers it with `break`.
+     */
+    if (cast?.area === true && block.groups['inRoom'] !== undefined) {
+      this.fightEnded();
+      return {
+        command: 'break',
+        reason: t('automation.combat.reasonBreakEmpty', { spell: cast.spell })
+      };
+    }
+    if (cast === null || this.ineffective.has(this.keyOf(cast.spell))) return null;
     this.ineffective.add(this.keyOf(cast.spell));
     const fallback = this.spells.attackFallback.trim();
     if (cast.area) {
@@ -724,6 +729,7 @@ export class AttackSpells {
         t('automation.combat.spellIneffectiveNoFallback', { spell: cast.spell })
       );
     }
+    return null;
   }
 
   /**

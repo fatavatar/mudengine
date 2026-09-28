@@ -3,7 +3,7 @@ import { coinReader, STOCK_COIN } from '../../../shared/coins';
 import { parseCoinEntry } from '../inventory';
 import { describe, expect, it } from 'vitest';
 
-import { SpellMessageBook, spellLoreOf, withStatedEffects } from '../../../shared/spell-messages';
+import { SpellMessageBook, spellLoreOf } from '../../../shared/spell-messages';
 import { ActionBook, parseActionsCsv } from '../../../shared/actions';
 import { DeathBook } from '../../../shared/death-messages';
 import { Classifier, foregroundCodes, looksLikeRoomName, tailAfterPrompt } from '../Classifier';
@@ -3208,21 +3208,15 @@ describe("the server's message table", () => {
    * command was thrown away (todo 05). The character's own line is the
    * fumble; the room's line is somebody else's and stays explained.
    */
-  /* A realm's own fumble sentence (`effects`, `means: [fumble]`): marked stated. */
+  /* A realm's own fumble sentence (`server.yaml` `fumbles:`): marked stated. */
   it('reads a fumble the realm states as a fumbled command, marked as stated', () => {
-    const lore = withStatedEffects(spellLoreOf(new SpellMessageBook(), new SpellMessageBook()), [
-      {
-        name: 'Winch failed',
-        starts: 'You heave on the winch, but it does not budge.',
-        ends: '',
-        means: ['fumble']
-      }
-    ]);
-    const block = new Classifier(NAMES, (text) => lore.match(text)).classify(
-      line('You heave on the winch, but it does not budge.')
-    ).block;
-    expect(block.type).toBe('command-fumbled');
-    expect(block.groups['stated']).toBe('fumble');
+    const winch = 'You heave on the winch, but it does not budge.';
+    const said = (plain: string) =>
+      new Classifier(NAMES, undefined, undefined, undefined, undefined, (text) =>
+        text === winch ? 'stated' : null
+      ).classify(line(plain)).block;
+    expect(said(winch)).toMatchObject({ type: 'command-fumbled', groups: { stated: 'realm' } });
+    expect(said('You heave on the winch, and it turns.').type).toBe('unknown');
   });
 
   it("reads the character's line of a confusion row as a fumbled command", () => {
@@ -3241,7 +3235,7 @@ describe("the server's message table", () => {
         undefined,
         undefined,
         (text) => rows.match(text),
-        (row) => row === 72
+        (_, row) => (row === 72 ? 'confusion' : null)
       ).classify(line(plain)).block;
     expect(confused('You retch uncontrollably!').type).toBe('command-fumbled');
     expect(confused('Soul retches uncontrollably!').type).toBe('realm-message');

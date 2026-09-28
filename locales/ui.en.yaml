@@ -406,8 +406,8 @@ notices:
       many: 'The party pacing, Auto-Teleport and monster settings in {count} files ({fileList}) were
         renamed to this version''s names, keeping their values.'
     megamudTables: 'The MegaMUD tables imported for {realm} are now its own rules: {rules} rules,
-      {effects} effects and {mobRules} monster rules were written into its server.yaml. The old
-      table files were kept beside it, renamed .converted.'
+      {effects} effects, {fumbles} fumble sentences and {mobRules} monster rules were written into
+      its server.yaml. The old table files were kept beside it, renamed .converted.'
     megamudDropped:
       list: 'Some rows of {realm}''s MegaMUD tables could not be carried over: {list}.'
       namesSomebody: a lasting effect whose sentence names somebody
@@ -4363,7 +4363,6 @@ session:
     # The last-ditch teleport (todo 813): {command} is the realm's own, literally.
     teleporting: 'Teleporting out with {command}: {why}.'
     teleportReason: 'safety: teleport, {why}'
-    teleportLookReason: 'safety: where the teleport landed'
     teleportRefused: 'The game refused {command}: {answer}'
     teleportNot: 'Not teleporting: {why}, but {refused}.'
     teleportUnstated: no teleport command is stated for this realm or character

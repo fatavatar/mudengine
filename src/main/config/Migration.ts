@@ -6979,6 +6979,7 @@ function theMegamudTablesBecameRules(home: Home, note: (message: string) => void
       };
       add('rules', said.rules, (row: { name: string }) => row.name.toLowerCase());
       add('effects', said.effects, (row: { name: string }) => row.name.toLowerCase());
+      add('fumbles', said.fumbles, (row: string) => row.toLowerCase());
       add('mobRules', mobs.rules, (row: { mob: string }) => mobKey(row.mob));
       return wrote;
     });
@@ -6990,6 +6991,7 @@ function theMegamudTablesBecameRules(home: Home, note: (message: string) => void
         realm: id,
         rules: said.rules.length,
         effects: said.effects.length,
+        fumbles: said.fumbles.length,
         mobRules: mobs.rules.length
       })
     );

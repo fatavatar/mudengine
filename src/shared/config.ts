@@ -247,6 +247,8 @@ export interface Server {
   rules: Rule[];
   /** This realm's sentences for effects landing and ending, and what each means. See `StatedEffect`. */
   effects: StatedEffect[];
+  /** Sentences this realm throws a command away with, sent again as a fumble's. See `Vocabulary.fumbled`. */
+  fumbles: string[];
 }
 
 export interface FontConfig {
@@ -3438,7 +3440,8 @@ function normalizeServer(value: unknown): Server | null {
     coins: asCoinNames(value['coins']),
     fleeGoto: str(value['fleeGoto'], '').trim(),
     rules: normalizeRules(value['rules']),
-    effects: normalizeStatedEffects(value['effects'])
+    effects: normalizeStatedEffects(value['effects']),
+    fumbles: uniqueWords(stringList(value['fumbles'], []))
   };
 }
 

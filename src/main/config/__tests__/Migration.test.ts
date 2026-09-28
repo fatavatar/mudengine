@@ -6593,7 +6593,9 @@ describe('the fork’s settings and tables, merged with upstream', () => {
     expect(server['mobRules']).toEqual([{ mob: 'hooded man', treat: 'never' }]);
     expect(fs.existsSync(messages)).toBe(false);
     expect(fs.existsSync(`${messages}.converted`)).toBe(true);
-    expect(said.some((m) => m.includes('1 rules, 1 effects and 1 monster rules'))).toBe(true);
+    expect(
+      said.some((m) => m.includes('1 rules, 1 effects, 0 fumble sentences and 1 monster rules'))
+    ).toBe(true);
     expect(said.some((m) => m.includes('desert damage'))).toBe(true);
     const text = fs.readFileSync(scope.file, 'utf8');
     migrate();

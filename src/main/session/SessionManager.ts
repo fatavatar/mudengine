@@ -10,7 +10,6 @@ import { splitOntoChannel } from '../../shared/talk';
 import { macroLength, parseMacro } from '../../shared/macro';
 import {
   CLASS_STEALTH_ABILITY,
-  CONFUSE_MESSAGE_ABILITY,
   holdsAbility,
   poisonRefusesRest,
   restsInTheShadows
@@ -604,8 +603,8 @@ export class SessionManager {
       (text) => sentences.actions.match(text),
       // And, last, the server's own message table, fitted whole (todo 109).
       (text) => sentences.messages.match(text),
-      // And the rows a confusing spell prints on a fumble, in the realm's words.
-      (row) => world?.spellsByMessage(CONFUSE_MESSAGE_ABILITY).has(row) ?? false,
+      // And a command thrown away: a confusion row, or the realm's `fumbles:` (`Vocabulary`).
+      (text, row) => this.vocabulary.fumbled(text, row),
       () => this.vocabulary.coins
     );
     this.world = world;
@@ -2923,7 +2922,7 @@ export class SessionManager {
     if (block.type === 'command-not-understood')
       this.vocabulary.noteWordMissing(block.groups['message']);
 
-    this.vocabulary.noteFamily(block, this.answering);
+    this.vocabulary.heard(block, this.answering);
 
     /*
      * The player's own direction was refused, so nobody moved and nobody took

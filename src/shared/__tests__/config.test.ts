@@ -193,7 +193,8 @@ describe('normalizeConfig', () => {
         fleeGoto: '',
         // No rules or effects of its own until its Messages table is converted.
         rules: [],
-        effects: []
+        effects: [],
+        fumbles: []
       }
     ]);
   });

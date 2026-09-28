@@ -798,12 +798,13 @@ export const RULES: Rule[] = [
    * `Your spell has no effect on adult red dragon.` (captures/078, 105) and
    * `Your spell has no effect in this room!` (captures/041, 059). The sentence
    * names the target where it has one and never the spell; the spell is the
-   * command that provoked it, which is `AutoCombat`'s to remember.
+   * command that provoked it, which is `AutoCombat`'s to remember. `inRoom`
+   * marks the room's answer, which under a room spell is the room emptied.
    */
   {
     type: 'spell-ineffective',
     pattern:
-      /^Your spell has no effect (?:on (?<target>.+?)\.|against this monster!|in this room!)$/
+      /^Your spell has no effect (?:on (?<target>.+?)\.|against this monster!|(?<inRoom>in this room)!)$/
   },
   /*
    * Spells, seen in the corpus rather than read out of the server.
@@ -1511,16 +1512,16 @@ export const RULES: Rule[] = [
     type: 'direction-failed',
     pattern: /^The (?<barrier>door|gate|portcullis) is closed!/
   },
+  // The same refusal in Skinny Inc's words (2026-09-23).
+  {
+    type: 'direction-failed',
+    pattern: /^There is a closed (?<barrier>door|gate|portcullis) in that direction!/
+  },
   /*
    * `You may not go through this exit!` — a gate on alignment or level, not a
    * wall and not a door. It consumes the pending move like the other two, and
    * carries no barrier because nothing the client can send opens it.
    */
-  /* The same refusal in Skinny Inc's words (2026-09-23): a closed door, gate or portcullis. */
-  {
-    type: 'direction-failed',
-    pattern: /^There is a closed (?<barrier>door|gate|portcullis) in that direction!/
-  },
   { type: 'direction-failed', pattern: /^You may not go through this exit!/ },
   /*
    * `You have progressed too far to go through this exit!` — the same gate seen

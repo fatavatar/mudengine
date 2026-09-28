@@ -8,6 +8,7 @@ import zlib from 'node:zlib';
 import { WorldGraph } from '../../world/WorldGraph';
 import type { FightRecord, FightSink } from '../../../shared/fights';
 import { CharacterTracker } from '../CharacterTracker';
+import { blockOf } from '../../../shared/__tests__/blocks';
 import { parseExit } from '../room';
 import { Classifier } from '../Classifier';
 import { actsOf, applyAct, readLine } from '../lineActs';
@@ -12067,6 +12068,13 @@ describe('confusion', () => {
     expect(play(['You are confused!']).current.afflictions.confused).toBe('yes');
     expect(play(['You fumble in confusion!']).current.afflictions.confused).toBe('yes');
     expect(play(['You are blind!']).current.afflictions.confused).toBe('unknown');
+  });
+
+  /* A fumble the realm states in its own words (`fumbles:`, a sprung trap) is not one. */
+  it('is not stated by a fumble the realm states', () => {
+    const tracker = new CharacterTracker();
+    tracker.apply(blockOf('command-fumbled', 'You trigger the trap!', { stated: 'realm' }, 0));
+    expect(tracker.current.afflictions.confused).toBe('unknown');
   });
 
   /*

@@ -331,8 +331,7 @@ describe('an effect the realm states', () => {
         starts: 'You are on fire',
         ends: 'The flames die down',
         means: ['hurting']
-      },
-      { name: 'Retch', starts: 'You retch uncontrollably!', ends: '', means: ['fumble'] }
+      }
     ]
   );
 
@@ -375,15 +374,5 @@ describe('an effect the realm states', () => {
     expect(hurt.afflictions.hurting).toBe('yes');
     const healed = effects.expired(hurt, { spells: 'burning' }, T + 5000) ?? hurt;
     expect(healed.afflictions.hurting).toBe('no');
-  });
-
-  /* MegaMUD's *Last action failed*: a fumble in the realm's words, nothing lasting. */
-  it('reads a stated fumble as the command lost, and as no effect', () => {
-    expect(stated.match('You retch uncontrollably!')).toEqual({
-      starts: [],
-      stops: [],
-      fumbles: true
-    });
-    expect(stated.means?.('Retch')).toEqual([]);
   });
 });

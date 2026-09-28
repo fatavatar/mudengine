@@ -9,9 +9,11 @@
  * decisions are units beside it*, and `mudengine-wire`.
  */
 import type { CharacterTracker } from '../parse/CharacterTracker';
+import type { Fumbled } from '../parse/Classifier';
 import type { WorldGraph } from '../world/WorldGraph';
 import type { Errands } from './Errands';
 import { t } from '../app/i18n';
+import { CONFUSE_MESSAGE_ABILITY } from '../../shared/abilities';
 import type { Block } from '../../shared/blocks';
 import {
   ATTACK_COMMANDS,
@@ -22,6 +24,7 @@ import {
 import { coinReader, type CoinNames, type CoinReader } from '../../shared/coins';
 import { locateCommand } from '../../shared/locate';
 import { UNSTATED_REALM_WORDS, type RealmWords } from '../../shared/profiles';
+import { compileLine, matchLine, type CompiledLine } from '../../shared/rules';
 import {
   familiesDisagree,
   familyToldBy,
@@ -32,12 +35,12 @@ import {
 
 /**
  * Who else is told when the family is read, the realm data it is weighed
- * against, and the realm's own words (locate, coins), read through so a reload lands.
+ * against, and the realm's own words (locate, coins, fumbles), read through so a reload lands.
  */
 export interface VocabularyParts {
   readonly tracker: Pick<CharacterTracker, 'useFamily'>;
   readonly errands: Pick<Errands, 'forgetFitness'>;
-  readonly world: Pick<WorldGraph, 'info'> | undefined;
+  readonly world: Pick<WorldGraph, 'info' | 'spellsByMessage'> | undefined;
   readonly words: () => RealmWords;
 }
 
@@ -58,6 +61,7 @@ export class Vocabulary {
   private readonly words: VocabularyParts['words'];
   /** The coin reader for the last `coins:` seen, rebuilt only when a reload hands a new one. */
   private coinsFor: { names: CoinNames; reader: CoinReader } | null = null;
+  private fumblesFor: { said: readonly string[]; compiled: CompiledLine[] } | null = null;
   /**
    * Which lineage's arithmetic *this server* runs, once the wire has said so.
    *
@@ -153,6 +157,24 @@ export class Vocabulary {
     const names = this.words().coins;
     if (this.coinsFor?.names !== names) this.coinsFor = { names, reader: coinReader(names) };
     return this.coinsFor.reader;
+  }
+
+  /**
+   * Whether a line is this realm throwing a command away (`Classifier`'s
+   * `fumbles`): the character's own line of a row a confusing spell prints
+   * (`ConfuseMsg`, todo 05), which proves confusion, or one of the realm's
+   * own `fumbles:` sentences — MegaMUD's *last action failed*, a trap sprung
+   * in the hand — which does not.
+   */
+  fumbled(text: string, row: number | null): Fumbled | null {
+    if (row !== null && this.world?.spellsByMessage(CONFUSE_MESSAGE_ABILITY).has(row)) {
+      return 'confusion';
+    }
+    const said = this.words().fumbles;
+    if (this.fumblesFor?.said !== said) this.fumblesFor = { said, compiled: said.map(compileLine) };
+    return this.fumblesFor.compiled.some((line) => matchLine(line, text) !== null)
+      ? 'stated'
+      : null;
   }
 
   /**
@@ -279,6 +301,18 @@ export class Vocabulary {
   }
 
   /**
+   * What a block tells the vocabulary: an attack word `*Combat Engaged*`
+   * answered, which the realm plainly has (`engaged`), and the lineage
+   * (`noteFamily`).
+   */
+  heard(block: Block, answering: string | null = null): void {
+    const engaged = block.type === 'combat-status' && block.groups['status'] === 'Engaged';
+    const attack = engaged ? commandOf(answering ?? '') : null;
+    if (attack !== null && ATTACK_COMMANDS.has(attack)) this.engaged.add(attack);
+    this.noteFamily(block, answering);
+  }
+
+  /**
    * Which lineage this server belongs to, from a block already being read.
    *
    * Free: `exp` and `rm` are both commands the client already sends, and the
@@ -297,10 +331,6 @@ export class Vocabulary {
    * client does not pick. It says which is which and lets both stand.
    */
   noteFamily(block: Block, answering: string | null = null): void {
-    // And an attack word the realm engaged on is one it has (`engaged`).
-    const engaged = block.type === 'combat-status' && block.groups['status'] === 'Engaged';
-    const attack = engaged ? commandOf(answering ?? '') : null;
-    if (attack !== null && ATTACK_COMMANDS.has(attack)) this.engaged.add(attack);
     if (this.serverFamily !== null) return;
     const reading = familyToldBy(block, answering);
     if (reading === null) return;

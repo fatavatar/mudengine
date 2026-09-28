@@ -11,6 +11,8 @@
  * - **A sentence that starts something lasting** is an effect the realm
  *   states (`StatedEffect`): the start, the end and what it means, read by
  *   the effect tracker beside the realm's own ability rows.
+ * - **A sentence that says the last command failed** is one of the realm's
+ *   `fumbles`: the command is sent again, as a fumble's is.
  * - **A monster row** is a `MobRule`: a stance, or a priority band with the
  *   spell it is fought with.
  *
@@ -73,10 +75,12 @@ function uniqueNames(): (name: string) => string {
 export function fromMessages(rows: unknown): {
   rules: RuleRow[];
   effects: StatedEffect[];
+  fumbles: string[];
   dropped: Dropped[];
 } {
   const rules: RuleRow[] = [];
   const effects: StatedEffect[] = [];
+  const fumbles: string[] = [];
   const dropped: Dropped[] = [];
   const ruleName = uniqueNames();
   const effectName = uniqueNames();
@@ -99,8 +103,11 @@ export function fromMessages(rows: unknown): {
     if (action === 'wait' || marks.includes('no-attack')) means.add('held');
     if (marks.includes('losing-hp')) means.add('hurting');
     // "Last action failed" with nothing lasting: the moment a command was lost.
-    if (marks.includes('action-failed') && ends.length === 0) means.add('fumble');
-    const lasts = ends.length > 0 || means.has('fumble');
+    if (marks.includes('action-failed') && ends.length === 0 && enabled) {
+      if (match.includes('{')) dropped.push({ name, why: 'names-somebody' });
+      else if (!fumbles.includes(match)) fumbles.push(match);
+    }
+    const lasts = ends.length > 0;
     if (lasts && means.size > 0 && enabled) {
       if (match.includes('{') || ends.includes('{')) {
         dropped.push({ name, why: 'names-somebody' });
@@ -133,7 +140,7 @@ export function fromMessages(rows: unknown): {
       then: answer.length === 1 ? answer[0]! : answer
     });
   }
-  return { rules, effects, dropped };
+  return { rules, effects, fumbles, dropped };
 }
 
 const STANCES: Readonly<Record<string, 'friend' | 'never' | 'escape' | 'hangup'>> = {

@@ -1045,23 +1045,14 @@ export class AutoCombat implements SessionModule {
         this.arrivedAt = Date.now();
         return;
 
-      case 'spell-ineffective': {
-        const spell = this.spell.emptied(block);
-        if (spell === null) {
-          this.spell.heard(block, this.state);
-          return;
+      case 'spell-ineffective':
+      case 'spell-cast': {
+        const owed = this.spell.heard(block, this.state);
+        if (owed !== null) {
+          this.queue.enqueue({ ...owed, priority: 'combat', coalesceKey: 'round-attack' });
         }
-        this.queue.enqueue({
-          command: 'break',
-          priority: 'combat',
-          coalesceKey: 'round-attack',
-          reason: t('automation.combat.reasonBreakEmpty', { spell })
-        });
         return;
       }
-      case 'spell-cast':
-        this.spell.heard(block, this.state);
-        return;
       case 'attack-refused': {
         const skill = block.groups['skill']?.toLowerCase() ?? '';
         const words = REFUSED_WORDS[skill];

@@ -220,6 +220,9 @@ export interface BatchBlock extends Block {
   rows: Array<Record<string, string>>;
 }
 
+/** A command thrown away: by confusion (`CheckConfusion`), or as the realm states it. */
+export type Fumbled = 'confusion' | 'stated';
+
 /**
  * Stateful across lines, because multi-line blocks exist. One instance per
  * session; `reset()` between connections.
@@ -379,12 +382,14 @@ export class Classifier {
      */
     private readonly messages?: (text: string) => MessageHit | null,
     /**
-     * Whether a message row is one a confusing spell prints on a fumble —
-     * `ConfuseMsg`'s targets across this realm's spells (todo 05). The row
-     * is what makes `You retch uncontrollably!` a thrown-away command rather
-     * than a line the table merely explains.
+     * Whether a line is this realm throwing a command away: the character's
+     * own line of a message row a confusing spell prints on a fumble —
+     * `ConfuseMsg`'s targets across this realm's spells (todo 05), which makes
+     * `You retch uncontrollably!` a thrown-away command rather than a line the
+     * table merely explains — or a sentence the realm states as one
+     * (`server.yaml` `fumbles:`). The row is null where the table has none.
      */
-    private readonly fumbles?: (row: number) => boolean,
+    private readonly fumbles?: (text: string, row: number | null) => Fumbled | null,
     /**
      * The realm's renamed coins read back to the stock names before a line is
      * matched (`coinReader`, todo 830), so every coin rule reads them as it
@@ -709,12 +714,6 @@ export class Classifier {
     }
     const hit = this.spells(text);
     if (!hit) return block;
-    // A fumble the realm states in its own words: marked, since it says
-    // nothing of confusion (a trap sprung in the hand, the winch that held).
-    if (hit.fumbles === true) {
-      const confidence = Math.max(block.confidence, tuning().parse.baseConfidence);
-      return this.build(line, 'command-fumbled', { stated: 'fumble' }, text, confidence);
-    }
     const begins = hit.starts.length > 0;
     const ends = hit.stops.length > 0;
     if (begins === ends) return block;
@@ -786,23 +785,29 @@ export class Classifier {
    * without a guess at what it means.
    */
   private asRealmMessage(line: StreamLine, text: string, block: Block): Block {
-    if (!this.messages || block.type !== 'unknown') return block;
+    if (block.type !== 'unknown') return block;
     /*
      * Not a line the prompt is glued to: a template that opens with `%s` would
      * take the prompt into its first name (`[HP=67]:Towser swings…`), and the
      * tail after the prompt is classified on its own (`tailAfterPrompt`).
      */
     if (STATUS_LINE_START.test(text)) return block;
-    const hit = this.messages(text);
-    if (hit === null) return block;
+    const hit = this.messages?.(text) ?? null;
     const confidence = tuning().parse.baseConfidence;
     /*
      * The character's own line of a confusion row (`You retch
      * uncontrollably!`) is the fumble `You fumble in confusion!` is: the
      * command was thrown away before the server read it. The room's line
      * (`%s retches uncontrollably!`) is somebody else's and stays explained.
+     * One the realm states (a trap sprung in the hand) is marked `stated`: it
+     * says nothing of confusion.
      */
-    if (hit.role === 1 && this.fumbles?.(hit.number) === true) {
+    const fumbled = this.fumbles?.(text, hit?.role === 1 ? hit.number : null) ?? null;
+    if (fumbled === 'stated') {
+      return this.build(line, 'command-fumbled', { stated: 'realm' }, text, confidence);
+    }
+    if (hit === null) return block;
+    if (fumbled === 'confusion') {
       return this.build(line, 'command-fumbled', this.messageGroups(hit), text, confidence);
     }
     const names = hit.fills.filter((fill, index) => hit.numeric[index] !== true && fill.length > 0);

@@ -46,7 +46,7 @@ function rig(initial: LocateWord, enabled = true) {
       tracker,
       errands: { forgetFitness: vi.fn() },
       world: undefined,
-      words: () => ({ locate: word, coins: {} })
+      words: () => ({ locate: word, coins: {}, fumbles: [] })
     },
     { locateRefused: () => claims?.locateRefused(), notice }
   );

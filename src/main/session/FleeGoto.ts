@@ -78,6 +78,9 @@ export class FleeGoto implements SessionModule {
     /** When the fight was broken off for it: the sent clock it started. */
     at: number;
     sent: boolean;
+    sentAt: number;
+    /** Whether the Enter a quiet teleport is owed has been asked for (`nudgeIfQuiet`). */
+    nudged: boolean;
     deadline: number;
     /** The echoes since the send, which pair a refusal with this command. */
     echo: EchoSince;
@@ -170,6 +173,8 @@ export class FleeGoto implements SessionModule {
       from: state.room,
       at: now,
       sent: false,
+      sentAt: now,
+      nudged: false,
       deadline: now + tuning().session.retreatPatienceMs,
       echo: new EchoSince(command)
     };
@@ -183,20 +188,8 @@ export class FleeGoto implements SessionModule {
       stillWanted: () => this.awaiting === awaiting && !this.grounded.down,
       onSent: () => {
         awaiting.sent = true;
-        awaiting.deadline = Date.now() + tuning().session.retreatPatienceMs;
-        /*
-         * And an Enter behind it: `sys goto` moves the character without
-         * printing where it landed, so the room on screen stayed the one it
-         * fled and the landing was never read (2026-09-22). The reprint is
-         * the landing; a refused teleport reprints the room it stayed in.
-         */
-        this.queue.enqueue({
-          command: REREAD_ROOM,
-          priority: 'emergency',
-          coalesceKey: 'escape:teleport-look',
-          reason: t('session.safety.teleportLookReason'),
-          stillWanted: () => this.awaiting === awaiting
-        });
+        awaiting.sentAt = Date.now();
+        awaiting.deadline = awaiting.sentAt + tuning().session.retreatPatienceMs;
       }
     });
   }
@@ -239,7 +232,25 @@ export class FleeGoto implements SessionModule {
       this.decided(waiting.why, false, block.text);
       return;
     }
+    this.nudgeIfQuiet(waiting, now);
     this.giveUpIfLate(now);
+  }
+
+  /**
+   * One Enter for a teleport nothing has answered, as a walk nudges a portal
+   * step (`tuning.walk.nudgeAfterMs`): `sys goto` moves the character without
+   * printing where it landed (2026-09-22), and the reprint is the landing.
+   */
+  private nudgeIfQuiet(waiting: NonNullable<FleeGoto['awaiting']>, now: number): void {
+    if (waiting.nudged || now - waiting.sentAt < tuning().walk.nudgeAfterMs) return;
+    waiting.nudged = true;
+    this.queue.enqueue({
+      command: REREAD_ROOM,
+      priority: 'emergency',
+      coalesceKey: 'escape:teleport-nudge',
+      reason: t('automation.walk.reasonNudge', { command: waiting.command }),
+      stillWanted: () => this.awaiting === waiting
+    });
   }
 
   private giveUpIfLate(now: number): void {
