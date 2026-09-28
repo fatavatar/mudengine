@@ -3,11 +3,12 @@
  * a status, device-attributes, mode, setting or colour query through `onData`,
  * and once a server turns focus, mouse or paste reporting on it sends those
  * reports the same way; everything `onData` carries goes to the game as typed.
- * So the queries go unanswered and the reporting modes are never turned on.
- * No recorded session of ours shows a server asking or setting one (every
- * capture and log, checked 2026-09-26), so nothing answers in the terminal's
- * place either. A colour *set* still reaches the terminal; only its query is
- * swallowed.
+ * So the queries go unanswered here and the reporting modes are never turned
+ * on. One question is answered in the terminal's place: the BBS asks where the
+ * cursor is (`ESC[6n`) at login and sends plain text for the whole visit when
+ * nothing answers (2026-09-24), so the session's socket answers it once
+ * (`src/main/net/terminal-queries.ts`). A colour *set* still reaches the
+ * terminal; only its query is swallowed.
  */
 import type { IParser, Terminal } from '@xterm/xterm';
 
