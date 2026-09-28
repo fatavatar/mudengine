@@ -2688,7 +2688,11 @@ function registerIpc(): void {
              * where the realm has no row: unknown offers everything, the
              * same rule `targeting` keeps one line up.
              */
-            ...(row === undefined || row === null ? {} : { serves: spellServes(row.abilities) })
+            ...(row === undefined || row === null
+              ? {}
+              : {
+                  serves: spellServes(row.abilities, (id) => world?.spellById(id)?.abilities)
+                })
           };
         }),
         // No realm to ask means no gates, never closed ones: unknown must

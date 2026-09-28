@@ -29,7 +29,7 @@ import Advanced from './Advanced';
 import CarrySections from './CarrySections';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
-import SpellField, { castableOn, refusesTarget } from './SpellPicker';
+import SpellField, { castableOn, drainsIn, refusesTarget } from './SpellPicker';
 import { castsOnOthers, castsOnSelf } from '@shared/spellcraft';
 import FormActions from './FormActions';
 import GlobalSettings from './GlobalSettings';
@@ -492,6 +492,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   ],
   spells: [
     { id: 'spells-round', label: t('settings.spells.legend') },
+    { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
@@ -632,6 +633,11 @@ interface CharacterForm {
   spellAttackFallback: string;
   spellAttackCasts: string;
   spellAreaCasts: string;
+  /** The drain spells cast instead while health is low, and the pair that starts and stops it. */
+  spellDrain: string;
+  spellAreaDrain: string;
+  spellDrainBelow: string;
+  spellDrainTo: string;
   /**
    * The heal, per character: a spell cast on this character, a spell cast on a
    * member, and the pair of figures that start and stop the casting.
@@ -835,6 +841,10 @@ function formOf(entry: ProfileEditable): CharacterForm {
     spellAttackFallback: entry.spells.attackFallback,
     spellAttackCasts: String(entry.spells.attackCasts),
     spellAreaCasts: String(entry.spells.areaCasts),
+    spellDrain: entry.spells.drain,
+    spellAreaDrain: entry.spells.areaDrain,
+    spellDrainBelow: percent(entry.spells.drainBelow),
+    spellDrainTo: percent(entry.spells.drainTo),
     spellHeal: entry.spells.heal,
     spellHealPartyWith: entry.spells.healPartyWith,
     spellHealBelow: percent(entry.spells.healBelow),
@@ -1047,6 +1057,10 @@ function draftOf(form: CharacterForm): ProfileDraft {
       attackFallback: form.spellAttackFallback.trim(),
       attackCasts: Math.max(0, Number.parseInt(form.spellAttackCasts, 10) || 0),
       areaCasts: Math.max(0, Number.parseInt(form.spellAreaCasts, 10) || 0),
+      drain: form.spellDrain.trim(),
+      areaDrain: form.spellAreaDrain.trim(),
+      drainBelow: fractionOf(form.spellDrainBelow),
+      drainTo: fractionOf(form.spellDrainTo),
       heal: form.spellHeal.trim(),
       healPartyWith: form.spellHealPartyWith.trim(),
       healBelow: fractionOf(form.spellHealBelow),
@@ -1386,6 +1400,10 @@ function emptyForm(
     spellAttackFallback: spells.attackFallback,
     spellAttackCasts: String(spells.attackCasts),
     spellAreaCasts: String(spells.areaCasts),
+    spellDrain: spells.drain,
+    spellAreaDrain: spells.areaDrain,
+    spellDrainBelow: percent(spells.drainBelow),
+    spellDrainTo: percent(spells.drainTo),
     spellHeal: spells.heal,
     spellHealPartyWith: spells.healPartyWith,
     spellHealBelow: percent(spells.healBelow),
@@ -1777,7 +1795,8 @@ export default function SettingsScreen({
        * so a derivative realm loses no options.
        */
       selfHeals: castableOn(spells, castsOnSelf),
-      partyHeals: castableOn(spells, castsOnOthers)
+      partyHeals: castableOn(spells, castsOnOthers),
+      drains: drainsIn(spells)
     };
   }, [characters, selected]);
   const servers = useMemo(() => snapshot?.servers ?? [], [snapshot]);
@@ -3424,6 +3443,47 @@ export default function SettingsScreen({
                           value={form.spellAreaCasts}
                         />
                         <p className="settings-note">{t('settings.spells.note')}</p>
+                      </fieldset>
+
+                      <fieldset className="settings-menus" data-fieldset="spells-drain">
+                        <legend>{t('settings.spells.drainLegend')}</legend>
+                        <p className="settings-note">{t('settings.spells.drainNote')}</p>
+                        <div className="settings-inline">
+                          <SpellField
+                            hint={t('settings.spells.drainHint')}
+                            label={t('settings.spells.drainLabel')}
+                            name="drain"
+                            onChange={(value) => patch({ spellDrain: value })}
+                            spells={shownBook.drains}
+                            value={form.spellDrain}
+                          />
+                          <SpellField
+                            hint={t('settings.spells.areaDrainHint')}
+                            label={t('settings.spells.areaDrainLabel')}
+                            name="area-drain"
+                            onChange={(value) => patch({ spellAreaDrain: value })}
+                            spells={shownBook.drains}
+                            value={form.spellAreaDrain}
+                          />
+                          <NumberField
+                            hint={t('settings.spells.drainBelowHint')}
+                            label={t('settings.spells.drainBelowLabel')}
+                            name="drain-below"
+                            onChange={(value) => patch({ spellDrainBelow: value })}
+                            bar={barOfHealth(form.spellDrainBelow)}
+                            figure={ofHealth(form.spellDrainBelow)}
+                            value={form.spellDrainBelow}
+                          />
+                          <NumberField
+                            hint={t('settings.spells.drainToHint')}
+                            label={t('settings.spells.drainToLabel')}
+                            name="drain-to"
+                            onChange={(value) => patch({ spellDrainTo: value })}
+                            bar={barOfHealth(form.spellDrainTo)}
+                            figure={ofHealth(form.spellDrainTo)}
+                            value={form.spellDrainTo}
+                          />
+                        </div>
                       </fieldset>
 
                       <fieldset className="settings-menus" data-fieldset="spells-heal">

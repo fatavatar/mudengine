@@ -360,7 +360,15 @@ export interface SpellOption {
    * Absent for a realm this build cannot read the columns of, which every
    * reader treats as *offer it anyway*: unknown must never empty a picker.
    */
-  serves?: { hp: boolean; poisoned: boolean; blind: boolean; diseased: boolean; held: boolean };
+  serves?: {
+    hp: boolean;
+    poisoned: boolean;
+    blind: boolean;
+    diseased: boolean;
+    held: boolean;
+    /** A hit that heals the caster: the drain fields offer these. */
+    drains: boolean;
+  };
 }
 
 export interface ProfileEditable {

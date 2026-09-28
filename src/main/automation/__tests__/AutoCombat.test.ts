@@ -1712,6 +1712,10 @@ describe('casting in a fight', () => {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -1742,6 +1746,10 @@ describe('casting in a fight', () => {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -1774,6 +1782,10 @@ describe('casting in a fight', () => {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -1805,6 +1817,10 @@ describe('casting in a fight', () => {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -1844,6 +1860,10 @@ describe('casting in a fight', () => {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -1889,6 +1909,10 @@ describe('casting in a fight', () => {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -3849,5 +3873,161 @@ describe('a monster that protects another', () => {
       combat({ monsters: [{ mob: 'orc lieutenant', relationship: 'friend' }] })
     );
     expect(sent).toEqual([]);
+  });
+});
+
+/*
+ * Drain when hurt (2026-09-28): a necrolyte's `vampiric assault` and
+ * `necromantic storm` hurt the target and heal the caster, and stand in for
+ * the attack spells below `drainBelow` until health is back to `drainTo`.
+ */
+describe('draining when hurt', () => {
+  const spells = (over: Partial<SpellsConfig> = {}): SpellsConfig => ({
+    ...DEFAULT_CONFIG.automation.spells,
+    attack: 'ma',
+    drain: 'aslt',
+    drainBelow: 0.5,
+    drainTo: 0.7,
+    minMana: 0,
+    ...over
+  });
+  const fight = (hp: number, mobCount = 1) =>
+    state({
+      inCombat: true,
+      combat: { ...EMPTY_CHARACTER.combat, engaged: true, target: 'giant rat' },
+      vitals: { ...EMPTY_CHARACTER.vitals, hp, hpMax: 100, mana: 80, manaMax: 100, manaType: 'MA' },
+      room: {
+        ...EMPTY_CHARACTER.room,
+        occupants: Array.from({ length: mobCount }, (_, i) =>
+          mob(i === 0 ? 'giant rat' : `giant rat ${i}`, 'hostile')
+        )
+      }
+    });
+  const round = (auto: AutoCombat, hp: number, mobCount = 1): void => {
+    auto.onCharacter(fight(hp, mobCount));
+    auto.onBlock(block('user-hits'));
+    vi.advanceTimersByTime(200);
+    drain();
+  };
+  const rounds = () => combat({ engage: 'none', refreshRounds: 0 });
+
+  it('casts the attack spell while health is over the line, and the drain under it', () => {
+    const auto = make(rounds(), true, spells());
+    round(auto, 90);
+    round(auto, 40);
+    expect(sent).toEqual(['ma giant rat', 'aslt giant rat']);
+    expect(notices.some((n) => /Health under 50%.*70%/.test(n))).toBe(true);
+  });
+
+  /* Every change of spell re-engages the fight and restarts the round, so a
+     drain that lifts health just over the line must not flip it back. */
+  it('keeps draining until health is back to drainTo', () => {
+    const auto = make(rounds(), true, spells());
+    round(auto, 40);
+    round(auto, 60);
+    expect(sent).toEqual(['aslt giant rat']);
+    round(auto, 75);
+    expect(sent).toEqual(['aslt giant rat', 'ma giant rat']);
+    expect(notices.some((n) => /back up/.test(n))).toBe(true);
+  });
+
+  it('goes back at drainBelow when drainTo is 0', () => {
+    const auto = make(rounds(), true, spells({ drainTo: 0 }));
+    round(auto, 40);
+    round(auto, 55);
+    expect(sent).toEqual(['aslt giant rat', 'ma giant rat']);
+  });
+
+  it('says nothing about draining when there is nothing to drain with', () => {
+    const auto = make(rounds(), true, spells({ drain: '' }));
+    round(auto, 40);
+    expect(sent).toEqual(['ma giant rat']);
+    expect(notices.some((n) => /Health under/.test(n))).toBe(false);
+  });
+
+  it('never drains with drainBelow at 0', () => {
+    const auto = make(rounds(), true, spells({ drainBelow: 0 }));
+    round(auto, 10);
+    expect(sent).toEqual(['ma giant rat']);
+  });
+
+  it('casts the room drain instead of the room spell in a crowd', () => {
+    const auto = make(
+      rounds(),
+      true,
+      spells({ areaAttack: 'pclo', areaDrain: 'nsto', areaMinMana: 0 })
+    );
+    round(auto, 90, 3);
+    round(auto, 40, 3);
+    expect(sent).toEqual(['pclo', 'nsto']);
+  });
+
+  it('keeps the room spell in a crowd when no room drain is set', () => {
+    const auto = make(rounds(), true, spells({ areaAttack: 'pclo', areaMinMana: 0 }));
+    round(auto, 40, 3);
+    expect(sent).toEqual(['pclo']);
+  });
+
+  /* `vampiric assault` affects the living only: against the undead the server
+     says it has no effect, and the fight goes back to the ordinary choice. */
+  it('goes back to the attack spell once the drain has no effect on the target', () => {
+    const auto = make(rounds(), true, spells());
+    round(auto, 40);
+    auto.onBlock(block('spell-ineffective', { target: 'giant rat' }));
+    round(auto, 40);
+    expect(sent).toEqual(['aslt giant rat', 'ma giant rat']);
+    expect(notices.some((n) => /aslt has no effect here; the combat spell/.test(n))).toBe(true);
+  });
+
+  it('picks the drain from the book with Auto Choose on and the drain field blank', () => {
+    const realm = (name: string) =>
+      (
+        ({
+          'vampiric assault': {
+            id: 1438,
+            name: 'vampiric assault',
+            short: 'aslt',
+            level: 35,
+            mana: 10,
+            targets: 8,
+            power: [5, 5],
+            abilities: [[8, 0]]
+          },
+          'fire jet': {
+            id: 9,
+            name: 'fire jet',
+            short: 'fjet',
+            level: 6,
+            mana: 5,
+            targets: 8,
+            power: [30, 55]
+          }
+        }) as Record<string, WorldSpell>
+      )[name] ?? null;
+    const auto = new AutoCombat(
+      rounds(),
+      true,
+      queue,
+      { notice: (m) => notices.push(m), drains: (name) => name === 'vampiric assault' },
+      spells({ attack: '', drain: '', autoChoose: true }),
+      realm
+    );
+    const book = {
+      progress: { ...EMPTY_CHARACTER.progress, level: 40 },
+      spellbook: [
+        { name: 'vampiric assault', short: 'aslt', level: 35, cost: 10 },
+        { name: 'fire jet', short: 'fjet', level: 6, cost: 5 }
+      ]
+    };
+    const booked = (hp: number) => ({ ...fight(hp), ...book });
+    auto.onCharacter(booked(90));
+    auto.onBlock(block('user-hits'));
+    vi.advanceTimersByTime(200);
+    drain();
+    auto.onCharacter(booked(40));
+    auto.onBlock(block('user-hits'));
+    vi.advanceTimersByTime(200);
+    drain();
+    expect(sent).toEqual(['fjet giant rat', 'aslt giant rat']);
   });
 });

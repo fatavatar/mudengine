@@ -41,6 +41,18 @@ function isAlignment(value: string | undefined): value is Alignment {
   return value !== undefined && (ALIGNMENTS as readonly string[]).includes(value);
 }
 
+/**
+ * A row's alignment. An empty column is **Neutral**: MajorMUD's `who` prints
+ * the word only for characters that have one, and Neutral is the one without
+ * (`Skinny Fatterson  -  Dedicate`, 2026-09-28). Read as unknown, it left a
+ * neutral character unable to say which `hates-good` monsters attack it, so
+ * a room of sea giants swinging at it never counted as a crowd.
+ */
+function alignmentOf(value: string | undefined): Alignment | null {
+  if (value === undefined || value.trim().length === 0) return 'Neutral';
+  return isAlignment(value) ? value : null;
+}
+
 /** `62%` as a fraction in [0, 1]; null when the listing printed none. */
 export function percent(value: string | undefined): number | null {
   if (value === undefined) return null;
@@ -94,10 +106,9 @@ export function rosterFrom(rows: Array<Record<string, string>> | undefined): Adv
     .map((row): Adventurer | null => {
       const name = row['name'];
       if (!name) return null;
-      const alignment = row['alignment'];
       return {
         name,
-        alignment: isAlignment(alignment) ? alignment : null,
+        alignment: alignmentOf(row['alignment']),
         title: row['title']?.trim() || null,
         flags: row['flags']?.trim() || null,
         // `None` is read as no gang; see `gangOf` for the one row that says so.

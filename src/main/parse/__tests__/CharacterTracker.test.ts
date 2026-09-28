@@ -1545,18 +1545,22 @@ describe('who else is in the realm', () => {
     expect(tracker.current.online[0]?.alignment).toBe('Outlaw');
   });
 
-  /* Absent is not Neutral. A guessed alignment is the guess that gets somebody
-     killed, and the reassuring guess is the dangerous one. */
-  it('leaves the alignment null when the listing does not give one', () => {
+  /* An empty column is Neutral: MajorMUD prints the word only for the
+     alignments that are not (`Skinny Fatterson  -  Dedicate` beside `Saint`,
+     `Good` and `Lawful` rows, 2026-09-28). Read as unknown, a neutral
+     character could not tell which `hates-good` monsters attack it. */
+  it('reads an empty alignment column as Neutral', () => {
     const tracker = listing('         Vaelor                -  Apprentice');
-    expect(tracker.current.online[0]?.alignment).toBeNull();
+    expect(tracker.current.online[0]?.alignment).toBe('Neutral');
   });
 
   it('refuses a word that is not one of the realm’s alignments', () => {
     const tracker = listing('         Sideways Grimjaw      -  Apprentice');
     // Either it parsed as a surname or not at all; what it must never do is
     // present `Sideways` as a standing the client can reason about.
-    for (const entry of tracker.current.online) expect(entry.alignment).toBeNull();
+    for (const entry of tracker.current.online) {
+      expect(entry.alignment === null || entry.alignment === 'Neutral').toBe(true);
+    }
   });
 
   /* A listing is authoritative: somebody absent from it has left. */
@@ -1716,6 +1720,26 @@ describe('the fight this character is in', () => {
     const tracker = fighting('The orc rogue slashes you for 5 damage!');
     expect(tracker.current.combat.target).toBeNull();
     expect(tracker.current.combat.attackers).toEqual(['orc rogue']);
+  });
+
+  /*
+   * A room spell cast mid-fight is answered `*Combat Off*` / `*Combat
+   * Engaged*`, and nothing stopped hitting this character for it: emptying
+   * the list there dropped the crowd that earned the spell (2026-09-28).
+   */
+  it('keeps who is hitting it through the re-engage a cast causes', () => {
+    const tracker = fighting(
+      'The orc rogue slashes you for 5 damage!',
+      '*Combat Off*',
+      '*Combat Engaged*'
+    );
+    expect(tracker.current.inCombat).toBe(true);
+    expect(tracker.current.combat.attackers).toEqual(['orc rogue']);
+  });
+
+  it('lets them go when the fight ends and nothing re-engages', () => {
+    const tracker = fighting('The orc rogue slashes you for 5 damage!', '*Combat Off*');
+    expect(tracker.current.combat.attackers).toEqual([]);
   });
 
   it('counts a miss as an attacker too, because it is still fighting you', () => {

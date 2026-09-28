@@ -170,6 +170,11 @@ notices:
         with the paragraph that explains it: {fileList}'
       many: 'Fleeing by sys goto is a setting, off by default, and was written into {count} files
         with the paragraph that explains it: {fileList}'
+    drainStated:
+      one: 'Casting a drain spell while health is low is a setting, off by default, and was written
+        into {count} file with the paragraph that explains it: {fileList}'
+      many: 'Casting a drain spell while health is low is a setting, off by default, and was written
+        into {count} files with the paragraph that explains it: {fileList}'
     confusionWaitStated:
       one: 'Walking on while confused is a setting, off by default, and was written into {count}
         file with the paragraph that explains it: {fileList}'
@@ -4171,6 +4176,21 @@ settings:
     attackCastsLabel: Casts Per Target
     areaCastsHint: Casts of the AE spell per fight. 0 is no limit.
     areaCastsLabel: AE Casts Per Fight
+    drainLegend: Drain When Hurt
+    drainNote:
+      A drain hurts the target and heals you by it. Below the threshold the drain spells stand in
+      for the combat and AE spells, under their own caps, crowd and mana tests, until health is
+      back up. Only spells the realm says drain are offered.
+    drainHint: Stands in for the combat spell while hurt. Blank keeps it, or picks from the spellbook with Auto Choose on.
+    drainLabel: Drain Spell
+    areaDrainHint: Stands in for the AE spell while hurt, when the room earns one. Blank keeps the AE spell.
+    areaDrainLabel: AE Drain Spell
+    drainBelowHint: Switch to the drain spells below this share of health. 0 never drains.
+    drainBelowLabel: Drain If Below HP %
+    drainToHint:
+      Keep draining until health is back to this. 0 switches back as soon as it is over the
+      threshold — and every switch restarts your combat round.
+    drainToLabel: Drain Up To HP %
     healBelowInCombatHint:
       A separate floor while fighting. 0 uses the one beside it for both; set it lower so a scratch
       does not cost a round.
@@ -4857,6 +4877,7 @@ automation:
     spellIneffective: '{spell} has no effect here; casting {fallback} instead for this fight.'
     spellIneffectiveArea: '{spell} has no effect here; the combat spell carries this fight.'
     spellIneffectiveNoFallback: '{spell} has no effect here, and no fallback spell is set; the round attacks carry this fight.'
+    drainIneffective: '{spell} has no effect here; the combat spell carries this fight.'
     whyUnweighed: 'first of {count} here: the realm cannot weigh {target}, and unknown is not safe'
     hazardList: '; {list}'
     hazard:
@@ -4886,6 +4907,8 @@ automation:
     emptyBook: 'Auto Choose Best Spell: the spellbook is empty — this character has no spells yet.'
     noAttackSpells: 'Auto Choose Best Spell: nothing in the spellbook attacks a single target.'
     allResisted: 'Auto Choose Best Spell: every attack spell in the book is resisted by this target; the round attacks carry the fight.'
+    drainStarts: 'Health under {below}%: casting the drain spell until it is back to {to}%.'
+    drainEnds: Health is back up; the combat spell again.
   train:
     reason: 'spending {cp} character points at the trainer'
     # Going to collect the level -- `TrainErrand` (todo 18). Every sentence
