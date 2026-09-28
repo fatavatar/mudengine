@@ -2308,6 +2308,16 @@ export interface PartyConfig {
    */
   waitNoLongerMinutes: number;
   /**
+   * Leading, crossing a `Text:` exit stands the route still — after the
+   * `@party` relay and reinvite sweep — until every member it just relayed to
+   * is seen in the new room. Its own field, not `waitNoLongerMinutes`: that
+   * one paces a `@wait`/health pause with `0` meaning *forever*; this paces a
+   * physical catch-up with `0` meaning **skip the wait entirely**, the
+   * opposite convention, because the two questions are not the same one. See
+   * ADR 0002.
+   */
+  catchUpWaitMinutes: number;
+  /**
    * Leading, walk on through a follower's `@wait` — MegaMUD's *Ignore @wait If
    * Leading*. `waitForMembersBelow` still pauses the loop for a member's health.
    */
@@ -2780,6 +2790,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       askForHealBelow: 0,
       waitForMembersBelow: 0,
       waitNoLongerMinutes: 0,
+      catchUpWaitMinutes: 1,
       ignoreWaitWhenLeading: false,
       ignorePartyWhenFollowing: false,
       requestPartyHealth: true,
@@ -4272,6 +4283,7 @@ export function normalizeParty(value: unknown): PartyConfig {
     askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow),
     waitForMembersBelow: fraction(raw['waitForMembersBelow'], d.waitForMembersBelow),
     waitNoLongerMinutes: int(raw['waitNoLongerMinutes'], d.waitNoLongerMinutes, 0, 240),
+    catchUpWaitMinutes: int(raw['catchUpWaitMinutes'], d.catchUpWaitMinutes, 0, 240),
     ignoreWaitWhenLeading: bool(raw['ignoreWaitWhenLeading'], d.ignoreWaitWhenLeading),
     ignorePartyWhenFollowing: bool(raw['ignorePartyWhenFollowing'], d.ignorePartyWhenFollowing),
     requestPartyHealth: bool(raw['requestPartyHealth'], d.requestPartyHealth),

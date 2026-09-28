@@ -710,6 +710,7 @@ describe('following somebody', () => {
       askForHealBelow: 0,
       waitForMembersBelow: 0,
       waitNoLongerMinutes: 0,
+      catchUpWaitMinutes: 1,
       ignoreWaitWhenLeading: false,
       ignorePartyWhenFollowing: false,
       requestPartyHealth: true,
@@ -727,6 +728,7 @@ describe('following somebody', () => {
         askForHealBelow: 0.4,
         waitForMembersBelow: 0.5,
         waitNoLongerMinutes: 5,
+        catchUpWaitMinutes: 3,
         ignoreWaitWhenLeading: true,
         ignorePartyWhenFollowing: true,
         requestPartyHealth: false,
@@ -740,12 +742,23 @@ describe('following somebody', () => {
       askForHealBelow: 0.4,
       waitForMembersBelow: 0.5,
       waitNoLongerMinutes: 5,
+      catchUpWaitMinutes: 3,
       ignoreWaitWhenLeading: true,
       ignorePartyWhenFollowing: true,
       requestPartyHealth: false,
       parEverySeconds: 15,
       parAfterRound: true
     });
+  });
+
+  // 0 means *skip the wait entirely* here, deliberately the opposite of
+  // `waitNoLongerMinutes`'s "0 means forever" — see ADR 0002. Clamped to
+  // 0–240 like its sibling, and defaults to 1 rather than 0.
+  it('clamps catchUpWaitMinutes to 0-240 and defaults to 1', () => {
+    expect(party({}).catchUpWaitMinutes).toBe(1);
+    expect(party({ catchUpWaitMinutes: 0 }).catchUpWaitMinutes).toBe(0);
+    expect(party({ catchUpWaitMinutes: 300 }).catchUpWaitMinutes).toBe(240);
+    expect(party({ catchUpWaitMinutes: -5 }).catchUpWaitMinutes).toBe(0);
   });
 
   // The server acknowledges a command a status line; a listing every second

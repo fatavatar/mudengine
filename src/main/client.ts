@@ -1814,6 +1814,9 @@ function registerIpc(): void {
   handle(Invoke.stopMoving, (_caller, session: SessionId) => {
     host?.get(session)?.manager.stopMoving();
   });
+  handle(Invoke.endCatchUpWait, (_caller, session: SessionId) => {
+    host?.get(session)?.manager.endCatchUpWait();
+  });
   /*
    * Back: one room the way the character came. `confirmed` is read exactly as
    * `move:start` reads it — the figure the window was shown, never a flag —

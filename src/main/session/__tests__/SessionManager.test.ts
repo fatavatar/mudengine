@@ -4532,6 +4532,153 @@ describe('a follower pacing the loop', () => {
 });
 
 /*
+ * Party relay, re-sneak, reinvite sweep and catch-up wait for a leader's own
+ * Walker/Loop-driven crossing of a `Text:` exit — issue #5, ADR 0002. The
+ * Walker-level mechanics (relay condition, re-sneak, reinvite arithmetic,
+ * the hold itself) have their own focused tests in `Walker.test.ts`; these
+ * exercise the same feature end to end, over a real socket, the way the
+ * sibling leader-wait tests above do.
+ */
+describe('a party relay crossing a text exit', () => {
+  /**
+   * Lines, not raw text: `.@party go manhole` ends in the same bytes as the
+   * bare `go manhole` that follows it, so a substring or an unanchored regex
+   * against the raw wire cannot tell the say from the move. Split on the
+   * wire's own terminator instead, and ask whether an exact line went out.
+   */
+  const wire = (socket: net.Socket): (() => string[]) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1').split('\r\n');
+  };
+
+  function relayConfig(over: Partial<AutomationConfig['party']> = {}): AutomationConfig {
+    return {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      // No pacing gap: these tests are about the relay/reinvite/wait
+      // sequence, not about how long the arbiter waits between sends.
+      pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 3000 },
+      party: { ...DEFAULT_CONFIG.automation.party, ...over }
+    };
+  }
+
+  /** The party listing: Vaelor (self, leading) and Pip, both frontrank. */
+  const partyListing =
+    [
+      'The following people are in your travel party:',
+      '  Vaelor                        (Mystic)     [M:100%] [H:100%]  - Frontrank',
+      '  Pip                            (Warrior)             [H:100%]  - Frontrank',
+      '[HP=100/MA=50]:'
+    ].join('\r\n') + PROMPT_REPAINT;
+
+  /** Connected, named, placed at Rat Lair (1/3), leading Pip. */
+  async function atTheCrossing(world: WorldGraph, config: AutomationConfig): Promise<net.Socket> {
+    manager = new SessionManager(collect().sink, world, config);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('Welcome back, Vaelor!\r\n');
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('Location:            1,3\r\nRat Lair\r\nObvious exits: south\r\n');
+    await until(() => manager!.character.room.number === 3);
+    socket.write(partyListing);
+    await until(() => manager!.character.party.members.length === 2);
+    return socket;
+  }
+
+  it('says @party before the move, and the move follows', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig());
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+    expect(lines().indexOf('.@party go manhole')).toBeGreaterThanOrEqual(0);
+    expect(lines().indexOf('.@party go manhole')).toBeLessThan(lines().indexOf('go manhole'));
+  });
+
+  it('re-invites whoever fell behind, says @join, and holds movement until they are seen', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 2 }));
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+
+    // Pip did not replay the exit: gone from the roster before the room lands.
+    socket.write('Pip is no longer following you.\r\n');
+    socket.write('Sewer\r\nObvious exits: up\r\n');
+    await until(() => manager!.character.room.number === 4);
+
+    await until(() => lines().includes('invite Pip'));
+    expect(lines()).toContain('.@join');
+    expect(manager!.walker.progress.hold).toBe('catchup');
+
+    // Pip catches up: seen in the room settles the wait on its own.
+    socket.write('Pip enters the room.\r\n');
+    await until(() => manager!.walker.progress.hold === null);
+  });
+
+  it('resumes on its own once catchUpWaitMinutes elapses, with nobody chased further', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 1 }));
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    socket.write('Pip is no longer following you.\r\n');
+    socket.write('Sewer\r\nObvious exits: up\r\n');
+    await until(() => manager!.walker.progress.hold === 'catchup');
+    const giveUp = timers.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    timers.mockRestore();
+    expect(giveUp).toBeTypeOf('function');
+    (giveUp as () => void)();
+
+    expect(manager!.walker.progress.hold).toBeNull();
+  });
+
+  it('skips the wait entirely at catchUpWaitMinutes: 0, though it still invites and @joins', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 0 }));
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+    socket.write('Pip is no longer following you.\r\n');
+    socket.write('Sewer\r\nObvious exits: up\r\n');
+    await until(() => manager!.character.room.number === 4);
+
+    await until(() => lines().includes('invite Pip'));
+    expect(manager!.walker.progress.hold).toBeNull();
+  });
+
+  it('lets the leader override the wait early, resuming movement at once', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 5 }));
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    socket.write('Pip is no longer following you.\r\n');
+    socket.write('Sewer\r\nObvious exits: up\r\n');
+    await until(() => manager!.walker.progress.hold === 'catchup');
+
+    manager!.endCatchUpWait();
+    expect(manager!.walker.progress.hold).toBeNull();
+  });
+
+  it('does not relay or reinvite a hand-typed crossing', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig());
+    const lines = wire(socket);
+
+    manager!.send('go manhole\r\n');
+    await until(() => lines().includes('go manhole'));
+    expect(lines().some((line) => line.includes('@party'))).toBe(false);
+  });
+});
+
+/*
  * The reaction to a player opening on this character — MegaMUD's NotifyGang,
  * from the evidence the client already reads: `<Name> moves to attack you!`
  * puts the attacker in `attackers` and starts the five-minute clock, and the
