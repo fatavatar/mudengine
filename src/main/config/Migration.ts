@@ -270,6 +270,7 @@ function migrateAll(options: MigrationOptions): void {
   theMobRulesBecameMonsterRows(home, note);
   statedTheMeditateTarget(home, note, options.template);
   statedTheFleeGoto(home, note, options.template);
+  statedTheDrain(home, note, options.template);
 }
 
 /**
@@ -6160,6 +6161,59 @@ function statedTheFleeGoto(
     stated.length === 1
       ? t('notices.migration.fleeGotoStated.one', params)
       : t('notices.migration.fleeGotoStated.many', params)
+  );
+}
+
+/**
+ * `automation.spells.drain`, `areaDrain`, `drainBelow` and `drainTo`
+ * (2026-09-28): a necrolyte's `vampiric assault` and `necromantic storm` cast
+ * in place of the attack spells while health is low. Written off, after
+ * `areaCasts`, with the template's paragraph on the first, into every file
+ * that states a spells block.
+ */
+function statedTheDrain(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.drain');
+  const defaults = DEFAULT_CONFIG.automation.spells;
+  const keys = [
+    ['drain', defaults.drain],
+    ['areaDrain', defaults.areaDrain],
+    ['drainBelow', defaults.drainBelow],
+    ['drainTo', defaults.drainTo]
+  ] as const;
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('drain')) return false;
+      const pairs = keys
+        .filter(([key]) => !spells.has(key))
+        .map(([key, value]) => document.createPair(key, value) as Pair);
+      const first = pairs[0];
+      if (typeof comment === 'string' && first !== undefined && isScalar(first.key)) {
+        first.key.commentBefore = comment;
+      }
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'areaCasts'
+      );
+      if (after === -1) spells.items.push(...pairs);
+      else spells.items.splice(after + 1, 0, ...pairs);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.drainStated.one', params)
+      : t('notices.migration.drainStated.many', params)
   );
 }
 

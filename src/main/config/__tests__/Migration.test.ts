@@ -6356,3 +6356,54 @@ ${login}`,
     expect(server()['login']).toEqual([{ when: 'or (C)ontinue', send: '{password}' }]);
   });
 });
+
+/* Drain when hurt (2026-09-28): four keys after `areaCasts`, off, with the paragraph, once. */
+describe('the drain spells', () => {
+  const profile = (): string => home.profile('vaelor').file;
+  const spellsOf = (): Record<string, unknown> =>
+    (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
+      'spells'
+    ] as Record<string, unknown>;
+
+  beforeEach(() => {
+    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
+    migrate();
+    fs.mkdirSync(path.dirname(profile()), { recursive: true });
+  });
+
+  it('writes them after areaCasts, with the paragraph, once', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  spells:\n    attack: aslt\n    areaCasts: 0\n    heal: ""\n',
+      'utf8'
+    );
+    migrate(true);
+    const spells = spellsOf();
+    // `autoChoose` heads the block, written by its own pass.
+    expect(Object.keys(spells).slice(1, 7)).toEqual([
+      'attack',
+      'areaCasts',
+      'drain',
+      'areaDrain',
+      'drainBelow',
+      'drainTo'
+    ]);
+    expect(spells['drain']).toBe('');
+    expect(spells['drainBelow']).toBe(0);
+    expect(fs.readFileSync(profile(), 'utf8')).toContain('Drain when hurt');
+    expect(said.some((m) => m.includes('drain spell while health is low'))).toBe(true);
+    migrate(true);
+    expect(said.filter((m) => m.includes('drain spell while health is low'))).toHaveLength(0);
+  });
+
+  it('leaves a stated drain alone', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  spells:\n    drain: vampiric assault\n',
+      'utf8'
+    );
+    migrate();
+    expect(spellsOf()['drain']).toBe('vampiric assault');
+    expect(spellsOf()['drainBelow']).toBeUndefined();
+  });
+});

@@ -293,16 +293,35 @@ export interface CureGates {
  * `held` is the realm's own `Freedom` mark (81) — the `freedom` spell and the
  * items that cast it — which is MegaMUD's Freedom slot, cast when the
  * character cannot move.
+ *
+ * `drains` is a hit that heals the caster by it: `DrainLife` (8) on the row
+ * (`vampiric assault`), or a hit whose `EndCast` is a heal — `necromantic
+ * storm` hurts the room and ends in `suck the life force`, a heal on the
+ * caster (the mudrev realm, 2026-09-28). The chain is followed only through
+ * `linked`; without it, the row's own marks are all that is read.
  */
-export function spellServes(abilities: AbilityPairs | undefined): {
+export function spellServes(
+  abilities: AbilityPairs | undefined,
+  linked?: (id: number) => AbilityPairs | undefined
+): {
   hp: boolean;
   poisoned: boolean;
   blind: boolean;
   diseased: boolean;
   held: boolean;
+  drains: boolean;
 } {
-  const serves = { hp: false, poisoned: false, blind: false, diseased: false, held: false };
+  const serves = {
+    hp: false,
+    poisoned: false,
+    blind: false,
+    diseased: false,
+    held: false,
+    drains: false
+  };
   if (abilities === undefined) return serves;
+  let hits = false;
+  let endsIn: number | null = null;
   for (const [id, value] of abilities) {
     if (id === HEALS) serves.hp = true;
     if (id === CURE_POISON) serves.poisoned = true;
@@ -310,6 +329,12 @@ export function spellServes(abilities: AbilityPairs | undefined): {
     if (id === DISPELL_MAGIC && value === BLIND_USER) serves.blind = true;
     if (id === REMOVES_SPELL) serves.diseased = true;
     if (id === FREEDOM) serves.held = true;
+    if (id === HAZARD_ABILITY.drain) serves.drains = true;
+    if (id === HAZARD_ABILITY.damage || id === HAZARD_ABILITY.damageWithMr) hits = true;
+    if (id === HAZARD_ABILITY.endCast) endsIn = value;
+  }
+  if (!serves.drains && hits && endsIn !== null && linked !== undefined) {
+    serves.drains = (linked(endsIn) ?? []).some(([id]) => id === HEALS);
   }
   return serves;
 }
