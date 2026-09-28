@@ -12,12 +12,11 @@
 terminal:
   quiet:
     # Commands the client sends on its own behalf whose echo and answer stay
-    # out of the console — `rm` or `sys` is asked on every arrival so the map
-    # knows where it is (whichever a realm's own `locate:` setting names), and
-    # answers with lines nobody reads. Only what automation sends is ever
-    # quiet; anything you type is always shown, and so is anything the server
-    # volunteers in the middle of an answer — a monster walking in, somebody
-    # talking — because that is not the answer.
+    # out of the console — `rm` is asked on every arrival so the map knows
+    # where it is, and answers with a line nobody reads. Only what automation
+    # sends is ever quiet; anything you type is always shown, and so is
+    # anything the server volunteers in the middle of an answer — a monster
+    # walking in, somebody talking — because that is not the answer.
     enabled: true
     # The first word of the command, as the client sends it.
     #
@@ -28,16 +27,10 @@ terminal:
     # no first word, so it answers to `enter` here -- add it to keep the idle
     # and mid-fight re-reads out of the console as well.
     #
-    # `sys` is `sys status`, the MajorMUD-lineage locate a realm's own
-    # `locate: sys-status` setting sends in place of `rm` — the first word is
-    # the same regardless of which command the setting picks, so one entry
-    # covers both.
-    #
     # `pro` and `set` are the status-line routine's: thirty lines of profile
     # and a `Done.`, sent only when `automation.statline.control` is on.
     commands:
       - rm
-      - sys
       - look
       - pro
       - set
@@ -94,7 +87,7 @@ palette:
 # block replaces the default list whole.
 #
 # Names are button ids. The switches are `automation` (the master), `combat`,
-# `retaliate`, `retreat`, `hangUp`, `loot`, `drop`,
+# `retaliate`, `retreat`, `fleeGoto`, `hangUp`, `loot`, `drop`,
 # `search`, `autoDeposit`, `openDoors`, `pickLocks`, `bashDoors`, `sneak`,
 # `healParty`, `assistLeader`, `defendParty`, `restWithLeader`, `remotes`,
 # `gangpath` and `lookAtPlayers`; the rest are `connect`, `gear:restore`,
@@ -289,12 +282,11 @@ tuning:
     # 41ms.
     procWindowMs: 1000
 
-    # How long an attack stays owed a *Combat Engaged*. The server answers in
-    # tens of milliseconds even behind a burst (2026-09-22: four commands and
-    # a heal, all answered inside 90ms), so this only bounds an attack nothing
-    # ever answered -- which must not bind the engagement some later attack
-    # causes.
-    engageBindMs: 3000
+    # How long an attack stays owed a *Combat Engaged*: the backstop for a
+    # refused attack no later echo retires. Measured over 105,052 recorded
+    # engagements: wrong bindings flat at 28 from 1s to 4s, unbound 79 at 1s
+    # and 20 at 4s; with no end, 172 wrong. The longest before wrong rises.
+    engageBindMs: 4000
 
     # Remembered attackers in one fight. The names matter, not the count.
     maxAttackers: 12
@@ -371,6 +363,14 @@ tuning:
     # a whole evening because somebody typed two characters and walked away.
     abandonedLineMs: 20000
 
+    # How long an st or i sent on entering the realm waits for its answer
+    # before it is asked again. Once any answer has come back, it is not asked
+    # again.
+    unreadRetryMs: 20000
+
+    # How many times it is asked again before the client gives up and says so.
+    unreadRetries: 3
+
     # How long a command the server threw away waits before it is sent again.
     #
     # `You fumble in confusion!` is the server discarding whatever was sent
@@ -400,13 +400,6 @@ tuning:
     # window are answered by the same listing.
     rosterAskMs: 60000
 
-    # How long the stat sheet or the pack may go unread after entering the
-    # realm before it is asked for again. The first ask can be lost -- entering
-    # on the ground, confused, behind a half-typed line -- and without the
-    # sheet no health figure is known to be low, so a rest, a walk's hold and
-    # @wait all let a character walk on at 17%.
-    unreadRetryMs: 30000
-
     # The floor between two looks at other players, and how long one is worth
     # sending. A room that fills up should not spend six commands at once on
     # something nobody asked for urgently -- and the answer is about somebody
@@ -426,10 +419,9 @@ tuning:
     # the one round they are.
     roundMs: 100
 
-    # How long after a monster dies the room is read again (an Enter), so what
-    # it dropped is seen and a wanted item picked up. The death sentence and
-    # the experience line collapse into one read, and the drops land first.
-    lookAfterKillMs: 400
+    # The quiet between two rounds' blows: the first blow after it opens a new
+    # round. Measured: inside a round at most 1.5 s, between rounds 2.5 s or more.
+    roundGapMs: 2000
 
     # The shortest gap between two attempts to open a fight on the same thing.
     # Not pacing — pacing comes from the prompt — but a floor on *asking*: an
@@ -437,12 +429,9 @@ tuning:
     # exactly as it was.
     engageCooldownMs: 4000
 
-    # How long a room re-read owed after a monster came, went or died holds
-    # walking and resting still, when its answer never comes.
-    roomOwedMs: 3000
-    # How long a room-spell fight waits, after the death that took it under the
-    # room spell's crowd, before switching to the single-target spell.
-    areaSettleMs: 800
+    # How long an arrival sentence stays pending its own state change. Short,
+    # because what it bounds is the case where the change never comes.
+    arrivalWindowMs: 2000
 
     # How long a typed `break` stands auto-combat down. The stand-down ends
     # early when the player attacks or the room changes; this is the backstop
@@ -501,17 +490,22 @@ tuning:
     # outweighing every round of blows before it.
     deathOverRounds: 5
 
-    # The room's fight, run: how many times, how long a fight may run before
-    # it is called, and the shares of fights survived that read as safe and as
-    # merely risky — under riskyAbove is deadly. Three hundred runs of a long
-    # fight are a millisecond or two; the figures move a point between seeds.
+    # The fight, run: how many times, how long a fight may run before it is
+    # called, and the shares of fights survived that must be exceeded to read
+    # as safe (green) and as risky (yellow); the rest is deadly (red). Over 60%
+    # is green, and 25% or less is almost certainly not survivable. The lair
+    # colours on the map and the hunting grounds read the same levels.
     survivalTrials: 300
 
     survivalRoundCap: 120
 
-    survivalSafeAbove: 0.95
+    survivalSafeAbove: 0.6
 
-    survivalRiskyAbove: 0.6
+    survivalRiskyAbove: 0.25
+
+    # How long the background run of every monster and lair holds the thread
+    # before handing it back, in milliseconds. One fight is 3 to 6ms.
+    survivalSliceMs: 8
 
   # Casting on the character's behalf — `AutoHeal`, `Cures`, `Blessings`.
   spells:
@@ -528,6 +522,16 @@ tuning:
     # How long a party member's @heal stands waiting for a cast. Past one
     # healCooldownMs, so a request arriving just after a heal still gets its own.
     healRequestMs: 10000
+
+    # How steeply a low bar outweighs a high one when a party-wide heal is
+    # weighed against a single heal: a point mended is worth
+    # (1 - share) ^ healUrgency. At 2, a point mended at 35% is worth about
+    # ten mended at 80%.
+    healUrgency: 2
+
+    # A heal within this share of the best one's worth is as good, and the
+    # cheapest of those is cast.
+    healNearEnough: 0.05
 
     # How long a cure proposal stays worth sending.
     cureExpiresMs: 3000
@@ -561,17 +565,6 @@ tuning:
     # How soon after a cast an onset line (`You feel safe from evil!`) is
     # learned as that spell's, so the `st` timer can be attributed to it.
     onsetWindowMs: 3000
-    # A cast only the command named: the last unread line of its burst is the
-    # onset, learned once a line arrives this long after it.
-    onsetSettleMs: 500
-    # The quiet between two rounds' blows: the first blow after it opens a new
-    # round, and with it the one heal, blessing or cure a round allows.
-    roundGapMs: 1500
-    # How long that cast holds the gate when no new round is seen.
-    castRoundMs: 6000
-    # How soon after a heal, blessing or cure went out the round's refusal is
-    # taken as its answer, and the cast retried once the round has passed.
-    refusedWindowMs: 2000
     # How long a sentence nothing recognised is kept as a possible ending for a
     # buff whose ending is unknown, waiting for an `st` sheet to settle it.
     pendingStopMs: 600000
@@ -588,6 +581,10 @@ tuning:
     # How far apart an unnameable effect ending and a condition ending may be
     # and still be read as one event, which is what confirms what it causes.
     effectCauseMs: 5000
+
+    # Out of a fight no blow marks a round, so a cast holds the next one for a
+    # round (hunting.roundSeconds) and this much more.
+    castSlackMs: 1000
 
   # Drinking on the character's behalf — `Potions`.
   potions:
@@ -793,26 +790,6 @@ tuning:
     # How long a proposal stays worth sending. A timed command is not urgent.
     expiresMs: 10000
 
-  # A realm's message table acted on (Messages.md, imported per realm).
-  messages:
-    # The least time between two responses from one row. MegaMUD has none; this
-    # is for a row whose response the realm answers with a sentence the same row
-    # matches, which would otherwise be a command a second.
-    responseGapMs: 1000
-
-    # How long an effect is held with no ending heard -- a wear-off missed while
-    # the character was elsewhere, or an ending typed wrong. MegaMUD holds one
-    # for ever; ten minutes is its own ceiling for a blessing.
-    effectCeilingMs: 600000
-
-    # How many times running one refused command is put back for a message's
-    # "last action failed". A fear that lasts a minute would otherwise be a
-    # resend a second for that minute.
-    retries: 3
-
-    # How long a message's "don't rest, run" keeps a room from being rested in.
-    noRestMs: 60000
-
   # Walking a planned route — `Walker`.
   walk:
     # How long one hold lasts before the walk tries the step again.
@@ -906,8 +883,16 @@ tuning:
     # How long the item errand waits after saying the phrase that summons a
     # monster which drops what the way needs -- `touch statue`, and the statue
     # has to die. A summons is a fight before it is an item, so minutes. A
-    # handover is read off a pack listing instead and needs no clock of its own.
+    # handover's own wait is handoverDelayMs, below.
     errandAskMs: 180000
+
+    # How late a script's giveitem can land after its phrase, and so how long a
+    # handover's pack listing is asked again for: the longest adddelay before a
+    # giveitem in GreaterMUD's own scripts (mine, ten seconds; five others wait
+    # two). GreaterMUD answers a listing asked meanwhile only after the delay,
+    # so this is the margin for a server whose order is unmeasured. Past it the
+    # errand says the handover may have been a quest flag the pack never lists.
+    handoverDelayMs: 10000
 
     # How long a walk stands still for a condition before spending one step to
     # find out whether it is over.
@@ -1213,6 +1198,18 @@ tuning:
     # the middle of one.
     rewriteHoldMs: 2000
 
+    # How long a Goto or a Loop pressed where the client cannot place the
+    # character waits for the answer to the locate word (rm) before it plans
+    # anyway, and is refused as before. The probe can wait behind the three
+    # commands the pacing window lets out, each about a movement round
+    # (1,239ms measured), so three rounds and a margin.
+    locateResolveMs: 4000
+
+    # How long the locate word (rm), once asked for, is worth sending while it
+    # waits its turn, for whichever asker raised it: a lost loop, a scattered
+    # walk, a Goto, the Room card. Past it the question is stale.
+    locateExpiresMs: 10000
+
     # Records the debug window keeps, and therefore how far back a bug report
     # reaches.
     #
@@ -1238,14 +1235,6 @@ tuning:
 
     # How long a `safe-haven` retreat waits for the escape move to land.
     retreatSettleMs: 5000
-
-    # How long picking a Goto destination or pressing play on a Loop waits for
-    # an ambiguous room to resolve before planning from it anyway. Long enough
-    # for a round trip on a slow board; short enough that a realm with nothing
-    # to ask (locate: none, or a connection that already knows the configured
-    # word does not work) is never actually counted down, because
-    # SessionManager.ensureLocated returns immediately in both of those cases.
-    locateResolveMs: 4000
 
     # Minimum gap between decision-trace publishes. The queue changes several
     # times a second in combat and every change interests a diagnostics card
@@ -1378,6 +1367,14 @@ tuning:
     # Ceiling on placed rooms, so a dense area cannot produce a vast grid.
     mapCells: 200
 
+    # How the Map card's route preview gathers stretches onto one page: up to
+    # `routePageStretches` of them, while they walk `routePageSteps` flat
+    # steps or fewer between them. A way down five times, or a few rooms
+    # either side of a manhole, then reads as one page, drawn floor above
+    # floor. A stretch longer than the budget has a page to itself.
+    routePageStretches: 6
+    routePageSteps: 12
+
     # What a barrier the character cannot force costs to route through.
     #
     # Priced as a wall that can still be walked through when there is no other
@@ -1476,17 +1473,15 @@ tuning:
     # and past this it is a tour rather than a choice.
     anotherWayLonger: 0.5
 
-    # The most the walk to a lever in another room may cost each way, for the
-    # router to plan it: a plain room is 1 and a searched wall 26. The Grand
-    # Stair door (7/150) opens to a lever two rooms and a searched wall away,
-    # 28 each way. Past this the lever is left to the walk, which fetches it
-    # when the door refuses.
-    leverDetourCost: 60
     # How many times the walk to the nearest place a key is had is counted when
     # a way through its door is weighed against the way round: 2 is there and
     # back. A drop is a fight and a chance on top, so this is a floor under the
     # errand, not its cost.
     keyFetchTrips: 2
+
+    # The most a walk to a door's lever in another room and back may cost before
+    # the door is a wall again. The Grand Stair door's lever walk prices at about 57.
+    leverDetourCost: 500
 
     # How many of a consumable a quest's plan buys against a room spell on the
     # way, where the realm says using one stops the spell. A waterskin is three

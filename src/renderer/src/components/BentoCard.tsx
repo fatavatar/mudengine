@@ -15,7 +15,8 @@ import { keepFocus } from '../lib/focus';
 import { t } from '../lib/i18n';
 import { writeClipboard } from '../lib/clipboard';
 import CardSettingsPopup from './CardSettings';
-import { floatAlphas, type CardId, type CardSettings } from '../hooks/useCardLayout';
+import { floatAlphas } from '../hooks/useCardLayout';
+import type { CardId, CardSettings } from '../lib/cards';
 import { THEMES, type Appearance, type ThemeId } from '@shared/themes';
 import { readable, useCopyMenu } from '../hooks/useCopyMenu';
 
@@ -198,6 +199,12 @@ export interface BentoCardProps {
    * card* has always offered, so the two never disagree.
    */
   copyText?(): string;
+  /**
+   * False to leave the copy glyph out of the action column, for a card whose
+   * contents are a picture with nothing worth pasting. The right-click menu's
+   * copies stay.
+   */
+  copyable?: boolean;
   /** Anything else the card can do, after close and copy. */
   actions?: CardAction[];
   /**
@@ -344,6 +351,7 @@ export default function BentoCard({
   onActive,
   onClose,
   copyText,
+  copyable = true,
   pinned,
   onPin,
   rolled,
@@ -475,7 +483,9 @@ export default function BentoCard({
           }
         ]
       : []),
-    { id: 'copy', label: t('cards.chrome.copy'), icon: 'copy' as const, run: copyCard },
+    ...(copyable
+      ? [{ id: 'copy', label: t('cards.chrome.copy'), icon: 'copy' as const, run: copyCard }]
+      : []),
     ...(actions ?? []),
     // And the shown face's own, last: the card's offer is about the card and
     // outranks one about whichever face happens to be up.
@@ -659,6 +669,8 @@ export default function BentoCard({
       ref={frame}
       data-card-theme={worn}
       data-dragging={dragging ? 'true' : undefined}
+      // The face shown, by id, so a harness reads it without its English.
+      data-face={tabs?.[at]?.id}
       data-rolled={rolled ? 'true' : undefined}
       onContextMenu={copy.onContextMenu}
       /*
@@ -726,6 +738,7 @@ export default function BentoCard({
                   aria-pressed={filter.on}
                   className="crumb"
                   data-active={filter.on ? 'true' : 'false'}
+                  data-filter={filter.id}
                   disabled={filter.disabled === true}
                   key={filter.id}
                   onClick={filter.toggle}
@@ -745,6 +758,7 @@ export default function BentoCard({
                   aria-selected={index === at}
                   className="crumb"
                   data-active={index === at ? 'true' : 'false'}
+                  data-tab={tab.id}
                   key={tab.id}
                   onClick={() => show(index)}
                   // A card is read, never typed into: switching its face must
@@ -877,7 +891,12 @@ export default function BentoCard({
             // fits, and matching that on the English word `More` would stop
             // finding folds the moment somebody reworded the label.
             data-action="more"
-            onClick={(event) => setMore((open) => (open ? null : event.currentTarget))}
+            // Read before the updater, which may run after dispatch has
+            // nulled `currentTarget` (see `CardPicker`).
+            onClick={(event) => {
+              const button = event.currentTarget;
+              setMore((open) => (open ? null : button));
+            }}
             onMouseDown={keepFocus}
             title={t('cards.chrome.more')}
             type="button"

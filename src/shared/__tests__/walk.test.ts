@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { afflictionHolding, stillFled, stillFor, type FledRoom } from '../walk';
-import { EMPTY_CHARACTER, NO_AFFLICTIONS, type StatedEffect } from '../character';
-import { DEFAULT_CONFIG, healthHolding, type HealthConfig } from '../config';
+import { EMPTY_CHARACTER, NO_AFFLICTIONS } from '../character';
+import { DEFAULT_CONFIG } from '../config';
+import {
+  afflictionHolding,
+  isAfflictionHold,
+  portalLeftUnseen,
+  stillFled,
+  type FledRoom
+} from '../walk';
 
 /*
  * The rooms an escape must not run back into, and *when* that list forgets.
@@ -61,112 +67,66 @@ describe('the rooms still too recently fled to go back into', () => {
   });
 });
 
-describe("what the realm's messages say stands a walk still", () => {
-  const movement = { walkWhileBlind: false, walkWhilePoisoned: false, walkWhileConfused: false };
-  const stated = (patch: Partial<StatedEffect>): StatedEffect => ({
-    name: 'row',
-    effects: [],
-    action: 'none',
-    since: 0,
-    ...patch
+/*
+ * The one predicate the walker and the loop both ask. Confusion joined it in
+ * todo 809 as MegaMUD's `IgnoreConfusion`, whose default waits.
+ */
+describe('which stated condition stands a walk still', () => {
+  const movement = DEFAULT_CONFIG.automation.movement;
+
+  it('waits confusion out by default', () => {
+    expect(afflictionHolding({ ...NO_AFFLICTIONS, confused: 'yes' }, movement)).toBe('confused');
   });
 
-  it('holds for confusion, unless the player said to walk on', () => {
-    const confused = [stated({ effects: ['confused'] })];
-    expect(afflictionHolding(NO_AFFLICTIONS, movement, confused)).toBe('condition');
+  it('walks on confused when the switch says so', () => {
     expect(
-      afflictionHolding(NO_AFFLICTIONS, { ...movement, walkWhileConfused: true }, confused)
+      afflictionHolding(
+        { ...NO_AFFLICTIONS, confused: 'yes' },
+        { ...movement, walkWhileConfused: true }
+      )
     ).toBeNull();
   });
 
-  it('holds while losing hit points, and for a row that says to wait or rest', () => {
-    expect(afflictionHolding(NO_AFFLICTIONS, movement, [stated({ effects: ['losing-hp'] })])).toBe(
-      'condition'
-    );
-    expect(afflictionHolding(NO_AFFLICTIONS, movement, [stated({ action: 'wait' })])).toBe(
-      'condition'
-    );
-    expect(afflictionHolding(NO_AFFLICTIONS, movement, [stated({ action: 'rest-hp' })])).toBe(
-      'condition'
-    );
+  it('does not hold on a confusion nobody has stated', () => {
+    expect(afflictionHolding(NO_AFFLICTIONS, movement)).toBeNull();
+    expect(afflictionHolding({ ...NO_AFFLICTIONS, confused: 'no' }, movement)).toBeNull();
   });
 
-  it('does not hold for what is not a movement matter', () => {
+  it('still holds for a held character, whatever the switches say', () => {
     expect(
-      afflictionHolding(NO_AFFLICTIONS, movement, [stated({ effects: ['hp-regen', 'no-attack'] })])
-    ).toBeNull();
-  });
-
-  it("names the wire's own affliction ahead of a stated condition", () => {
-    expect(
-      afflictionHolding({ ...NO_AFFLICTIONS, held: 'yes' }, movement, [
-        stated({ effects: ['confused'] })
-      ])
+      afflictionHolding(
+        { ...NO_AFFLICTIONS, held: 'yes', confused: 'yes' },
+        { ...movement, walkWhileConfused: true }
+      )
     ).toBe('held');
+  });
+
+  it('counts confusion among the holds a card names as a condition', () => {
+    expect(isAfflictionHold('confused')).toBe(true);
+    expect(isAfflictionHold('health')).toBe(false);
+    expect(isAfflictionHold(null)).toBe(false);
   });
 });
 
-/*
- * What would stand a character still, on the walker's and the loop's own
- * predicates, for a follower's `@wait` (2026-09-25) — so a follower asks its
- * leader to stop at exactly the figures its own walk would, and walks on at
- * the same ones.
- */
-describe('why a character would stand still', () => {
-  const health: HealthConfig = {
-    ...DEFAULT_CONFIG.automation.health,
-    restBelow: 0.5,
-    restTo: 0.9,
-    meditateBelow: 0.3,
-    meditateTo: 0.8
-  };
-  const config = { health, movement: DEFAULT_CONFIG.automation.movement };
-  const at = (hp: number, mana: number | null = null, over = {}) => ({
-    ...EMPTY_CHARACTER,
-    ...over,
-    vitals: { ...EMPTY_CHARACTER.vitals, hp, hpMax: 100, mana, manaMax: mana === null ? null : 100 }
+/* A portal left unseen is not nudged: a dark or blind reprint names nothing (todo 808). */
+describe('portalLeftUnseen', () => {
+  const lit = { ...EMPTY_CHARACTER, room: { ...EMPTY_CHARACTER.room, light: null } };
+  const portal = { direction: 'portal' as const };
+
+  it('is a portal step from a blinding room or a blind character', () => {
+    expect(portalLeftUnseen(portal, { ...lit, room: { ...lit.room, light: 'pitch black' } })).toBe(
+      true
+    );
+    expect(
+      portalLeftUnseen(portal, { ...lit, afflictions: { ...lit.afflictions, blind: 'yes' } })
+    ).toBe(true);
   });
 
-  it('is health under the floor, and stays so to the ceiling', () => {
-    expect(stillFor(at(40), config, null, 0.1)).toBe('health');
-    expect(stillFor(at(70), config, null, 0.1)).toBeNull();
-    expect(stillFor(at(70), config, 'health', 0.1)).toBe('health');
-    expect(stillFor(at(95), config, 'health', 0.1)).toBeNull();
-  });
-
-  it('is mana on the same terms', () => {
-    expect(stillFor(at(100, 20), config, null, 0.1)).toBe('mana');
-    expect(stillFor(at(100, 50), config, 'mana', 0.1)).toBe('mana');
-    expect(stillFor(at(100, 85), config, 'mana', 0.1)).toBeNull();
-  });
-
-  // A ceiling carries on only what was stopped for: held, then freed at 70%,
-  // walks on, as the walker's one hold slot does.
-  it('reads a ceiling only for the reason being waited on', () => {
-    expect(stillFor(at(70), config, 'held', 0.1)).toBeNull();
-  });
-
-  it('puts what the server stated first', () => {
-    const held = at(40, null, { afflictions: { ...NO_AFFLICTIONS, held: 'yes' } });
-    expect(stillFor(held, config, null, 0.1)).toBe('held');
-  });
-
-  it('is not sitting down', () => {
-    const sitting = at(70);
-    sitting.vitals = { ...sitting.vitals, resting: true };
-    expect(stillFor(sitting, config, null, 0.1)).toBeNull();
-  });
-
-  /* `restTo` 0 is the single sit-down, not a zero-width band: the margin is. */
-  it('walks on a margin above the floor where there is no ceiling', () => {
-    const uncapped = { ...health, restTo: 0 };
-    expect(healthHolding(uncapped, 55, 100, true, 0.1)).toBe(true);
-    expect(healthHolding(uncapped, 65, 100, true, 0.1)).toBe(false);
-  });
-
-  it('holds for nothing unknown, and for nothing with the floor off', () => {
-    expect(healthHolding(health, null, 100, false, 0.1)).toBe(false);
-    expect(healthHolding(health, 40, null, false, 0.1)).toBe(false);
-    expect(healthHolding({ ...health, restBelow: 0 }, 1, 100, true, 0.1)).toBe(false);
+  it('is not a lit room, an ordinary step, or a state nobody has', () => {
+    expect(portalLeftUnseen(portal, lit)).toBe(false);
+    expect(
+      portalLeftUnseen({ direction: 'n' }, { ...lit, room: { ...lit.room, light: 'pitch black' } })
+    ).toBe(false);
+    expect(portalLeftUnseen(portal, undefined)).toBe(false);
   });
 });

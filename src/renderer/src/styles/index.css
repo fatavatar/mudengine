@@ -360,7 +360,7 @@ option {
   --card-h: 208px;
 }
 .rail > .map-card {
-  --card-h: 300px;
+  --card-h: 380px;
 }
 /* Two faces, and the taller is the loop's: a transport row, the loop's name, the
    stop bar and four figures. Declared rather than left to the fallback, per the
@@ -2312,37 +2312,6 @@ kbd {
   padding: 4px 8px;
 }
 
-/* A plan asked for and not yet answered — see `planningTo` in RoutePanel. */
-.route-planning {
-  align-items: center;
-  color: var(--text-lo);
-  display: flex;
-  gap: 8px;
-  padding: 10px 8px;
-}
-
-.route-spinner {
-  animation: route-spin 0.8s linear infinite;
-  border: 2px solid color-mix(in srgb, var(--pending) var(--tone), transparent);
-  border-radius: 50%;
-  border-top-color: var(--pending);
-  flex: none;
-  height: 12px;
-  width: 12px;
-}
-
-@keyframes route-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .route-spinner {
-    animation: dot-pulse 1.6s var(--ease-inout) infinite;
-  }
-}
-
 /* The plan was drawn again from here, and why. Not the refusal's register: a
    refusal says the press did nothing, and this says the press produced a plan
    to read — so it wears the accent, which is what this palette says *look
@@ -2638,12 +2607,144 @@ kbd {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  position: relative;
   touch-action: none;
   user-select: none;
 }
 
+/* The way home after looking up or down: over the picture's corner, where
+   the picture never puts anything the reader needs. */
+.map-back {
+  background: var(--glass-fill-strong);
+  left: calc(var(--gap) / 2);
+  position: absolute;
+  top: calc(var(--gap) / 2);
+}
+
 .map-view[data-panning] {
   cursor: grabbing;
+}
+
+/*
+ * The Map card's finder (`MapRouteFinder`): two room fields and the locate
+ * button in one row, the leg pager under it. Both panes hold still over the
+ * picture, which takes what they leave.
+ */
+.map-finder {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.map-finder-fields,
+.map-legs-row {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
+.map-legs-row > .map-leg-steps {
+  color: var(--text-lo);
+  flex: 1 1 auto;
+  font-size: var(--font-micro);
+}
+
+.room-field {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+}
+
+/* The matches open over the picture, so the card below them does not move. */
+.room-field-matches {
+  background: var(--glass-fill-strong);
+  border-radius: var(--r-chip);
+  left: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 3;
+}
+
+.map-leg-count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-micro);
+}
+
+/* One line, cut short; the whole sentence is its tooltip. */
+.map-leg-text {
+  color: var(--text-lo);
+  font-size: var(--font-micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-finder-note {
+  font-size: var(--font-micro);
+  margin: 0;
+}
+
+/*
+ * A route preview page of several stretches (`RouteSheetView`): fitted, so
+ * there is nothing to drag. Each floor is a tonal plane under its rooms, and
+ * a floor above paints over the one below.
+ */
+.map-sheet {
+  cursor: default;
+}
+
+.map-floor-plane {
+  fill: color-mix(in srgb, var(--text-lo) 7%, transparent);
+  stroke: color-mix(in srgb, var(--text-lo) 22%, transparent);
+  stroke-width: 0.4;
+}
+
+/*
+ * How one stretch leads to the next. A way up or down is a solid line with
+ * its arrow; any other jump is dashed, since the two ends are not joined on
+ * any map. The badge carries the glyph, the label the command typed.
+ */
+.map-join line {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-width: 0.9;
+}
+
+.map-join[data-kind='jump'] line,
+.map-join[data-kind='onward'] line {
+  stroke-dasharray: 1.6 1.8;
+}
+
+.map-join-arrow {
+  fill: var(--accent);
+}
+
+.map-join-badge {
+  fill: var(--glass-fill-strong);
+  stroke: var(--accent);
+  stroke-width: 0.5;
+}
+
+.map-join-glyph,
+.map-join-label {
+  fill: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 3.4px;
+  pointer-events: none;
+}
+
+.map-join-glyph {
+  font-size: 4.2px;
+}
+
+.map-join-label {
+  fill: var(--text-lo);
 }
 
 .map-view > .map-plan {
@@ -2779,9 +2880,10 @@ kbd {
  * A place the lap still owes, as a dashed ring — solid is the `you` ring, and
  * shape has to carry the difference rather than hue alone (§6).
  *
- * `--ok` because it is the one hue on this map spent on nothing else: amber is
- * a shop, red is a lair, gold is a bank, purple is a way out of the plane and
- * the accent is this character and its route.
+ * `--ok` because on this map it is otherwise only a survivable lair's, a
+ * filled diamond, which the dashed ring cannot be read as: amber is a shop or
+ * a risky lair, red a lair not survivable, gold a bank, purple a way out of
+ * the plane and the accent is this character and its route.
  */
 .map-stop {
   fill: none;
@@ -2833,7 +2935,7 @@ kbd {
  * A trap is not an obstacle you open; it is one you regret. A bar says *shut*
  * and a trap is not shut — the route walks straight through it and takes the
  * hit — so it is its own shape, the hazard triangle, upright whichever way the
- * corridor runs (`MapPlan`). The lair's red at the lair's tone, because both
+ * corridor runs (`MapPlan`). The red of a lair not survivable, because both
  * are where the damage is, and the shape says which (§6): it was a bar in a
  * second hue for as long as the map existed, with no entry in the legend.
  */
@@ -2885,7 +2987,27 @@ kbd {
   stroke: var(--pending);
 }
 
-.map-room[data-kind='lair'] > .map-shape {
+.map-room[data-kind='lair'] > .map-shape,
+.map-legend [data-kind='lair'] .key .map-shape {
+  fill: color-mix(in srgb, var(--text-lo) 40%, transparent);
+  stroke: var(--text-lo);
+}
+
+/* A lair by how its fight goes for this character (todo 03): the meter's hues. */
+.map-room[data-kind='lair'][data-odds='safe'] > .map-shape,
+.map-legend [data-kind='lair'][data-odds='safe'] .key .map-shape {
+  fill: color-mix(in srgb, var(--ok) 55%, transparent);
+  stroke: var(--ok);
+}
+
+.map-room[data-kind='lair'][data-odds='risky'] > .map-shape,
+.map-legend [data-kind='lair'][data-odds='risky'] .key .map-shape {
+  fill: color-mix(in srgb, var(--pending) 55%, transparent);
+  stroke: var(--pending);
+}
+
+.map-room[data-kind='lair'][data-odds='deadly'] > .map-shape,
+.map-legend [data-kind='lair'][data-odds='deadly'] .key .map-shape {
   fill: color-mix(in srgb, var(--danger) 55%, transparent);
   stroke: var(--danger);
 }
@@ -2915,19 +3037,6 @@ kbd {
 .map-you {
   fill: none;
   stroke: var(--accent);
-}
-
-/* Leads up or down, which the plane cannot show. */
-.map-vertical {
-  fill: none;
-  stroke: var(--marker);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 0.7;
-}
-
-.map-room[data-kind='here'] .map-vertical {
-  stroke: var(--on-accent);
 }
 
 .map-room:hover > .map-shape {
@@ -2985,11 +3094,6 @@ kbd {
 .map-legend [data-kind='shop'] .key .map-shape {
   fill: color-mix(in srgb, var(--pending) 55%, transparent);
   stroke: var(--pending);
-}
-
-.map-legend [data-kind='lair'] .key .map-shape {
-  fill: color-mix(in srgb, var(--danger) 55%, transparent);
-  stroke: var(--danger);
 }
 
 .map-legend [data-kind='bank'] .key .map-shape {
@@ -4356,31 +4460,6 @@ button.quest-plan-back {
 }
 
 /*
- * The client's own mark, at the head of the status rail.
- *
- * Sized from the type rather than in pixels, for the reason every fixed height
- * in a card has just stopped being one: `--font-ui-base` is written at runtime
- * from `ui.font.size`, so a mark measured against the default chrome would be
- * the wrong size for anybody who changed it — and here it would also stop
- * matching the line of text it sits beside. `1.6em` of `--font-micro` is the
- * line box that line already has, so the mark takes no height of its own and
- * turning it off gives back no space.
- *
- * The rail's `gap` is 14px, which is a lot beside a round mark, so the mark
- * pulls the next segment back to the spacing a heading uses.
- */
-.app-mark {
-  background-image: url('../assets/logo.png');
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
-  flex: 0 0 auto;
-  height: 1.6em;
-  margin-right: -6px;
-  width: 1.6em;
-}
-
-/*
  * Connect and disconnect, in the segment that already states the condition.
  * A button, but not a loud one: this is chrome reporting a state that happens
  * to be actionable, not the primary action of a screen.
@@ -4451,9 +4530,34 @@ button.quest-plan-back {
 .dot.connecting,
 .dot.negotiating,
 .dot.resolving,
-.dot.closing {
+.dot.closing,
+.dot.planning {
   animation: dot-pulse 1.6s var(--ease-inout) infinite;
   background: var(--pending);
+}
+
+/*
+ * A route being planned (todo 838). Drawn at once but shown only after
+ * `--delay-planning`, so a plan that lands sooner never flashes; the delay
+ * holds under reduced motion, which shortens durations, not delays.
+ */
+.route-planning {
+  align-items: center;
+  animation: route-planning-shown 0s linear var(--delay-planning) both;
+  color: var(--text-lo);
+  display: flex;
+  font-size: var(--font-micro);
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+@keyframes route-planning-shown {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
+  }
 }
 
 @keyframes dot-pulse {
@@ -7047,155 +7151,6 @@ button.quest-plan-back {
 }
 
 /*
- * A realm's message table (`RealmMessages`): a bar that says what the table
- * is and offers the import, then one line per message -- the switch, the name,
- * the sentence, and chips for what it means and what it sends. Six hundred of
- * them is a list to search, not to read, so a row stays one line until it is
- * opened.
- */
-.realm-messages {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.messages-bar,
-.messages-confirm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.messages-bar button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.messages-summary {
-  color: var(--text-lo);
-  flex: 1 1 auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.messages-status {
-  margin: 0;
-}
-
-.messages-status.ok {
-  color: var(--ok);
-}
-
-.messages-status.bad {
-  color: var(--danger);
-}
-
-.messages-search {
-  width: 100%;
-}
-
-.messages-list {
-  display: flex;
-  flex-direction: column;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.messages-list li {
-  border-bottom: 1px solid var(--ink-line);
-  padding: 4px 0;
-}
-
-.messages-list li:last-child {
-  border-bottom: none;
-}
-
-.messages-list li.off .message-summary {
-  opacity: 0.55;
-}
-
-.message-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.message-row > input {
-  flex: 0 0 auto;
-  margin-top: 3px;
-}
-
-/* The row itself is the button that opens it, so it reads as text, not chrome. */
-.message-summary {
-  all: unset;
-  box-sizing: border-box;
-  cursor: pointer;
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  min-width: 0;
-}
-
-.message-summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.message-name {
-  color: var(--text-hi);
-  font-weight: 600;
-}
-
-.message-match {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  overflow-wrap: anywhere;
-}
-
-.message-chips {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-/* A reply is the player's own text, so it keeps its case. */
-.message-chips .chip:not(.info):not(.warn):not(.quiet) {
-  text-transform: none;
-}
-
-.message-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 8px 0 4px 26px;
-}
-
-.message-effects {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
-
-.message-effects-label {
-  color: var(--text-lo);
-  font-size: var(--font-micro);
-  letter-spacing: 0.06em;
-  margin-right: 4px;
-  text-transform: uppercase;
-}
-
-.message-editor-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-/*
  * A blessing carries more than a menu answer, so its row is two lines: the
  * identity — order, name, spell, target — and the numbers and switches under
  * it. The list keeps the steps' rhythm; the second line is quieter and
@@ -7229,14 +7184,19 @@ button.quest-plan-back {
   padding: 2px 3px;
 }
 
-.blessing-detail {
+.blessing-detail,
+.settings-mob-rules .mob-rule-detail {
   flex-wrap: wrap;
-  padding-left: 52px;
   font-size: 0.85em;
   color: var(--text-lo-quiet);
 }
 
-.blessing-detail label {
+.blessing-detail {
+  padding-left: 52px;
+}
+
+.blessing-detail label,
+.settings-mob-rules .mob-rule-detail label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -7480,6 +7440,19 @@ button.quest-plan-back {
   width: auto;
 }
 
+/* How a banded row fights its monster (todo 816): the spell, its casts, no
+   backstab — the blessing row's detail line, laid out as one. */
+.settings-mob-rules .mob-rule-detail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.settings-mob-rules .mob-rule-detail .spell-picker {
+  flex: 1 1 12em;
+}
+
 /* A text field with the character's own book under it. */
 .spell-picker {
   position: relative;
@@ -7531,17 +7504,19 @@ button.quest-plan-back {
 }
 
 /*
- * The three cures as one three-column row, label over field — a fixed count,
- * unlike the auto-fill field grid, because these are one sentence read
- * across: what cures blindness, poison, disease.
+ * The cures as one row, a column each, label over field — one column per
+ * cure however many there are, unlike the auto-fill field grid, because these
+ * are one sentence read across: what cures blindness, poison, disease, a hold.
  */
 .settings-cures {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--field-gap);
 }
 
-.blessing-detail input.number {
+.blessing-detail input.number,
+.settings-mob-rules .mob-rule-detail input.number {
   width: 56px;
   flex: 0 0 auto;
 }
@@ -7727,13 +7702,6 @@ button.quest-plan-back {
   list-style: none;
   margin: 0;
   padding: 8px 0;
-}
-
-/* The errand a refused way offers when a key alone would open it: the one
-   action under the refusal, so it is the filled control, as Walk is above. */
-.route-fetch {
-  display: flex;
-  justify-content: flex-end;
 }
 
 /*
@@ -8637,6 +8605,57 @@ button.lookup:focus-visible {
 ) {
   margin-block: -0.2em;
   padding-block: 0.2em;
+}
+
+/*
+ * The head of the card rail: the put-away chip at the left, the client's mark
+ * at the right. One band tall (`--topbar-h`), the band the chip already fills,
+ * so the mark adds no height while anything is put away.
+ */
+.card-rail-head {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--gap);
+  min-height: var(--topbar-h);
+}
+
+/*
+ * The client's mark at the upper right with its version to the left:
+ * clipped to one line, the tooltip carries the version either way.
+ */
+.app-mark {
+  align-items: center;
+  color: var(--text-lo);
+  display: flex;
+  flex: 0 1 auto;
+  font-size: var(--font-micro);
+  font-variant-numeric: tabular-nums;
+  gap: 0 6px;
+  height: var(--topbar-h);
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 4px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Sized from the band, not in pixels, so it follows `ui.font.size`. */
+.app-mark-glyph {
+  background-image: url('../assets/logo.png');
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  flex: 0 0 auto;
+  height: calc(var(--topbar-h) * 0.85);
+  width: calc(var(--topbar-h) * 0.85);
+}
+
+.app-mark-version {
+  line-height: var(--topbar-h);
+  white-space: nowrap;
 }
 
 /*

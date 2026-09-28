@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parse } from 'yaml';
+import { isMap, isScalar, parse, parseDocument } from 'yaml';
 
 import { migrateHome } from '../Migration';
 import { LoopStore } from '../LoopStore';
@@ -12,6 +12,8 @@ import { homeAt, type Home } from '../../app/home';
 import { ACTIONABLE_REMOTES } from '../../../shared/remotes';
 import { DEFAULT_CONFIG } from '../../../shared/config';
 import type { Loop } from '../../../shared/loops';
+import { t } from '../../app/i18n';
+import { composes, notesOf } from '../../app/copyMatch';
 
 let dir = '';
 let old = '';
@@ -138,7 +140,9 @@ describe('bringing an older layout across', () => {
   it('says what it did, and never what is inside', () => {
     migrate();
     expect(said.join('\n')).toContain(home.options);
-    expect(said.join('\n')).toMatch(/2 realms moved/);
+    expect(said).toContain(
+      t('notices.migration.serversLifted.many', { count: 2, serversDir: home.serversDir })
+    );
     expect(said.join('\n')).not.toContain('orohost');
   });
 
@@ -239,7 +243,7 @@ describe('the "stand up at" health thresholds', () => {
       // And by `statedTheRestNextDoor`, on.
       restNextDoor: true,
       meditateBelow: 0.3,
-      // And by `statedTheMeditateTarget`, after it, at the default.
+      // And by `statedTheMeditateCeiling`, off.
       meditateTo: 0,
       // And by `statedTheNewAutomation`, at the default.
       useWards: true
@@ -264,7 +268,7 @@ describe('the "stand up at" health thresholds', () => {
   it('say so, naming files and no values', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/stand up at/i);
+    expect(notesOf(said, 'notices.migration.restThresholdsDropped.one')).toHaveLength(1);
     expect(said_).toContain(home.options);
     expect(said_).not.toContain('0.95');
   });
@@ -274,13 +278,25 @@ describe('the "stand up at" health thresholds', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/stand up at/i);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.restThresholdsDropped.one',
+        'notices.migration.restThresholdsDropped.many'
+      )
+    ).toEqual([]);
   });
 
   it('leaves a file that never had them alone', () => {
     fs.writeFileSync(home.options, 'automation:\n  health:\n    restBelow: 0.6\n', 'utf8');
     migrate();
-    expect(said.join('\n')).not.toMatch(/stand up at/i);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.restThresholdsDropped.one',
+        'notices.migration.restThresholdsDropped.many'
+      )
+    ).toEqual([]);
   });
 });
 
@@ -418,6 +434,14 @@ describe('the combat and potion settings that went', () => {
     migrate();
     const rows = healthOf()['potions'] as Array<Record<string, unknown>>;
     expect(rows.map((row) => row['name'])).toEqual(['antidote', 'healing potion']);
+    // Said, by the matcher the file that never had them is checked with.
+    expect(
+      notesOf(
+        said,
+        'notices.migration.combatAndPotionSettings.one',
+        'notices.migration.combatAndPotionSettings.many'
+      )
+    ).toHaveLength(1);
   });
 
   it('is safe to run again, and leaves a file that never had them alone', () => {
@@ -427,7 +451,13 @@ describe('the combat and potion settings that went', () => {
     said.length = 0;
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/politeAttacks/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.combatAndPotionSettings.one',
+        'notices.migration.combatAndPotionSettings.many'
+      )
+    ).toEqual([]);
   });
 });
 
@@ -467,9 +497,9 @@ describe('the round combat macro', () => {
       maxMonsterExperience: 0,
       // And by `statedTheHideForOpener`, off.
       hideForOpener: false,
-      // And by `statedTheMonsterRows`, empty, which is what the client already
-      // does without the key (`statedTheMobRules`' list folded into it).
-      monsters: [],
+      // And by `statedTheMobRules`, empty, which is what the client already
+      // does without the key.
+      mobRules: [],
       // And by `statedTheNewAutomation`, at the shipped figure (todo 00).
       defendAfterRounds: 2
     });
@@ -495,7 +525,7 @@ describe('the round combat macro', () => {
   it('says so, naming files and no values', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/round combat macro/i);
+    expect(notesOf(said, 'notices.migration.roundMacroDropped.one')).toHaveLength(1);
     expect(said_).toContain(home.options);
     expect(said_).not.toContain('kic');
   });
@@ -505,13 +535,25 @@ describe('the round combat macro', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/round combat macro/i);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.roundMacroDropped.one',
+        'notices.migration.roundMacroDropped.many'
+      )
+    ).toEqual([]);
   });
 
   it('leaves a file that never had it alone', () => {
     fs.writeFileSync(home.options, 'automation:\n  combat:\n    attack: a\n', 'utf8');
     migrate();
-    expect(said.join('\n')).not.toMatch(/round combat macro/i);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.roundMacroDropped.one',
+        'notices.migration.roundMacroDropped.many'
+      )
+    ).toEqual([]);
   });
 });
 
@@ -533,7 +575,52 @@ describe('the round combat macro', () => {
  * defaults it — the mark is drawn either way — but a setting absent from the
  * file is one nobody reading the file can find.
  */
-describe('the mark in the status rail', () => {
+/*
+ * The last-ditch teleport (todo 813) is a block inside `automation.safety`,
+ * which `reconcileWithTemplate` never reaches into: without this step the
+ * setting is invisible in every options file that predates it.
+ */
+describe('the teleport below the retreat', () => {
+  const SAFETY =
+    'automation:\n  safety:\n    retreat:\n      enabled: false\n    hangUp:\n      enabled: false\n';
+  const fleeGoto = (): unknown =>
+    (
+      (parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+        'safety'
+      ] as Record<string, unknown>
+    )['fleeGoto'];
+
+  beforeEach(() => {
+    fs.mkdirSync(home.globalDir, { recursive: true });
+  });
+
+  it('is stated off, beside the retreat, with the template’s paragraph', () => {
+    fs.writeFileSync(home.options, SAFETY, 'utf8');
+    migrate(true);
+    expect(fleeGoto()).toEqual({ enabled: false, belowHealth: 0.2, command: '' });
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('fleeGoto')).toBeGreaterThan(text.indexOf('retreat'));
+    expect(text.indexOf('fleeGoto')).toBeLessThan(text.indexOf('hangUp'));
+    expect(text).toMatch(/sys goto silvermere/);
+  });
+
+  it('leaves a file that already states it alone, and runs once', () => {
+    fs.writeFileSync(
+      home.options,
+      `${SAFETY}    fleeGoto:\n      enabled: true\n      belowHealth: 0.1\n`,
+      'utf8'
+    );
+    migrate(true);
+    migrate(true);
+    expect(fleeGoto()).toEqual({ enabled: true, belowHealth: 0.1 });
+    // Positive control: the same run states it where it is missing.
+    fs.writeFileSync(home.options, SAFETY, 'utf8');
+    migrate(true);
+    expect(fleeGoto()).toMatchObject({ enabled: false });
+  });
+});
+
+describe('the mark at the head of the card rail', () => {
   beforeEach(() => {
     fs.mkdirSync(home.globalDir, { recursive: true });
   });
@@ -552,7 +639,22 @@ describe('the mark in the status rail', () => {
   it('brings the paragraph that explains it, because the file is the documentation', () => {
     fs.writeFileSync(home.options, 'ui:\n  showHud: true\n', 'utf8');
     migrate();
-    expect(fs.readFileSync(home.options, 'utf8')).toMatch(/status rail/i);
+    // The template's own paragraph above the key, whatever it currently says.
+    // Line by line, trimmed: a bare `#` reads back as an empty line or a space.
+    const paragraph = (file: string): string[] => {
+      const ui = parseDocument(fs.readFileSync(file, 'utf8')).get('ui', true);
+      if (!isMap(ui)) return [];
+      const key = ui.items.find((item) => isScalar(item.key) && item.key.value === 'showLogo')?.key;
+      const comment = isScalar(key) ? (key.commentBefore ?? '') : '';
+      return comment.split('\n').map((line) => line.trim());
+    };
+    expect(
+      (parse(fs.readFileSync(home.options, 'utf8')).ui as Record<string, unknown>)['showLogo']
+    ).toBe(true);
+    expect(paragraph(home.options).join('')).not.toBe('');
+    expect(paragraph(home.options)).toEqual(
+      paragraph(path.resolve('resources/config/default.yaml'))
+    );
   });
 
   it('leaves a file that already states it alone, however it was answered', () => {
@@ -688,13 +790,15 @@ describe('doors opening by default', () => {
         'openDoors'
       ]
     ).toBe(true);
-    expect(said.join(' ')).not.toMatch(/were turned on in/);
+    expect(
+      notesOf(said, 'notices.migration.doorsOpened.one', 'notices.migration.doorsOpened.many')
+    ).toEqual([]);
   });
 
   it('says so, and names the file', () => {
     fs.writeFileSync(home.options, movement('    openDoors: false\n'), 'utf8');
     migrate();
-    expect(said.join(' ')).toMatch(/on by default/i);
+    expect(notesOf(said, 'notices.migration.doorsOpened.one')).toHaveLength(1);
     expect(said.join(' ')).toContain(home.options);
   });
 });
@@ -752,13 +856,15 @@ describe('the ward switch moving to health', () => {
     expect(health(home.options)['useWards']).toBe(true);
     // Nothing moved, so the move is not announced — the statement pass has
     // its own sentence for a key it added.
-    expect(said.join(' ')).not.toMatch(/moved to/);
+    expect(
+      notesOf(said, 'notices.migration.wardsMoved.one', 'notices.migration.wardsMoved.many')
+    ).toEqual([]);
   });
 
   it('says so and names the file when it does move one', () => {
     fs.writeFileSync(home.options, both(false), 'utf8');
     migrate();
-    expect(said.join(' ')).toMatch(/moved to/);
+    expect(notesOf(said, 'notices.migration.wardsMoved.one')).toHaveLength(1);
     expect(said.join(' ')).toContain(home.options);
   });
 });
@@ -805,12 +911,14 @@ describe('the hang-up refusal becoming whether the realm charges', () => {
   it('says so, naming the files, and is safe to run again', () => {
     fs.writeFileSync(home.options, block(true), 'utf8');
     migrate();
-    expect(said.join(' ')).toMatch(/became "hangUp.penalties"/);
+    expect(notesOf(said, 'notices.migration.hangPenalties.one')).toHaveLength(1);
     expect(said.join(' ')).toContain(home.options);
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join(' ')).not.toMatch(/became "hangUp.penalties"/);
+    expect(
+      notesOf(said, 'notices.migration.hangPenalties.one', 'notices.migration.hangPenalties.many')
+    ).toEqual([]);
   });
 });
 
@@ -898,7 +1006,7 @@ describe('the old alert settings becoming rows', () => {
     // No rows are invented *for the floor*; the shipped ones arrive from
     // `statedTheAlertRules`, which runs after this and is tested on its own.
     expect(rulesIn(written)).toEqual(DEFAULT_CONFIG.ui.alerts.rules);
-    expect(said.join(' ')).toMatch(/ui\.alerts\.minimum/);
+    expect(notesOf(said, 'notices.migration.alertFloorDropped')).toHaveLength(1);
     expect(said.join(' ')).toContain(home.options);
   });
 
@@ -965,7 +1073,7 @@ describe('the desktop switches becoming the rows\u2019 own', () => {
      */
     expect(rulesIn(written)).toEqual([expect.objectContaining({ on: 'health', notify: true })]);
     expect(rulesIn(written)[0]!['whileFocused']).toBeUndefined();
-    expect(said.join(' ')).toMatch(/ui\.alerts\.desktop/);
+    expect(notesOf(said, 'notices.migration.desktopSwitchesBecameRows')).toHaveLength(1);
   });
 
   /*
@@ -987,7 +1095,7 @@ describe('the desktop switches becoming the rows\u2019 own', () => {
       expect.objectContaining({ on: 'health', notify: false, whileFocused: false }),
       expect.objectContaining({ on: 'arrived', notify: false })
     ]);
-    expect(said.join(' ')).toMatch(/Notify/);
+    expect(notesOf(said, 'notices.migration.desktopSwitchesSilenced')).toHaveLength(1);
   });
 
   /* `whileFocused: true` meant it for everything raised, so every notifying
@@ -1129,7 +1237,7 @@ describe('owning the status line', () => {
     const keys = Object.keys(automation);
     expect(keys.indexOf('statline')).toBe(keys.indexOf('onPartyChange') + 1);
     expect(keys.indexOf('idle')).toBe(keys.indexOf('statline') + 1);
-    expect(said.some((m) => m.includes('automation.statline'))).toBe(true);
+    expect(notesOf(said, 'notices.migration.statusLineStated')).toHaveLength(1);
   });
 
   it("brings the template's own paragraph rather than a copy of it", () => {
@@ -1188,11 +1296,11 @@ describe('owning the status line', () => {
     expect(fs.readFileSync(home.profile('soul').file, 'utf8')).toMatch(
       /A template is text with tags/
     );
-    expect(said.filter((m) => m.includes('Status line design'))).toHaveLength(2);
+    expect(notesOf(said, 'notices.migration.rewritesGathered')).toHaveLength(2);
     // Twice over: a file already gathered is left alone.
     said = [];
     migrate(true);
-    expect(said.filter((m) => m.includes('Status line design'))).toHaveLength(0);
+    expect(notesOf(said, 'notices.migration.rewritesGathered')).toEqual([]);
   });
 
   it('folds a block keyed by kind into the list of designs, one template each', () => {
@@ -1276,10 +1384,10 @@ describe('owning the status line', () => {
     expect(keys.indexOf('rewrites')).toBeGreaterThan(keys.indexOf('showLogo'));
     expect(keys.indexOf('rewrites')).toBeLessThan(keys.indexOf('alerts'));
     expect(text).toMatch(/A template is text with tags/);
-    expect(said.filter((m) => m.includes('is a list of designs now'))).toHaveLength(2);
+    expect(notesOf(said, 'notices.migration.rewritesListed')).toHaveLength(2);
     said = [];
     migrate(true);
-    expect(said.filter((m) => m.includes('is a list of designs now'))).toHaveLength(0);
+    expect(notesOf(said, 'notices.migration.rewritesListed')).toEqual([]);
   });
 
   it('leaves a file that already answered it alone, twice over', () => {
@@ -1308,15 +1416,11 @@ describe('owning the status line', () => {
       'utf8'
     );
     migrate();
-    // Cascades straight through `quietedTheLocateProbe` too, in the same
-    // pass: a file this far behind picks up every quiet-list default it
-    // missed in one launch rather than one per restart.
-    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set', 'sys']);
-    expect(said.some((m) => m.includes('pro and set'))).toBe(true);
-    expect(said.some((m) => m.includes('sys was added'))).toBe(true);
-    // Once: the list is no longer either shipped shape, so it is theirs now.
+    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set']);
+    expect(notesOf(said, 'notices.migration.statusLineAsksQuieted')).toHaveLength(1);
+    // Once: the list is no longer the shipped one, so it is theirs now.
     migrate();
-    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set', 'sys']);
+    expect(quietList()).toEqual(['rm', 'look', 'pro', 'set']);
 
     fs.writeFileSync(
       home.internal,
@@ -1372,7 +1476,7 @@ describe('the alert rules', () => {
     // migrations legitimately add to `alerts:` too, so only the head is
     // asserted rather than the whole list of keys.
     expect(Object.keys(alerts)[0]).toBe('rules');
-    expect(said.join('\n')).toContain('ui.alerts.rules');
+    expect(notesOf(said, 'notices.migration.alertRules.one')).toHaveLength(1);
   });
 
   /*
@@ -1420,7 +1524,9 @@ describe('the alert rules', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toContain('ui.alerts.rules');
+    expect(
+      notesOf(said, 'notices.migration.alertRules.one', 'notices.migration.alertRules.many')
+    ).toEqual([]);
   });
 });
 
@@ -1440,7 +1546,7 @@ describe('the potion rules', () => {
       parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown> | undefined
     )?.['health'] as Record<string, unknown>;
     expect(health['potions']).toEqual([]);
-    expect(said.join('\n')).toContain('automation.health.potions');
+    expect(notesOf(said, 'notices.migration.potionRules.one')).toHaveLength(1);
   });
 
   it('is left out of a health block that never mentioned potions', () => {
@@ -1462,7 +1568,9 @@ describe('the potion rules', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toContain('automation.health.potions');
+    expect(
+      notesOf(said, 'notices.migration.potionRules.one', 'notices.migration.potionRules.many')
+    ).toEqual([]);
   });
 });
 
@@ -1516,7 +1624,7 @@ describe('the floor on opening a fight', () => {
   it('says so, naming files', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/minHealth/);
+    expect(notesOf(said, 'notices.migration.combatFloorDropped.one')).toHaveLength(1);
     expect(said_).toContain(home.options);
   });
 
@@ -1525,7 +1633,13 @@ describe('the floor on opening a fight', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/minHealth/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.combatFloorDropped.one',
+        'notices.migration.combatFloorDropped.many'
+      )
+    ).toEqual([]);
   });
 });
 
@@ -1580,7 +1694,7 @@ describe('the cap on what a fight may cost', () => {
   it('says so, naming files', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/maxFightCost/);
+    expect(notesOf(said, 'notices.migration.fightCostDropped.one')).toHaveLength(1);
     expect(said_).toContain(home.options);
   });
 
@@ -1589,7 +1703,13 @@ describe('the cap on what a fight may cost', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/maxFightCost/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.fightCostDropped.one',
+        'notices.migration.fightCostDropped.many'
+      )
+    ).toEqual([]);
   });
 });
 
@@ -1639,7 +1759,7 @@ describe('the diagnostics preference', () => {
   it('says so, naming files', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/showDiagnostics/);
+    expect(notesOf(said, 'notices.migration.diagnosticsPreferenceDropped.one')).toHaveLength(1);
     expect(said_).toContain(home.options);
   });
 
@@ -1648,13 +1768,25 @@ describe('the diagnostics preference', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/showDiagnostics/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.diagnosticsPreferenceDropped.one',
+        'notices.migration.diagnosticsPreferenceDropped.many'
+      )
+    ).toEqual([]);
   });
 
   it('leaves a file that never had it alone', () => {
     fs.writeFileSync(home.options, 'ui:\n  showHud: true\n', 'utf8');
     migrate();
-    expect(said.join('\n')).not.toMatch(/showDiagnostics/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.diagnosticsPreferenceDropped.one',
+        'notices.migration.diagnosticsPreferenceDropped.many'
+      )
+    ).toEqual([]);
   });
 
   /*
@@ -1892,7 +2024,7 @@ toolbar:
 
   it('says so, because a toolbar that changed silently is one nobody trusts', () => {
     migrate();
-    expect(said.join(' ')).toContain('Loops');
+    expect(notesOf(said, 'notices.migration.loopShelfPinned')).toHaveLength(1);
   });
 
   /* The user's own comments are why this goes through `parseDocument` rather
@@ -2078,7 +2210,7 @@ describe('the bank on the way into the realm', () => {
 
   it('says so, naming the files and no values', () => {
     migrate();
-    expect(said.join(' ')).toContain('bank');
+    expect(notesOf(said, 'notices.migration.bankAskedOnEntry.one')).toHaveLength(1);
   });
 
   /* The user's own comments are why this goes through `parseDocument`. */
@@ -2128,7 +2260,7 @@ describe("the Talk card's hold", () => {
     fs.writeFileSync(home.internal, 'tuning:\n  view:\n    talkFollowResumeMs: 15000\n', 'utf8');
     migrate();
     expect(held()).toBe(DEFAULT_INTERNAL.tuning.view.talkFollowResumeMs);
-    expect(said.join(' ')).toContain('45 seconds');
+    expect(notesOf(said, 'notices.migration.talkHold')).toHaveLength(1);
   });
 
   /* A figure somebody tuned is their answer, not a stale default. */
@@ -2136,49 +2268,6 @@ describe("the Talk card's hold", () => {
     fs.writeFileSync(home.internal, 'tuning:\n  view:\n    talkFollowResumeMs: 5000\n', 'utf8');
     migrate();
     expect(held()).toBe(5000);
-  });
-});
-
-/*
- * `sys` onto the quiet list, the mirror of `pro`/`set` joining `rm`/`look`
- * before it: `sys status` is a realm's own locate for a server with no `rm`,
- * asked on arrival exactly where `rm` was, and the console has no more
- * business showing it than it ever did `rm`'s.
- */
-describe('the locate probe joining the quiet list', () => {
-  const quiet = (): unknown =>
-    (
-      parse(fs.readFileSync(home.internal, 'utf8')) as {
-        terminal: { quiet: { commands: string[] } };
-      }
-    ).terminal.quiet.commands;
-
-  beforeEach(() => {
-    fs.mkdirSync(path.dirname(home.internal), { recursive: true });
-  });
-
-  it('is added where the list still reads exactly what shipped before it', () => {
-    fs.writeFileSync(
-      home.internal,
-      'terminal:\n  quiet:\n    commands:\n      - rm\n      - look\n      - pro\n      - set\n',
-      'utf8'
-    );
-    migrate();
-    expect(quiet()).toEqual(['rm', 'look', 'pro', 'set', 'sys']);
-    expect(said.join(' ')).toContain('sys was added to the quiet list');
-  });
-
-  /* A list cannot say "I removed that", so a shorter list is theirs, kept. */
-  it('leaves a list the player has already edited alone', () => {
-    fs.writeFileSync(home.internal, 'terminal:\n  quiet:\n    commands:\n      - rm\n', 'utf8');
-    migrate();
-    expect(quiet()).toEqual(['rm']);
-  });
-
-  it('does nothing where the file states no quiet list at all', () => {
-    fs.writeFileSync(home.internal, "# The user's own note\n", 'utf8');
-    migrate();
-    expect(fs.readFileSync(home.internal, 'utf8')).toContain("The user's own note");
   });
 });
 
@@ -2281,7 +2370,7 @@ describe('the gear button on an existing toolbar', () => {
 
   it('says so, because a toolbar that changed silently is one nobody trusts', () => {
     migrate();
-    expect(said.join(' ')).toContain('gear button');
+    expect(notesOf(said, 'notices.migration.gearButtonPinned')).toHaveLength(1);
   });
 
   /* Idempotent: the migration runs on every launch, and a second pass must not
@@ -2350,7 +2439,7 @@ describe('the bless switch on an existing toolbar', () => {
 
   it('says so', () => {
     migrate();
-    expect(said.join(' ')).toContain('Auto-Bless');
+    expect(notesOf(said, 'notices.migration.blessSwitchPinned')).toHaveLength(1);
   });
 
   it('does nothing on a second run', () => {
@@ -2418,11 +2507,12 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       'followSettleMs',
       // How long an item errand waits on a summons it asked for (todo 806).
       'errandAskMs',
+      // And how late a handover's item can land (todo 765).
+      'handoverDelayMs',
       // And how deep a walk fetches levers behind levers (todo 807).
       'leverErrandDepth',
       // How long a walk waits in a room too dark to read for the light that
-      // fixes it. Appended by its own later pass: this file states no
-      // `heldFallbackMs` to sit beside.
+      // fixes it. Appended: this file states no `heldFallbackMs` to sit beside.
       'lightWaitMs'
     ]);
     expect(walk()['nudgeAfterMs']).toBe(1000);
@@ -2478,6 +2568,7 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       lightWaitMs: DEFAULT_INTERNAL.tuning.walk.lightWaitMs,
       followSettleMs: DEFAULT_INTERNAL.tuning.walk.followSettleMs,
       errandAskMs: DEFAULT_INTERNAL.tuning.walk.errandAskMs,
+      handoverDelayMs: DEFAULT_INTERNAL.tuning.walk.handoverDelayMs,
       leverErrandDepth: DEFAULT_INTERNAL.tuning.walk.leverErrandDepth
     });
     expect(text).toContain("longer than this realm's own slowest answer");
@@ -2492,7 +2583,7 @@ describe("the walk's nudge interval in an existing tuning file", () => {
 
   it('says so, because a figure that governs behaviour has to be findable', () => {
     migrate();
-    expect(said.join(' ')).toContain('tuning file');
+    expect(notesOf(said, 'notices.migration.nudgeWindowStated')).toHaveLength(1);
   });
 
   /* Idempotent: the migration runs on every launch. */
@@ -2551,7 +2642,7 @@ describe('the dark-room wait in an existing tuning file', () => {
 
   it('says so, because a figure that governs behaviour has to be findable', () => {
     migrate();
-    expect(said.join(' ')).toContain('tuning.walk.lightWaitMs');
+    expect(notesOf(said, 'notices.migration.lightWaitStated')).toHaveLength(1);
   });
 
   /* Idempotent: the migration runs on every launch. */
@@ -2603,9 +2694,7 @@ describe('the roster cap in an existing tuning file', () => {
       'descriptionLines',
       'rosterLines',
       'mobRegenMs',
-      'staleMoveMs',
-      // Which attack a `*Combat Engaged*` answers, appended by the same pass.
-      'engageBindMs'
+      'staleMoveMs'
     ]);
     expect(block()['rosterLines']).toBe(400);
     expect(fs.readFileSync(home.internal, 'utf8')).toContain('A note the user wrote');
@@ -2613,7 +2702,7 @@ describe('the roster cap in an existing tuning file', () => {
 
   it('says so, because a figure that governs behaviour has to be findable', () => {
     migrate();
-    expect(said.join(' ')).toContain('rosterLines');
+    expect(notesOf(said, 'notices.migration.rosterCapStated')).toHaveLength(1);
   });
 
   it('does nothing on a second run', () => {
@@ -2691,7 +2780,7 @@ describe('the map density pair in an existing tuning file', () => {
     fs.writeFileSync(home.internal, 'tuning:\n  view:\n    mapRoomPixels: 88\n', 'utf8');
     migrate();
     expect(view()['mapRoomPixelsSparse']).toBe(40);
-    expect(said.join(' ')).toContain('mapRoomPixels');
+    expect(notesOf(said, 'notices.migration.mapDensityStated')).toHaveLength(1);
   });
 
   it('lowers the floor that would refuse the sparse end', () => {
@@ -2832,7 +2921,7 @@ describe('peers became remotes', () => {
 
   it('drops the party ground and says so, because nobody can grant themselves one now', () => {
     migrate();
-    expect(said.join('\n')).toContain('"party" ground');
+    expect(notesOf(said, 'notices.migration.remotes.partyGroundDropped')).toHaveLength(1);
   });
 
   it('carries a trusted gang across as the gang list', () => {
@@ -2862,11 +2951,12 @@ describe('peers became remotes', () => {
   it('converts a file with the switch off too, because the rename is not optional', () => {
     fs.writeFileSync(home.options, 'automation:\n  peers:\n    enabled: false\n', 'utf8');
     migrate();
-    // `statedPartyRemotes` runs behind this one and states the party list into
+    // `statedPartyRemotes` and `statedTheAutoJoin` run behind this one and state their keys into
     // the block it just produced, which is the whole point of running it after.
     expect(remotes()).toEqual({
       enabled: false,
-      party: [...DEFAULT_CONFIG.automation.remotes.party]
+      party: [...DEFAULT_CONFIG.automation.remotes.party],
+      autoJoin: false
     });
   });
 
@@ -2890,7 +2980,7 @@ describe('peers became remotes', () => {
   it('says so, naming files', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/automation.peers/);
+    expect(notesOf(said, 'notices.migration.remotes.one')).toHaveLength(1);
     expect(said_).toContain(home.options);
   });
 
@@ -2899,7 +2989,9 @@ describe('peers became remotes', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/automation.peers/);
+    expect(
+      notesOf(said, 'notices.migration.remotes.one', 'notices.migration.remotes.many')
+    ).toEqual([]);
   });
 
   /*
@@ -2918,7 +3010,8 @@ describe('peers became remotes', () => {
     expect(automation.peers).toBeUndefined();
     expect(automation.remotes).toEqual({
       enabled: false,
-      party: [...DEFAULT_CONFIG.automation.remotes.party]
+      party: [...DEFAULT_CONFIG.automation.remotes.party],
+      autoJoin: false
     });
   });
 });
@@ -2958,7 +3051,7 @@ describe('the party remotes list is stated in the options file', () => {
     );
     migrate();
     expect(remotes()['party']).toEqual([...DEFAULT_CONFIG.automation.remotes.party]);
-    expect(said.join('\n')).toContain('automation.remotes.party');
+    expect(notesOf(said, 'notices.migration.partyRemotesStated')).toHaveLength(1);
   });
 
   it('puts it where the template does — after the gang, before the players', () => {
@@ -2996,7 +3089,7 @@ describe('the party remotes list is stated in the options file', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toContain('automation.remotes.party');
+    expect(notesOf(said, 'notices.migration.partyRemotesStated')).toEqual([]);
   });
 
   it('never states it in a character file, which is a sparse overlay', () => {
@@ -3079,7 +3172,7 @@ describe('the anonymous connection', () => {
   it('says so, naming the file and never the password', () => {
     migrate();
     const said_ = said.join('\n');
-    expect(said_).toMatch(/account/i);
+    expect(notesOf(said, 'notices.migration.anonymousConnectionDropped')).toHaveLength(1);
     expect(said_).toContain(home.options);
     expect(said_).not.toContain('secret-value');
     expect(said_).not.toContain('someone');
@@ -3100,7 +3193,7 @@ describe('the anonymous connection', () => {
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toMatch(/account/i);
+    expect(notesOf(said, 'notices.migration.anonymousConnectionDropped')).toEqual([]);
   });
 
   it('leaves a file that never had them alone', () => {
@@ -3110,7 +3203,7 @@ describe('the anonymous connection', () => {
       'utf8'
     );
     migrate();
-    expect(said.join('\n')).not.toMatch(/account/i);
+    expect(notesOf(said, 'notices.migration.anonymousConnectionDropped')).toEqual([]);
   });
 });
 
@@ -3188,7 +3281,7 @@ describe('the look that told the room', () => {
   it('says so, naming the file and no values', () => {
     migrate();
     expect(said.join(' ')).toContain(home.options);
-    expect(said.join(' ')).toMatch(/bare Enter/);
+    expect(notesOf(said, 'notices.migration.lookNoLongerBroadcast.one')).toHaveLength(1);
   });
 
   /* The user's own comments are why this goes through `parseDocument`. */
@@ -3333,7 +3426,7 @@ describe('the realm owns the world database', () => {
 
     migrate();
 
-    expect(said.join(' ')).toContain('world database belongs to the realm');
+    expect(notesOf(said, 'notices.migration.realmOwnsDatabase.one')).toHaveLength(1);
     expect(said.join(' ')).not.toContain('/realms/paradigm.mdb');
   });
 
@@ -3412,7 +3505,13 @@ describe('what shops stock moved into the realm’s own record', () => {
 
     expect(read(own)).toEqual(['jump cliff']);
     expect(read(home.state('memory', 'realm-gmud.mdb.json'))).toEqual(['black plate leggings']);
-    expect(said.join(' ')).toMatch(/shops were found to stock|shop was found to stock/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.shopStockShared.one',
+        'notices.migration.shopStockShared.many'
+      )
+    ).toHaveLength(1);
   });
 
   /*
@@ -3457,7 +3556,13 @@ describe('what shops stock moved into the realm’s own record', () => {
   it('says nothing when no character learned a shop', () => {
     wrote('vaelor', [exit]);
     migrate();
-    expect(said.join(' ')).not.toMatch(/shop/);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.shopStockShared.one',
+        'notices.migration.shopStockShared.many'
+      )
+    ).toEqual([]);
     expect(fs.existsSync(home.state('memory', 'realm-gmud.mdb.json'))).toBe(false);
   });
 });
@@ -3564,6 +3669,14 @@ describe('the escape becomes a direction', () => {
     stated('automation:\n  safety:\n    pvp:\n      action: flee\n');
     migrate();
     expect(safety()['pvp']?.['action']).toBe('retreat');
+    // Said, by the matcher the file that never said it is checked with.
+    expect(
+      notesOf(
+        said,
+        'notices.migration.escapeIsADirection.one',
+        'notices.migration.escapeIsADirection.many'
+      )
+    ).toHaveLength(1);
   });
 
   /* Whatever the person wrote above the block is theirs, and the block does not
@@ -3600,7 +3713,13 @@ describe('the escape becomes a direction', () => {
     // Other steps in the chain still write to this file, so what is asserted is
     // that *this* one reported nothing — a migration that claims to have
     // changed something it did not is the failure the notices exist to prevent.
-    expect(said.filter((m) => /renamed from flee/.test(m))).toEqual([]);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.escapeIsADirection.one',
+        'notices.migration.escapeIsADirection.many'
+      )
+    ).toEqual([]);
     expect(safety()['retreat']).toEqual({ enabled: true });
   });
 
@@ -3723,7 +3842,7 @@ describe('the new automation settings', () => {
     migrate();
     const once = fs.readFileSync(home.options, 'utf8');
     expect(once).toContain("The user's own note");
-    expect(said.join(' ')).toContain('New settings');
+    expect(notesOf(said, 'notices.migration.newAutomationStated.one')).toHaveLength(1);
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(once);
   });
@@ -3746,7 +3865,7 @@ describe('the settings the entities made possible', () => {
     const automation = read(home.options);
     expect(automation['loot']).toMatchObject({ coins: true, minPrice: 0, maxEncumbrance: 0 });
     expect(automation['drop']).toMatchObject({ enabled: true, worthless: false });
-    expect(said.join(' ')).toContain('Three settings were added');
+    expect(notesOf(said, 'notices.migration.entityPredicates.one')).toHaveLength(1);
   });
 
   /*
@@ -3854,7 +3973,9 @@ describe('the heal became two spells and gained a ceiling', () => {
     migrate();
     expect(read(profile.file)).toMatchObject({ healPartyWith: 'godheal' });
     const once = fs.readFileSync(home.options, 'utf8');
-    expect(said.join(' ')).toContain('Healing is two spells');
+    expect(
+      notesOf(said, 'notices.migration.healSplit.one', 'notices.migration.healSplit.many')
+    ).toHaveLength(1);
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(once);
   });
@@ -3920,7 +4041,9 @@ describe('the resting ceiling', () => {
     migrate();
     expect(read(profile.file)).toMatchObject({ restBelow: 0.5, restTo: 0 });
     const once = fs.readFileSync(home.options, 'utf8');
-    expect(said.join(' ')).toContain('resting ceiling');
+    expect(
+      notesOf(said, 'notices.migration.restCeiling.one', 'notices.migration.restCeiling.many')
+    ).toHaveLength(1);
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(once);
   });
@@ -3984,11 +4107,13 @@ describe('resting before a trap', () => {
       restNextDoor: true,
       // Written by `statedTheNewAutomation` in the same run, at the default.
       useWards: true,
-      // And by `statedTheMeditateTarget`, at the default.
+      // And by `statedTheMeditateCeiling`, off.
       meditateTo: 0
     });
     const once = fs.readFileSync(profile.file, 'utf8');
-    expect(said.join(' ')).toContain('Resting before a trap');
+    expect(
+      notesOf(said, 'notices.migration.trapRest.one', 'notices.migration.trapRest.many')
+    ).toHaveLength(1);
     migrate();
     expect(fs.readFileSync(profile.file, 'utf8')).toBe(once);
   });
@@ -4023,7 +4148,7 @@ describe('the loop pause pair folded into the resting pair', () => {
       restNextDoor: true,
       // Written by `statedTheNewAutomation` in the same run, at the default.
       useWards: true,
-      // And by `statedTheMeditateTarget`, at the default.
+      // And by `statedTheMeditateCeiling`, off.
       meditateTo: 0
     });
   });
@@ -4045,7 +4170,7 @@ describe('the loop pause pair folded into the resting pair', () => {
       restNextDoor: true,
       // Written by `statedTheNewAutomation` in the same run, at the default.
       useWards: true,
-      // And by `statedTheMeditateTarget`, at the default.
+      // And by `statedTheMeditateCeiling`, off.
       meditateTo: 0
     });
   });
@@ -4060,7 +4185,7 @@ describe('the loop pause pair folded into the resting pair', () => {
       restNextDoor: true,
       // Written by `statedTheNewAutomation` in the same run, at the default.
       useWards: true,
-      // And by `statedTheMeditateTarget`, at the default.
+      // And by `statedTheMeditateCeiling`, off.
       meditateTo: 0
     });
   });
@@ -4077,11 +4202,13 @@ describe('the loop pause pair folded into the resting pair', () => {
       restNextDoor: true,
       // Written by `statedTheNewAutomation` in the same run, at the default.
       useWards: true,
-      // And by `statedTheMeditateTarget`, at the default.
+      // And by `statedTheMeditateCeiling`, off.
       meditateTo: 0
     });
     const once = fs.readFileSync(profile.file, 'utf8');
-    expect(said.join(' ')).toContain('folded into the resting pair');
+    expect(
+      notesOf(said, 'notices.migration.restOnePair.one', 'notices.migration.restOnePair.many')
+    ).toHaveLength(1);
     migrate();
     expect(fs.readFileSync(profile.file, 'utf8')).toBe(once);
   });
@@ -4160,7 +4287,13 @@ describe('buffs and party blessings became spells.blessings', () => {
     expect(automation['spells']?.['buffs']).toBeUndefined();
     expect(automation['party']?.['blessings']).toBeUndefined();
     expect(automation['party']?.['assistLeader']).toBe(true);
-    expect(said.join(' ')).toContain('spells.blessings');
+    expect(
+      notesOf(
+        said,
+        'notices.migration.blessingsMerged.one',
+        'notices.migration.blessingsMerged.many'
+      )
+    ).toHaveLength(1);
   });
 
   it('renames an empty list too, so the stale key does not linger', () => {
@@ -4267,7 +4400,13 @@ describe('stating auto-reconnect in a character file', () => {
     expect(parse(text)).toMatchObject({ autoConnect: false, autoReconnect: true });
     expect(text.indexOf('autoReconnect')).toBeGreaterThan(text.indexOf('autoConnect'));
     expect(text).toContain('a link that dropped');
-    expect(said.join(' ')).toContain('Reconnect if the connection drops');
+    expect(
+      notesOf(
+        said,
+        'notices.migration.autoReconnectStated.one',
+        'notices.migration.autoReconnectStated.many'
+      )
+    ).toHaveLength(1);
   });
 
   it('appends it to a file that never stated autoConnect either', () => {
@@ -4386,8 +4525,6 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     expect(file['remotes']?.['healAskAgainMs']).toBe(
       DEFAULT_INTERNAL.tuning.remotes.healAskAgainMs
     );
-    // Added on 2026-09-24 and retired the next day: a file that never had it gets none.
-    expect(file['remotes']?.['okAfterMs']).toBeUndefined();
     expect(file['hunting']?.['measuredFightsMin']).toBe(
       DEFAULT_INTERNAL.tuning.hunting.measuredFightsMin
     );
@@ -4401,16 +4538,7 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     expect(file['world']?.['hazardSupplyCount']).toBe(
       DEFAULT_INTERNAL.tuning.world.hazardSupplyCount
     );
-    expect(file['world']?.['leverDetourCost']).toBe(DEFAULT_INTERNAL.tuning.world.leverDetourCost);
     expect(file['walk']?.['followSettleMs']).toBe(DEFAULT_INTERNAL.tuning.walk.followSettleMs);
-    // And this fork's own, into the groups the file already states.
-    const { parse, combat, spells, walk } = DEFAULT_INTERNAL.tuning;
-    expect(file['parse']?.['engageBindMs']).toBe(parse.engageBindMs);
-    expect(file['combat']?.['roomOwedMs']).toBe(combat.roomOwedMs);
-    expect(file['combat']?.['areaSettleMs']).toBe(combat.areaSettleMs);
-    expect(file['spells']?.['roundGapMs']).toBe(spells.roundGapMs);
-    expect(file['spells']?.['castRoundMs']).toBe(spells.castRoundMs);
-    expect(file['walk']?.['errandAskMs']).toBe(walk.errandAskMs);
   });
 
   /*
@@ -4422,8 +4550,6 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     migrate();
     expect(tuning()['quests']).toEqual(DEFAULT_INTERNAL.tuning.quests);
     expect(tuning()['remotes']).toEqual(DEFAULT_INTERNAL.tuning.remotes);
-    // And the message table's clocks (2026-09-24), constants until then.
-    expect(tuning()['messages']).toEqual(DEFAULT_INTERNAL.tuning.messages);
   });
 
   /* A key this build no longer reads is a number somebody tunes and then waits
@@ -4440,7 +4566,7 @@ describe('the tuning keys 2026-09-03 added and retired', () => {
     migrate();
     const once = fs.readFileSync(home.internal, 'utf8');
     expect(once).toContain('A note the user wrote');
-    expect(said.join(' ')).toMatch(/internal\.yaml was brought up to date/);
+    expect(notesOf(said, 'notices.migration.tuningKeysChanged')).toHaveLength(1);
 
     migrate();
     expect(fs.readFileSync(home.internal, 'utf8')).toBe(once);
@@ -4499,7 +4625,9 @@ describe('light before the dark, and the supplies list', () => {
     const text = fs.readFileSync(profile(), 'utf8');
     expect(text).toContain('# doors');
     expect(text).toContain("MegaMUD's AutoLight");
-    expect(said.some((m) => m.includes('dark room'))).toBe(true);
+    expect(
+      notesOf(said, 'notices.migration.lightStated.one', 'notices.migration.lightStated.many')
+    ).toHaveLength(1);
   });
 
   it('leaves a stated key alone and does not run twice', () => {
@@ -4514,7 +4642,9 @@ describe('light before the dark, and the supplies list', () => {
       parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>
     )['movement'] as Record<string, unknown>;
     expect(movement['provideLight']).toBe(false);
-    expect(said.filter((m) => m.includes('dark room'))).toHaveLength(0);
+    expect(
+      notesOf(said, 'notices.migration.lightStated.one', 'notices.migration.lightStated.many')
+    ).toEqual([]);
   });
 
   it('writes an empty supplies block into the options file once', () => {
@@ -4528,9 +4658,9 @@ describe('light before the dark, and the supplies list', () => {
       enabled: true,
       items: []
     });
-    expect(said.some((m) => m.includes('supplies'))).toBe(true);
+    expect(notesOf(said, 'notices.migration.suppliesStated')).toHaveLength(1);
     migrate();
-    expect(said.some((m) => m.includes('supplies'))).toBe(false);
+    expect(notesOf(said, 'notices.migration.suppliesStated')).toEqual([]);
     expect(fs.readFileSync(home.options, 'utf8')).toContain('Must Have Minimum');
   });
 
@@ -4561,8 +4691,9 @@ describe('waiting a condition out', () => {
     );
   });
 
-  it('writes the pair into a movement block that lacks it, with the paragraph', () => {
-    migrate();
+  it('writes the waits into a movement block that lacks them, with the paragraphs', () => {
+    // The paragraphs are the template's own, read from it.
+    migrate(true);
     const movement = (
       parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>
     )['movement'] as Record<string, unknown>;
@@ -4571,21 +4702,72 @@ describe('waiting a condition out', () => {
     expect(movement).toMatchObject({
       openDoors: true,
       walkWhileBlind: false,
-      walkWhilePoisoned: false
+      walkWhilePoisoned: false,
+      walkWhileConfused: false
     });
     const text = fs.readFileSync(profile(), 'utf8');
     expect(text).toContain('# doors');
     expect(text).toContain('IgnoreBlind');
+    expect(text).toContain('IgnoreConfusion');
     // The half the defaults refuse to make configurable, which is the reason
     // the paragraph travels with the keys.
     expect(text).toContain('Paralysis always holds');
-    expect(said.some((m) => m.includes('blind or poisoned'))).toBe(true);
+    expect(
+      said.some(
+        composes(
+          [
+            'notices.migration.conditionWaitsStated.one',
+            'notices.migration.conditionWaitsStated.many'
+          ],
+          { keys: 'walkWhileBlind, walkWhilePoisoned, walkWhileConfused' }
+        )
+      )
+    ).toBe(true);
+  });
+
+  /*
+   * Confusion joined the run on 2026-09-24 (todo 809), into files that
+   * already state the pair: beside it, with its own paragraph, and the pair's
+   * untouched.
+   */
+  it('writes the confusion wait beside a stated pair, with its own paragraph', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  movement:\n    # the pair\n    walkWhileBlind: true\n    walkWhilePoisoned: true\n    fightOnArrival: true\n',
+      'utf8'
+    );
+    migrate(true);
+    const text = fs.readFileSync(profile(), 'utf8');
+    const movement = (parse(text)['automation'] as Record<string, unknown>)['movement'] as Record<
+      string,
+      unknown
+    >;
+    expect(movement).toMatchObject({
+      walkWhileBlind: true,
+      walkWhilePoisoned: true,
+      walkWhileConfused: false
+    });
+    const keys = Object.keys(movement);
+    expect(keys.indexOf('walkWhileConfused')).toBe(keys.indexOf('walkWhilePoisoned') + 1);
+    expect(text).toContain('# the pair');
+    expect(text).toContain('IgnoreConfusion');
+    // The pair's paragraph is not written a second time above the third key.
+    expect(text).not.toContain('Paralysis always holds');
+    // Naming only the key it wrote: the pair was already the player's.
+    const [waits, ...more] = notesOf(
+      said,
+      'notices.migration.conditionWaitsStated.one',
+      'notices.migration.conditionWaitsStated.many'
+    );
+    expect(more).toEqual([]);
+    expect(waits).toContain('walkWhileConfused');
+    expect(waits).not.toContain('walkWhileBlind');
   });
 
   it('leaves a stated key alone and does not run twice', () => {
     fs.writeFileSync(
       profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileBlind: true\n    walkWhilePoisoned: true\n',
+      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileBlind: true\n    walkWhilePoisoned: true\n    walkWhileConfused: true\n',
       'utf8'
     );
     migrate();
@@ -4594,212 +4776,20 @@ describe('waiting a condition out', () => {
       parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>
     )['movement'] as Record<string, unknown>;
     expect(movement['walkWhileBlind']).toBe(true);
-    expect(said.filter((m) => m.includes('blind or poisoned'))).toHaveLength(0);
+    expect(movement['walkWhileConfused']).toBe(true);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.conditionWaitsStated.one',
+        'notices.migration.conditionWaitsStated.many'
+      )
+    ).toEqual([]);
   });
 
   it('leaves a file with no movement block alone', () => {
     fs.writeFileSync(profile(), 'server: GreaterMUD (local)\n', 'utf8');
     migrate();
     expect(parse(fs.readFileSync(profile(), 'utf8'))['automation']).toBeUndefined();
-  });
-});
-
-/*
- * The third condition wait (2026-09-22): confusion, which a realm's message
- * table states. Ships off, so it is written in with its paragraph, beside the
- * other two where they are stated.
- */
-/*
- * The vortexes and the Negative Power Plane (2026-09-23): this fork's two
- * switches, moved onto upstream's `keepOutOf` list (2026-09-24). A switch
- * turned on takes its word off the list; both keys go.
- */
-describe('the regions route planning kept out of', () => {
-  const profile = (): string => home.profile('vaelor').file;
-  const movementOf = (): Record<string, unknown> =>
-    (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
-      'movement'
-    ] as Record<string, unknown>;
-
-  beforeEach(() => {
-    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
-    migrate();
-    fs.mkdirSync(path.dirname(profile()), { recursive: true });
-  });
-
-  it('takes a switched-on region off the list, drops both switches, and runs once', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileConfused: false\n' +
-        '    useVortexes: true\n    enterNegativePlane: false\n',
-      'utf8'
-    );
-    migrate();
-    const movement = movementOf();
-    expect(movement['useVortexes']).toBeUndefined();
-    expect(movement['enterNegativePlane']).toBeUndefined();
-    expect(movement['keepOutOf']).toEqual(['Negative Power Plane']);
-    expect(said.filter((m) => m.includes('Keep Out Of'))).toHaveLength(1);
-    // Each run starts its own record of what was said.
-    migrate();
-    expect(said.filter((m) => m.includes('Keep Out Of'))).toHaveLength(0);
-    expect(movementOf()['keepOutOf']).toEqual(['Negative Power Plane']);
-  });
-
-  it('keeps both words where both switches were off', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n' +
-        '    useVortexes: false\n    enterNegativePlane: false\n',
-      'utf8'
-    );
-    migrate();
-    const movement = movementOf();
-    expect(Object.keys(movement)).not.toContain('useVortexes');
-    expect(movement['keepOutOf']).toEqual(['vortex', 'Negative Power Plane']);
-  });
-});
-
-describe('a character’s own monster rows', () => {
-  const profile = (): string => home.profile('vaelor').file;
-  const combatOf = (): Record<string, unknown> =>
-    (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
-      'combat'
-    ] as Record<string, unknown>;
-
-  beforeEach(() => {
-    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
-    migrate();
-    fs.mkdirSync(path.dirname(profile()), { recursive: true });
-  });
-
-  it('writes an empty list after mobRules, with the paragraph, once', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  combat:\n    mobPriority: []\n    maxTargetHealth: 0\n',
-      'utf8'
-    );
-    migrate();
-    const combat = combatOf();
-    expect(combat['monsters']).toEqual([]);
-    const keys = Object.keys(combat);
-    // `mobPriority` became `mobRules` in the same run (`theMobListsBecameRules`).
-    expect(keys.indexOf('monsters')).toBe(keys.indexOf('mobRules') + 1);
-    expect(fs.readFileSync(profile(), 'utf8')).toContain('Monster Details');
-    expect(said.some((m) => m.includes('monster rows'))).toBe(true);
-    migrate();
-    expect(said.filter((m) => m.includes('monster rows'))).toHaveLength(0);
-  });
-
-  it('leaves rows somebody wrote alone', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  combat:\n    monsters:\n      - { mob: rat, relationship: friend }\n',
-      'utf8'
-    );
-    migrate();
-    expect(combatOf()['monsters']).toEqual([{ mob: 'rat', relationship: 'friend' }]);
-  });
-});
-
-/*
- * Two settings this fork added without writing them into anybody's file: the
- * mana half of `restTo` and the `sys goto` flee (2026-09-22/23). Each goes in
- * beside the setting it is read with, with the template's paragraph, once.
- */
-describe('the meditate target and the sys goto flee', () => {
-  const profile = (): string => home.profile('vaelor').file;
-  const automationOf = (): Record<string, Record<string, unknown>> =>
-    parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<
-      string,
-      Record<string, unknown>
-    >;
-
-  beforeEach(() => {
-    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
-    migrate();
-    fs.mkdirSync(path.dirname(profile()), { recursive: true });
-  });
-
-  it('writes both beside what they are read with, with the paragraph, once', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  health:\n    meditateBelow: 0.5\n    potions: []\n' +
-        '  safety:\n    retreat:\n      enabled: true\n    hangUp:\n      enabled: false\n',
-      'utf8'
-    );
-    migrate(true);
-    const { health, safety } = automationOf();
-    // Beside `meditateBelow`; the keys after `potions` are other passes'.
-    expect(Object.keys(health!).slice(0, 3)).toEqual(['meditateBelow', 'meditateTo', 'potions']);
-    expect(health!['meditateTo']).toBe(0);
-    expect(Object.keys(safety!).slice(0, 3)).toEqual(['retreat', 'fleeGoto', 'hangUp']);
-    expect(safety!['fleeGoto']).toEqual({ enabled: false, belowHealth: 0.2, destination: '' });
-    const text = fs.readFileSync(profile(), 'utf8');
-    expect(text).toContain('the mana half');
-    expect(text).toContain('sys goto <place>');
-    expect(said.some((m) => m.includes('meditateTo'))).toBe(true);
-    expect(said.some((m) => m.includes('sys goto'))).toBe(true);
-    migrate(true);
-    expect(said.filter((m) => m.includes('meditateTo') || m.includes('sys goto'))).toHaveLength(0);
-  });
-
-  it('leaves a stated figure alone', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  health:\n    meditateTo: 0.9\n' +
-        '  safety:\n    fleeGoto:\n      enabled: true\n      destination: sil\n',
-      'utf8'
-    );
-    migrate();
-    const { health, safety } = automationOf();
-    expect(health!['meditateTo']).toBe(0.9);
-    expect(safety!['fleeGoto']).toEqual({ enabled: true, destination: 'sil' });
-  });
-});
-
-describe('waiting a confusion out', () => {
-  const profile = (): string => home.profile('vaelor').file;
-
-  beforeEach(() => {
-    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
-    migrate();
-    fs.mkdirSync(path.dirname(profile()), { recursive: true });
-  });
-
-  it('writes the key after walkWhilePoisoned, with the paragraph', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhilePoisoned: true\n    openDoors: true\n',
-      'utf8'
-    );
-    migrate();
-    const text = fs.readFileSync(profile(), 'utf8');
-    const movement = (parse(text)['automation'] as Record<string, unknown>)['movement'] as Record<
-      string,
-      unknown
-    >;
-    expect(movement['walkWhileConfused']).toBe(false);
-    expect(Object.keys(movement).indexOf('walkWhileConfused')).toBe(
-      Object.keys(movement).indexOf('walkWhilePoisoned') + 1
-    );
-    expect(text).toContain("MegaMUD's Ignore Confusion");
-    expect(said.some((m) => m.includes('Walking on while confused'))).toBe(true);
-  });
-
-  it('leaves a stated key alone and does not run twice', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  movement:\n    walkWhileConfused: true\n',
-      'utf8'
-    );
-    migrate();
-    migrate();
-    const movement = (
-      parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>
-    )['movement'] as Record<string, unknown>;
-    expect(movement['walkWhileConfused']).toBe(true);
-    expect(said.filter((m) => m.includes('Walking on while confused'))).toHaveLength(0);
   });
 });
 
@@ -4837,7 +4827,13 @@ describe('bending down for the key to the way out', () => {
     // The half somebody deciding whether to leave it on needs: what it will
     // *not* do, which is why the paragraph travels with the key.
     expect(text).toContain('Narrow on purpose');
-    expect(said.some((m) => m.includes('key an exit of the room needs'))).toBe(true);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.keyPickupStated.one',
+        'notices.migration.keyPickupStated.many'
+      )
+    ).toHaveLength(1);
   });
 
   it('leaves a stated key alone and does not run twice', () => {
@@ -4852,7 +4848,13 @@ describe('bending down for the key to the way out', () => {
       parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>
     )['movement'] as Record<string, unknown>;
     expect(movement['collectKeys']).toBe(false);
-    expect(said.filter((m) => m.includes('key an exit of the room needs'))).toHaveLength(0);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.keyPickupStated.one',
+        'notices.migration.keyPickupStated.many'
+      )
+    ).toEqual([]);
   });
 });
 
@@ -4881,13 +4883,15 @@ describe('the worlds are bundled', () => {
     stating('mdb/2026-07-26-pmud.zip');
     migrate();
     expect(stated()).toBe('paradigm');
-    expect(said.some((m) => m.includes('2026-07-26-pmud.zip') && m.includes('paradigm'))).toBe(
-      true
+    expect(said).toContain(
+      t('notices.migration.worldsNamed.one', { file: '2026-07-26-pmud.zip', world: 'paradigm' })
     );
     expect(fs.readFileSync(realm(), 'utf8')).toContain('# my map');
     // Once: the word is not an archive name.
     migrate();
-    expect(said.some((m) => m.includes('now names'))).toBe(false);
+    expect(
+      notesOf(said, 'notices.migration.worldsNamed.one', 'notices.migration.worldsNamed.many')
+    ).toEqual([]);
   });
 
   it('follows the earlier rename, so a loose name still lands on the word', () => {
@@ -5011,10 +5015,14 @@ describe('the worlds are bundled', () => {
     expect(shared.realm).toBe('paradigm');
     expect(shared.discoveries).toHaveLength(1);
 
-    expect(said.some((m) => /re-filed under the bundled world/.test(m))).toBe(true);
+    expect(
+      notesOf(said, 'notices.migration.loreRekeyed.one', 'notices.migration.loreRekeyed.many')
+    ).toHaveLength(1);
     // Nothing left to re-file: silent the second time.
     migrate();
-    expect(said.some((m) => /re-filed/.test(m))).toBe(false);
+    expect(
+      notesOf(said, 'notices.migration.loreRekeyed.one', 'notices.migration.loreRekeyed.many')
+    ).toEqual([]);
   });
 
   it('leaves a lore file that will not parse exactly as it is', () => {
@@ -5051,7 +5059,9 @@ describe('the realm databases were zipped', () => {
     stating('mdb/gmud20230902.mdb');
     migrate();
     expect(stated()).toBe(path.join('mdb', '2023-09-02-gmud.zip'));
-    expect(said.some((m) => m.includes('2023-09-02-gmud.zip'))).toBe(true);
+    expect(notesOf(said, 'notices.migration.databaseZipped.one')).toEqual([
+      expect.stringContaining('2023-09-02-gmud.zip')
+    ]);
     // The comment above the key is the documentation in these files.
     expect(fs.readFileSync(realm(), 'utf8')).toContain('# my map');
   });
@@ -5064,7 +5074,9 @@ describe('the realm databases were zipped', () => {
     // Nothing there to point at: the path stands, and the fallback says so at
     // connection time as it always has.
     expect(stated()).toBe(path.join(mine, 'default-pmud.mdb'));
-    expect(said.some((m) => m.includes('zipped'))).toBe(false);
+    expect(
+      notesOf(said, 'notices.migration.databaseZipped.one', 'notices.migration.databaseZipped.many')
+    ).toEqual([]);
 
     fs.writeFileSync(path.join(mine, '2026-07-26-pmud.zip'), 'not really an archive');
     migrate();
@@ -5090,14 +5102,18 @@ describe('the realm databases were zipped', () => {
     stating(path.join(mine, 'my-own-realm.mdb'));
     migrate();
     expect(stated()).toBe(path.join(mine, 'my-own-realm.mdb'));
-    expect(said.some((m) => m.includes('zipped'))).toBe(false);
+    expect(
+      notesOf(said, 'notices.migration.databaseZipped.one', 'notices.migration.databaseZipped.many')
+    ).toEqual([]);
   });
 
   it('says so once, not on every launch', () => {
     stating('mdb/gmud20230902.mdb');
     migrate();
     migrate();
-    expect(said.filter((m) => m.includes('zipped'))).toHaveLength(0);
+    expect(
+      notesOf(said, 'notices.migration.databaseZipped.one', 'notices.migration.databaseZipped.many')
+    ).toEqual([]);
   });
 });
 
@@ -5159,42 +5175,6 @@ describe('the hunting survey’s reach', () => {
   it('says so, and does nothing on a second run', () => {
     migrate();
     expect(said.join(' ')).toContain('huntRadiusSteps');
-    const after = fs.readFileSync(home.internal, 'utf8');
-    migrate();
-    expect(fs.readFileSync(home.internal, 'utf8')).toBe(after);
-  });
-});
-
-/*
- * The follower's settle before `@ok` retires (2026-09-25): `@wait` goes by the
- * walker's own figures now, which end at their ceiling and cannot flicker.
- */
-describe('the follower’s settle before @ok', () => {
-  const remotesBlock = (): Record<string, unknown> =>
-    (
-      parse(fs.readFileSync(home.internal, 'utf8')) as {
-        tuning: { remotes: Record<string, unknown> };
-      }
-    ).tuning.remotes;
-
-  beforeEach(() => {
-    fs.mkdirSync(path.dirname(home.internal), { recursive: true });
-    fs.writeFileSync(
-      home.internal,
-      'tuning:\n  remotes:\n    healAskAgainMs: 15000\n    okAfterMs: 5000\n',
-      'utf8'
-    );
-  });
-
-  it('takes the retired key out, says so, and leaves the block alone', () => {
-    migrate();
-    expect(remotesBlock()['okAfterMs']).toBeUndefined();
-    expect(remotesBlock()['healAskAgainMs']).toBe(15000);
-    expect(said.join(' ')).toContain('okAfterMs');
-  });
-
-  it('does nothing on a second run', () => {
-    migrate();
     const after = fs.readFileSync(home.internal, 'utf8');
     migrate();
     expect(fs.readFileSync(home.internal, 'utf8')).toBe(after);
@@ -5286,19 +5266,6 @@ describe('the walker’s search count', () => {
     ).tuning.queue;
     expect(queue['fumbleRetryMs']).toBe(DEFAULT_INTERNAL.tuning.queue.fumbleRetryMs);
   });
-
-  /* And how long a required fact may go unread before it is asked again (2026-09-25). */
-  it('writes in the unread retry', () => {
-    fs.writeFileSync(home.internal, 'tuning:\n  queue:\n    rosterAskMs: 60000\n', 'utf8');
-    migrate();
-    const queue = (
-      parse(fs.readFileSync(home.internal, 'utf8')) as {
-        tuning: { queue: Record<string, unknown> };
-      }
-    ).tuning.queue;
-    expect(queue['unreadRetryMs']).toBe(DEFAULT_INTERNAL.tuning.queue.unreadRetryMs);
-    expect(queue['rosterAskMs']).toBe(60000);
-  });
 });
 
 /*
@@ -5341,7 +5308,7 @@ describe('the room remote follows where', () => {
     expect(after['party']).toEqual(['health', 'where', 'where-room']);
     const players = after['players'] as Record<string, { allow: string[] }>;
     expect(players['soul']?.allow).toEqual(['where', 'do', 'where-room']);
-    expect(said.join('\n')).toContain('@where-room');
+    expect(notesOf(said, 'notices.migration.roomRemoteFollowsWhere')).toHaveLength(1);
   });
 
   it('keeps the file’s own spelling of the name', () => {
@@ -5405,29 +5372,6 @@ describe('the asking line is stated', () => {
     expect(fs.readFileSync(home.options, 'utf8')).toContain('Ask For Healing');
   });
 
-  /* MegaMUD's party pacing (2026-09-24), at its defaults, and a stated one kept. */
-  it('writes the party pacing at its defaults, and leaves a stated one alone', () => {
-    fs.writeFileSync(
-      home.options,
-      'automation:\n  party:\n    assistLeader: false\n    parEverySeconds: 15\n',
-      'utf8'
-    );
-    migrateHome({ home, legacyOptions: [], note: () => undefined });
-    const party = (
-      parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>
-    )['party'] as Record<string, unknown>;
-    expect(party).toMatchObject({
-      waitForMembersBelow: 0,
-      waitNoLongerMinutes: 0,
-      ignoreWaitWhenLeading: false,
-      ignorePartyWhenFollowing: false,
-      requestPartyHealth: true,
-      parEverySeconds: 15,
-      parAfterRound: false
-    });
-    expect(fs.readFileSync(home.options, 'utf8')).toContain('party pacing');
-  });
-
   /*
    * Granting `heal` beside `bless-expired` was tried and taken back: a list
    * entry cannot be written once, so a player unticking it had it back on the
@@ -5478,7 +5422,9 @@ describe('choosing the spell is stated', () => {
     expect(spells()['autoChoose']).toBe(false);
     const text = fs.readFileSync(home.options, 'utf8');
     expect(text.indexOf('autoChoose:')).toBeLessThan(text.indexOf('attack:'));
-    expect(said.join('\n')).toContain('automation.spells.autoChoose');
+    expect(
+      notesOf(said, 'notices.migration.spellChoice.one', 'notices.migration.spellChoice.many')
+    ).toHaveLength(1);
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
   });
@@ -5487,6 +5433,85 @@ describe('choosing the spell is stated', () => {
     fs.writeFileSync(home.options, 'automation:\n  spells:\n    autoChoose: true\n', 'utf8');
     migrate();
     expect(spells()['autoChoose']).toBe(true);
+  });
+
+  /* Todo 05: the heal had no switch of its own, so each file keeps what it had. */
+  it('gives the heal its own switch, on where the spell choice was on, after healParty', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  spells:\n    autoChoose: true\n    healParty: true\n    minMana: 0.2\n',
+      'utf8'
+    );
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(true);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('autoChooseHeal:')).toBeGreaterThan(text.indexOf('healParty:'));
+    expect(text.indexOf('autoChooseHeal:')).toBeLessThan(text.indexOf('minMana:'));
+    expect(
+      notesOf(said, 'notices.migration.healChoice.one', 'notices.migration.healChoice.many')
+    ).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('writes the heal switch off where the spell choice was off, and leaves a stated one', () => {
+    fs.writeFileSync(home.options, 'automation:\n  spells:\n    autoChoose: false\n', 'utf8');
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(false);
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  spells:\n    autoChoose: false\n    autoChooseHeal: true\n',
+      'utf8'
+    );
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(true);
+  });
+});
+
+describe('joining when invited is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const remotes = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'remotes'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-auto-join-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes the switch off after gangpath in a remotes block that predates it, once', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  remotes:\n    enabled: true\n    gangpath: false\n    gang: []\n',
+      'utf8'
+    );
+    migrate();
+    expect(remotes()['autoJoin']).toBe(false);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('autoJoin:')).toBeGreaterThan(text.indexOf('gangpath:'));
+    expect(text.indexOf('autoJoin:')).toBeLessThan(text.indexOf('gang:'));
+    expect(
+      notesOf(said, 'notices.migration.autoJoin.one', 'notices.migration.autoJoin.many')
+    ).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated switch alone', () => {
+    fs.writeFileSync(home.options, 'automation:\n  remotes:\n    autoJoin: true\n', 'utf8');
+    migrate();
+    expect(remotes()['autoJoin']).toBe(true);
   });
 });
 
@@ -5523,7 +5548,9 @@ describe('resting next door to a lair is stated', () => {
     const text = fs.readFileSync(home.options, 'utf8');
     expect(text.indexOf('restTo:')).toBeLessThan(text.indexOf('restNextDoor:'));
     expect(text.indexOf('restNextDoor:')).toBeLessThan(text.indexOf('meditateBelow:'));
-    expect(said.join('\n')).toContain('automation.health.restNextDoor');
+    expect(
+      notesOf(said, 'notices.migration.restNextDoor.one', 'notices.migration.restNextDoor.many')
+    ).toHaveLength(1);
     const after = text;
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
@@ -5562,7 +5589,9 @@ describe('fetching the kit after a death is stated', () => {
     fs.writeFileSync(home.options, 'automation:\n  movement:\n    openDoors: true\n', 'utf8');
     migrate();
     expect(movement()['recoverGear']).toBe(false);
-    expect(said.join('\n')).toContain('automation.movement.recoverGear');
+    expect(
+      notesOf(said, 'notices.migration.gearRecovery.one', 'notices.migration.gearRecovery.many')
+    ).toHaveLength(1);
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
@@ -5607,7 +5636,9 @@ describe('alert rows name events rather than channels', () => {
     migrate();
     expect(rows()[0]?.['on']).toBe('died');
     // Said out loud, and by name: the row is narrower than what was written.
-    expect(said.join('\n')).toContain('combat');
+    expect(notesOf(said, 'notices.migration.alertRowsBecameEvents')).toEqual([
+      expect.stringContaining('combat')
+    ]);
   });
 
   /* The watches were events in everything but the name, so they keep meaning. */
@@ -5677,10 +5708,10 @@ describe('the mob rules list is stated', () => {
       'utf8'
     );
     migrate();
-    // The rules list is written and then folded away in the same run: what is
-    // left is the one list of monster rows (`theMobRulesBecameMonsterRows`).
-    expect(combat()['mobRules']).toBeUndefined();
-    expect(combat()['monsters']).toEqual([]);
+    expect(combat()['mobRules']).toEqual([]);
+    expect(
+      notesOf(said, 'notices.migration.mobRules.one', 'notices.migration.mobRules.many')
+    ).toHaveLength(1);
   });
 
   /* The list somebody wrote by hand is theirs, and running twice changes nothing. */
@@ -5691,8 +5722,7 @@ describe('the mob rules list is stated', () => {
       'utf8'
     );
     migrate();
-    expect(combat()['mobRules']).toBeUndefined();
-    expect(combat()['monsters']).toEqual([{ mob: 'gnoll shaman', priority: 'first' }]);
+    expect(combat()['mobRules']).toEqual([{ mob: 'gnoll shaman', treat: 'first' }]);
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
@@ -5714,8 +5744,7 @@ describe('the mob rules list is stated', () => {
       string,
       unknown
     >;
-    expect(block['mobRules']).toBeUndefined();
-    expect(block['monsters']).toEqual([]);
+    expect(block['mobRules']).toEqual([]);
   });
 });
 
@@ -5756,12 +5785,13 @@ describe('the two monster lists became one', () => {
     );
     migrate();
     expect(combat()['avoid']).toBeUndefined();
-    // And on through the rules list into the monster rows: `never` is a Friend.
-    expect(combat()['monsters']).toEqual([
-      { mob: 'town guard', relationship: 'friend' },
-      { mob: 'priest', relationship: 'friend' }
+    expect(combat()['mobRules']).toEqual([
+      { mob: 'town guard', treat: 'never' },
+      { mob: 'priest', treat: 'never' }
     ]);
-    expect(said.join('\n')).toContain('combat.mobRules');
+    expect(
+      notesOf(said, 'notices.migration.mobRulesFolded.one', 'notices.migration.mobRulesFolded.many')
+    ).toHaveLength(1);
   });
 
   it('keeps every ranked monster in its band', () => {
@@ -5774,9 +5804,9 @@ describe('the two monster lists became one', () => {
     );
     migrate();
     expect(combat()['mobPriority']).toBeUndefined();
-    expect(combat()['monsters']).toEqual([
-      { mob: 'gnoll shaman', priority: 'first' },
-      { mob: 'giant rat', priority: 'last' }
+    expect(combat()['mobRules']).toEqual([
+      { mob: 'gnoll shaman', treat: 'first' },
+      { mob: 'giant rat', treat: 'last' }
     ]);
   });
 
@@ -5794,8 +5824,13 @@ describe('the two monster lists became one', () => {
       'utf8'
     );
     migrate();
-    // The refusal is the row's: the first rule for a monster is the one kept.
-    expect(combat()['monsters']).toEqual([{ mob: 'town guard', relationship: 'friend' }]);
+    expect(combat()['mobRules']).toEqual([
+      { mob: 'town guard', treat: 'never' },
+      { mob: 'town guard', treat: 'first' }
+    ]);
+    // And where the first of the two keys stood, not at the end of the block.
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('mobRules:')).toBeLessThan(text.indexOf('engage:'));
   });
 
   it('renames the realm’s own list, which has no avoid half', () => {
@@ -5811,12 +5846,7 @@ describe('the two monster lists became one', () => {
     migrate();
     const realm = parse(fs.readFileSync(scope.file, 'utf8')) as Record<string, unknown>;
     expect(realm['mobPriority']).toBeUndefined();
-    expect(realm['mobRules']).toBeUndefined();
-    // And on into the realm's own monster table, which it creates.
-    const table = parse(
-      fs.readFileSync(path.join(path.dirname(scope.file), 'monsters.yaml'), 'utf8')
-    ) as Record<string, unknown>;
-    expect(table['monsters']).toEqual([{ mob: 'sewer rat', priority: 'last' }]);
+    expect(realm['mobRules']).toEqual([{ mob: 'sewer rat', treat: 'last' }]);
   });
 
   it('is safe to run again', () => {
@@ -5826,89 +5856,9 @@ describe('the two monster lists became one', () => {
     said.length = 0;
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toContain('became one');
-  });
-});
-
-/*
- * And the rules list became monster rows (2026-09-24): Monster Rules and
- * Monster Details were one question in two panels. `never` is a Friend, a band
- * is the row's priority, and a rule wins where the two rows disagree — as it
- * did while both were read — except over a Flee or a Hang up.
- */
-describe('the monster rules became monster rows', () => {
-  let home: Home;
-  let dir: string;
-  const said: string[] = [];
-
-  const migrate = (): void =>
-    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
-
-  const combat = (): Record<string, unknown> =>
-    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
-      'combat'
-    ] ?? {}) as Record<string, unknown>;
-
-  beforeEach(() => {
-    said.length = 0;
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-monster-rows-'));
-    home = homeAt(dir);
-    fs.mkdirSync(path.dirname(home.options), { recursive: true });
-  });
-
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
-
-  it('lays each rule over the row for its monster, and keeps a Flee', () => {
-    fs.writeFileSync(
-      home.options,
-      'automation:\n  combat:\n    mobRules:\n' +
-        '      - { mob: gnoll shaman, treat: first }\n' +
-        '      - { mob: dark bishop, treat: never }\n' +
-        '      - { mob: ooze, treat: never }\n' +
-        '    monsters:\n' +
-        '      - { mob: gnoll shaman, priority: last, attack: mmis }\n' +
-        '      - { mob: dark bishop, relationship: avoid }\n' +
-        '      - { mob: ooze, relationship: escape }\n',
-      'utf8'
-    );
-    migrate();
-    expect(combat()['mobRules']).toBeUndefined();
-    expect(combat()['monsters']).toEqual([
-      { mob: 'gnoll shaman', priority: 'first', attack: 'mmis' },
-      { mob: 'dark bishop', relationship: 'friend' },
-      { mob: 'ooze', relationship: 'escape' }
-    ]);
-    expect(said.join('\n')).toContain('one list now');
-  });
-
-  it('fills a realm table that already exists, and runs twice safely', () => {
-    const scope = home.server('home');
-    fs.mkdirSync(scope.dir, { recursive: true });
-    fs.writeFileSync(
-      scope.file,
-      'name: Home\nhost: gmud-tgs\nport: 2427\nmobRules:\n  - { mob: sewer rat, treat: last }\n',
-      'utf8'
-    );
-    const table = path.join(scope.dir, 'monsters.yaml');
-    fs.writeFileSync(
-      table,
-      'source: { file: Monsters.md, importedAt: 2026-09-23 }\nmonsters:\n' +
-        '  - { mob: sewer rat, notHostile: true }\n  - { mob: orc, relationship: avoid }\n',
-      'utf8'
-    );
-    migrate();
-    const read = parse(fs.readFileSync(table, 'utf8')) as Record<string, unknown>;
-    expect(read['source']).toEqual({ file: 'Monsters.md', importedAt: '2026-09-23' });
-    expect(read['monsters']).toEqual([
-      { mob: 'sewer rat', notHostile: true, priority: 'last' },
-      { mob: 'orc', relationship: 'avoid' }
-    ]);
-    expect(parse(fs.readFileSync(scope.file, 'utf8'))['mobRules']).toBeUndefined();
-    const after = fs.readFileSync(table, 'utf8');
-    said.length = 0;
-    migrate();
-    expect(fs.readFileSync(table, 'utf8')).toBe(after);
-    expect(said.join('\n')).not.toContain('one list now');
+    expect(
+      notesOf(said, 'notices.migration.mobRulesFolded.one', 'notices.migration.mobRulesFolded.many')
+    ).toEqual([]);
   });
 });
 
@@ -5945,7 +5895,9 @@ describe('hiding for the opener is stated', () => {
     const text = fs.readFileSync(home.options, 'utf8');
     expect(text.indexOf('opener:')).toBeLessThan(text.indexOf('hideForOpener:'));
     expect(text.indexOf('hideForOpener:')).toBeLessThan(text.indexOf('engage:'));
-    expect(said.join('\n')).toContain('automation.combat.hideForOpener');
+    expect(
+      notesOf(said, 'notices.migration.hideForOpener.one', 'notices.migration.hideForOpener.many')
+    ).toHaveLength(1);
   });
 
   it('leaves a stated switch alone, and is safe to run again', () => {
@@ -6002,7 +5954,9 @@ describe('the coins can be shed', () => {
     // were pages apart would hide the rule between them.
     expect(text.indexOf('coinKinds:')).toBeLessThan(text.indexOf('discardKinds:'));
     expect(text.indexOf('discardKinds:')).toBeLessThan(text.indexOf('items:'));
-    expect(said.join('\n')).toContain('automation.loot.discardKinds');
+    expect(
+      notesOf(said, 'notices.migration.coinsCanBeShed.one', 'notices.migration.coinsCanBeShed.many')
+    ).toHaveLength(1);
   });
 
   it('carries the paragraph that says what a coin on neither list means', () => {
@@ -6108,7 +6062,7 @@ describe('training is stated', () => {
     const keys = Object.keys(automation());
     expect(keys.indexOf('movement')).toBeLessThan(keys.indexOf('train'));
     expect(keys.indexOf('train')).toBeLessThan(keys.indexOf('spells'));
-    expect(said.join('\n')).toContain('automation.train');
+    expect(notesOf(said, 'notices.migration.training')).toHaveLength(1);
     expect(parse(fs.readFileSync(profile.file, 'utf8')).automation).not.toHaveProperty('train');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
@@ -6136,7 +6090,9 @@ describe('training is stated', () => {
     migrate();
     const train = automation()['train'] as Record<string, unknown>;
     expect(Object.keys(train)).toEqual(['levels', 'trainer', 'stats']);
-    expect(said.join('\n')).toContain('automation.train.levels');
+    expect(
+      notesOf(said, 'notices.migration.levelling.one', 'notices.migration.levelling.many')
+    ).toHaveLength(1);
     const after = fs.readFileSync(home.options, 'utf8');
     migrate();
     expect(fs.readFileSync(home.options, 'utf8')).toBe(after);
@@ -6176,29 +6132,14 @@ describe('the account joins the login script', () => {
       { when: 'Please enter your selection', send: 'P' }
     ]);
     expect(said.join('\n')).toContain(home.server('para').file);
-  });
-
-  /*
-   * skinny-inc's own script, from before the account joined it: `{{username}}`
-   * holds `{username}`, so it read as a script already naming the account, and
-   * the filler sent the outer braces with the name (2026-09-24).
-   */
-  it('takes a brace off the doubled tokens this fork wrote, and adds no second pair', () => {
-    realm(
-      "login:\n  - when: 'Otherwise type \"new\":'\n    send: '{{username}}'\n" +
-        "  - when: 'Enter your password:'\n    send: '{{password}}'\n" +
-        "  - when: 'Make your selection'\n    send: m\n"
-    );
-    migrate();
-    expect(server()['login']).toEqual([
-      { when: 'Otherwise type "new":', send: '{username}' },
-      { when: 'Enter your password:', send: '{password}' },
-      { when: 'Make your selection', send: 'm' }
-    ]);
-    expect(said.join('\n')).toMatch(/single braces/);
-    said.length = 0;
-    migrate();
-    expect(said.join('\n')).not.toMatch(/single braces/);
+    // Said, by the matcher the scripts left alone are checked with.
+    expect(
+      notesOf(
+        said,
+        'notices.migration.accountJoinedTheScript.one',
+        'notices.migration.accountJoinedTheScript.many'
+      )
+    ).toHaveLength(1);
   });
 
   it('writes them into the options file and a character that states its own', () => {
@@ -6243,7 +6184,13 @@ describe('the account joins the login script', () => {
       "login:\n  - when: 'Login ID'\n    send: '{user}'\n  - when: 'Password'\n    send: '{password}'\n"
     );
     migrate();
-    expect(said.join('\n')).not.toMatch(/username and password prompts/i);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.accountJoinedTheScript.one',
+        'notices.migration.accountJoinedTheScript.many'
+      )
+    ).toEqual([]);
 
     realm("login:\n  - when: 'Please enter your selection'\n    send: P\n");
     migrate();
@@ -6266,7 +6213,13 @@ describe('the account joins the login script', () => {
     realm('');
     migrate();
     expect(server()['login']).toBeUndefined();
-    expect(said.join('\n')).not.toMatch(/username and password prompts/i);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.accountJoinedTheScript.one',
+        'notices.migration.accountJoinedTheScript.many'
+      )
+    ).toEqual([]);
   });
 
   it('keeps the comments, and never writes a credential down', () => {
@@ -6319,6 +6272,10 @@ ${login}`,
       { when: 'Make Your Selection', send: 'M' }
     ]);
     expect(said.join('\n')).toContain(home.server('bf').file);
+    // Said, by the matcher the stated flag is checked with.
+    expect(
+      notesOf(said, 'notices.migration.pagerRepeats.one', 'notices.migration.pagerRepeats.many')
+    ).toHaveLength(1);
   });
 
   it('leaves a stated flag alone, and runs twice safely', () => {
@@ -6336,7 +6293,9 @@ ${login}`,
       { when: 'Login ID', send: '{user}' },
       { when: 'or (C)ontinue', send: 'Q', repeat: false }
     ]);
-    expect(said.join('\n')).not.toMatch(/pager/i);
+    expect(
+      notesOf(said, 'notices.migration.pagerRepeats.one', 'notices.migration.pagerRepeats.many')
+    ).toEqual([]);
 
     realm(
       "login:\n  - when: 'Login ID'\n    send: '{user}'\n" +
@@ -6357,53 +6316,162 @@ ${login}`,
   });
 });
 
-/* Drain when hurt (2026-09-28): four keys after `areaCasts`, off, with the paragraph, once. */
-describe('the drain spells', () => {
-  const profile = (): string => home.profile('vaelor').file;
-  const spellsOf = (): Record<string, unknown> =>
-    (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
-      'spells'
-    ] as Record<string, unknown>;
+/*
+ * The fourth cure (`statedTheFreedomCure`, todo 810): a key inside a `cures:`
+ * block the file already states reaches nobody through the template, so a
+ * block listing three would go on saying nothing about the fourth.
+ */
+describe('the Freedom cure is stated', () => {
+  const cures = (file: string): Record<string, unknown> =>
+    (
+      parse(fs.readFileSync(file, 'utf8')) as {
+        automation: { spells: { cures: Record<string, unknown> } };
+      }
+    ).automation.spells.cures;
 
-  beforeEach(() => {
-    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
+  const write = (file: string, body: string): void => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `automation:\n  spells:\n${body}`, 'utf8');
+  };
+
+  it('writes it blank, directly after disease, into a profile, and says so', () => {
+    const profile = home.profile('festus').file;
+    write(
+      profile,
+      "    cures:\n      blindness: ''\n      poison: cure poison\n      disease: ''\n    blessings: []\n"
+    );
     migrate();
-    fs.mkdirSync(path.dirname(profile()), { recursive: true });
+    const stated = cures(profile);
+    expect(stated).toEqual({ blindness: '', poison: 'cure poison', disease: '', freedom: '' });
+    expect(Object.keys(stated)).toEqual(['blindness', 'poison', 'disease', 'freedom']);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.freedomCureStated.one',
+        'notices.migration.freedomCureStated.many'
+      )
+    ).toHaveLength(1);
+    expect(said.join('\n')).toContain(profile);
   });
 
-  it('writes them after areaCasts, with the paragraph, once', () => {
+  it('never overwrites a stated spell, never adds a block the file lacks, and runs twice safely', () => {
+    const named = home.profile('soul').file;
+    write(named, '    cures:\n      freedom: free\n');
+    // A file stating `spells:` without `cures:` takes the whole default and is left alone.
+    write(home.options, '    minMana: 0.15\n');
+    migrate();
+    expect(cures(named)).toEqual({ freedom: 'free' });
+    const options = parse(fs.readFileSync(home.options, 'utf8')) as {
+      automation: { spells: Record<string, unknown> };
+    };
+    expect(options.automation.spells['cures']).toBeUndefined();
+    expect(
+      notesOf(
+        said,
+        'notices.migration.freedomCureStated.one',
+        'notices.migration.freedomCureStated.many'
+      )
+    ).toEqual([]);
+
+    const bare = home.profile('yang').file;
+    write(bare, "    cures:\n      blindness: ''\n");
+    migrate();
+    const once = fs.readFileSync(bare, 'utf8');
+    expect(cures(bare)).toEqual({ blindness: '', freedom: '' });
+    migrate();
+    expect(fs.readFileSync(bare, 'utf8')).toBe(once);
+    expect(
+      notesOf(
+        said,
+        'notices.migration.freedomCureStated.one',
+        'notices.migration.freedomCureStated.many'
+      )
+    ).toEqual([]);
+  });
+});
+
+/* `statedTheMeditateCeiling` (todo 825): `meditateTo` beside its partner, with the template's words. */
+describe('Keep Meditating To is stated', () => {
+  const write = (file: string, body: string): void => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `automation:\n  health:\n${body}`, 'utf8');
+  };
+
+  it('writes it off, after meditateBelow, with its comment, once', () => {
+    const profile = home.profile('festus').file;
+    write(profile, '    restBelow: 0.4\n    meditateBelow: 0.2\n    useWards: true\n');
+    migrate(true);
+    const text = fs.readFileSync(profile, 'utf8');
+    const health = (parse(text) as { automation: { health: Record<string, unknown> } }).automation
+      .health;
+    const keys = Object.keys(health);
+    expect(keys[keys.indexOf('meditateBelow') + 1]).toBe('meditateTo');
+    expect(health['meditateTo']).toBe(0);
+    expect(text).toContain('Keep meditating to this share of mana');
+    expect(
+      notesOf(
+        said,
+        'notices.migration.meditateCeiling.one',
+        'notices.migration.meditateCeiling.many'
+      )
+    ).toHaveLength(1);
+    migrate(true);
+    expect(fs.readFileSync(profile, 'utf8')).toBe(text);
+  });
+
+  it('never overwrites a stated figure', () => {
+    const profile = home.profile('soul').file;
+    write(profile, '    meditateBelow: 0.2\n    meditateTo: 0.9\n');
+    migrate(true);
+    const health = (
+      parse(fs.readFileSync(profile, 'utf8')) as { automation: { health: Record<string, unknown> } }
+    ).automation.health;
+    expect(health['meditateTo']).toBe(0.9);
+  });
+});
+
+/* `statedThePartyPacing` (todo 831): MegaMUD's party settings after askForHealBelow, with the template's words. */
+describe('the party settings are stated', () => {
+  it('writes them in order after askForHealBelow, once, and never over a stated one', () => {
+    const profile = home.profile('festus').file;
+    fs.mkdirSync(path.dirname(profile), { recursive: true });
     fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  spells:\n    attack: aslt\n    areaCasts: 0\n    heal: ""\n',
+      profile,
+      'automation:\n  party:\n    restWithLeader: true\n    askForHealBelow: 0.4\n    parSeconds: 20\n',
       'utf8'
     );
     migrate(true);
-    const spells = spellsOf();
-    // `autoChoose` heads the block, written by its own pass.
-    expect(Object.keys(spells).slice(1, 7)).toEqual([
-      'attack',
-      'areaCasts',
-      'drain',
-      'areaDrain',
-      'drainBelow',
-      'drainTo'
+    const text = fs.readFileSync(profile, 'utf8');
+    const party = (parse(text) as { automation: { party: Record<string, unknown> } }).automation
+      .party;
+    // Other steps add their own keys to the block; these keep the template's order.
+    const mine = new Set([
+      'askForHealBelow',
+      'waitBelow',
+      'waitMinutes',
+      'ignoreWait',
+      'ignoreParty',
+      'askHealth',
+      'parSeconds',
+      'parAfterRound'
     ]);
-    expect(spells['drain']).toBe('');
-    expect(spells['drainBelow']).toBe(0);
-    expect(fs.readFileSync(profile(), 'utf8')).toContain('Drain when hurt');
-    expect(said.some((m) => m.includes('drain spell while health is low'))).toBe(true);
+    expect(Object.keys(party).filter((key) => mine.has(key))).toEqual([
+      'askForHealBelow',
+      'waitBelow',
+      'waitMinutes',
+      'ignoreWait',
+      'ignoreParty',
+      'askHealth',
+      'parSeconds',
+      'parAfterRound'
+    ]);
+    expect(party['parSeconds']).toBe(20);
+    expect(party['askHealth']).toBe(true);
+    expect(text).toContain("MegaMUD's Wait For Party Members");
+    expect(
+      notesOf(said, 'notices.migration.partyPacing.one', 'notices.migration.partyPacing.many')
+    ).toHaveLength(1);
     migrate(true);
-    expect(said.filter((m) => m.includes('drain spell while health is low'))).toHaveLength(0);
-  });
-
-  it('leaves a stated drain alone', () => {
-    fs.writeFileSync(
-      profile(),
-      'server: GreaterMUD (local)\nautomation:\n  spells:\n    drain: vampiric assault\n',
-      'utf8'
-    );
-    migrate();
-    expect(spellsOf()['drain']).toBe('vampiric assault');
-    expect(spellsOf()['drainBelow']).toBeUndefined();
+    expect(fs.readFileSync(profile, 'utf8')).toBe(text);
   });
 });

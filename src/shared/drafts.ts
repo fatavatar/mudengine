@@ -21,10 +21,9 @@ import {
   normalizeQuests,
   type GearConfig,
   normalizeTrain,
-  normalizeParty,
-  type PartyConfig,
   type RewritesUiConfig,
   type BlessingTarget,
+  type Cure,
   type DensityPreference,
   type EngagePolicy,
   type RetreatStrategy,
@@ -32,12 +31,13 @@ import {
   type PotionRule,
   type PotionWhen,
   type PvpAction,
+  type PartyConfig,
+  PARTY_RANGES,
   type EncumbranceGate,
-  type LocateMethod,
   type TabsPreference
 } from './config';
+import { normalizeMobRules, type MobRule } from './mobRules';
 import { DENOMINATIONS, type Denomination } from './character';
-import { asCoinNames, type CoinNames } from './coins';
 import {
   DEFAULT_ALERT_DEBOUNCE_SECONDS,
   isAlertEvent,
@@ -48,6 +48,8 @@ import {
 
 /** The words an `AlertRule.on` may be — the closed union's runtime half. */
 import { asLoops, type Loop } from './loops';
+import { asCoinNames, type CoinNames } from './coins';
+import { asLocateWord, DEFAULT_LOCATE, type LocateWord } from './locate';
 
 /**
  * A load gate as the draft carries it: a closed union, so an unrecognised word
@@ -78,7 +80,6 @@ import type { TrainedAttribute } from './training';
 import type { StreamEncoding } from './types';
 import { isRecord } from './values';
 import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
-import { asMonsterRules, type MonsterRule } from './monsterRules';
 
 const ENCODINGS: readonly StreamEncoding[] = ['cp437', 'utf8', 'latin1'];
 
@@ -125,8 +126,6 @@ export interface ServerDraft {
    * BBS meets the same menus. See `Server.login`.
    */
   login: LoginStepDraft[];
-  /** How this realm answers *where am I standing*, if at all. See `Server.locate`. */
-  locate: LocateMethod;
   /**
    * The loops every character on this server may walk.
    *
@@ -149,10 +148,24 @@ export interface ServerDraft {
    * `Server.database`.
    */
   database: string;
+  /**
+   * How this realm's own monsters are treated, under every character's list.
+   *
+   * On the realm for the reason the loops are: it names monsters by the names
+   * *this realm's* data spells, so it means nothing on another one, and every
+   * character playing here wants the same answer. Merged rather than replaced
+   * — a character's row for a monster wins and the rest of this list still
+   * applies. See `Server.mobRules` and `mergeMobRules`.
+   */
+  mobRules: MobRule[];
   /** Whether a hang-up here is charged; null leaves it to the options file. See `Server.hangPenalties`. */
   hangPenalties: boolean | null;
-  /** What this realm calls its coins, where it renames them. See `Server.coins`. */
+  /** How this realm is asked where a character stands. See `Server.locate`. */
+  locate: LocateWord;
+  /** What this realm calls the coins it renamed. See `Server.coins`. */
   coins: CoinNames;
+  /** This realm's teleport, literally; empty states none. See `Server.fleeGoto`. */
+  fleeGoto: string;
 }
 
 /**
@@ -162,7 +175,7 @@ export interface ServerDraft {
  * override in its own file. Deliberately **not** the whole file: `automation.
  * rules` and `automation.events` are lists of expressions with comments
  * explaining why, which is what YAML is genuinely good at and what this screen
- * has never covered. The rule is the one `SettingsScreen` states: a section
+ * has never covered. The rule is the one `CharacterForm` states: a section
  * exists when there is a typed block behind it, not because the nouns sort
  * cleanly — and a form field for a rule would be a second representation of
  * something the template already says better.
@@ -248,16 +261,14 @@ export interface GlobalDraft {
       attackFallback: string;
       attackCasts: number;
       areaCasts: number;
-      drain: string;
-      areaDrain: string;
-      drainBelow: number;
-      drainTo: number;
       heal: string;
       healPartyWith: string;
       healBelow: number;
       healBelowInCombat: number;
       healTo: number;
       healParty: boolean;
+      /** Derive the heal, single or party-wide, from the book. See `SpellsConfig`. */
+      autoChooseHeal: boolean;
       minMana: number;
       cures: CuresDraft;
       blessings: BlessingDraft[];
@@ -305,12 +316,7 @@ export type ServerChoice =
  * at, and the screen exists for the parts it is not.
  */
 /** One curative spell per affliction the client can see; blank casts nothing. */
-export interface CuresDraft {
-  blindness: string;
-  poison: string;
-  disease: string;
-  freedom: string;
-}
+export type CuresDraft = Record<Cure, string>;
 
 /** A blessing kept up by events with a clock behind it; see `BlessingConfig`. */
 export interface BlessingDraft {
@@ -366,6 +372,8 @@ export interface ProfileDraft {
    * others on that BBS, which in practice means a different character slot.
    */
   login: LoginStepDraft[];
+  /** This character's own locate word; null leaves it to the realm. See `Profile.locate`. */
+  locate: LocateWord | null;
   /**
    * Hanging up to escape — see `HangUpConfig`, and read it before turning this
    * on. On this server family a panic disconnect is one of the more reliable
@@ -388,15 +396,8 @@ export interface ProfileDraft {
     strategy: RetreatStrategy;
     safeHavenRoom: string;
   };
-  /**
-   * Fleeing outright — see `FleeGotoConfig`: a second, more desperate escape for
-   * the realms where `sys goto` is a real command, not a rung of `retreat`.
-   */
-  fleeGoto: {
-    enabled: boolean;
-    belowHealth: number;
-    destination: string;
-  };
+  /** The teleport below the retreat; an empty `command` follows the realm. See `FleeGotoConfig`. */
+  fleeGoto: { enabled: boolean; belowHealth: number; command: string };
   /** What to do the moment a player opens on this character — `automation.safety.pvp`. */
   pvp: { notifyGang: boolean; action: PvpAction };
   /**
@@ -425,8 +426,8 @@ export interface ProfileDraft {
     politeAttacks: boolean;
     maxMobs: number;
     refreshRounds: number;
-    /** This character's own monster rows, laid over the realm's. See `CombatConfig`. */
-    monsters: MonsterRule[];
+    /** The player's own rules for the realm's monsters. See `CombatConfig`. */
+    mobRules: MobRule[];
     maxTargetHealth: number;
     minMobs: number;
     maxMonsterExperience: number;
@@ -448,7 +449,6 @@ export interface ProfileDraft {
     restNextDoor: boolean;
     restBeforeTraps: number;
     meditateBelow: number;
-    /** Meditate on, and hold a walk, until this. See `HealthConfig`. */
     meditateTo: number;
     /** The *use this when that* rules. See `PotionRule`. */
     potions: PotionRule[];
@@ -560,11 +560,6 @@ export interface ProfileDraft {
     attackFallback: string;
     attackCasts: number;
     areaCasts: number;
-    /** See `SpellsConfig`: the drain spells cast instead while health is low. */
-    drain: string;
-    areaDrain: string;
-    drainBelow: number;
-    drainTo: number;
     /**
      * The heal, per character.
      *
@@ -580,6 +575,8 @@ export interface ProfileDraft {
     healBelowInCombat: number;
     healTo: number;
     healParty: boolean;
+    /** Derive the heal, single or party-wide, from the book. See `SpellsConfig`. */
+    autoChooseHeal: boolean;
     minMana: number;
     cures: CuresDraft;
     blessings: BlessingDraft[];
@@ -651,12 +648,26 @@ export interface StatlineDraft {
 export interface RemotesDraft {
   enabled: boolean;
   gangpath: boolean;
+  /** Join a party when a leader allowed `@join` invites this character. */
+  autoJoin: boolean;
   /** What anybody in this character's gang may ask for. Validated against `REMOTE_NAMES`. */
   gang: RemoteName[];
   /** What anybody who has joined this character's party may ask for. */
   party: RemoteName[];
   /** Per-player grants, carried through untouched. See above. */
   players: Record<string, RemoteGrant>;
+}
+
+/** The `automation.remotes` block as the forms draft it, from whatever the window sent. */
+function remotesDraft(remotes: Record<string, unknown>): RemotesDraft {
+  return {
+    enabled: remotes['enabled'] === true,
+    gangpath: remotes['gangpath'] === true,
+    autoJoin: remotes['autoJoin'] === true,
+    gang: remoteNames(remotes['gang']),
+    party: remoteNames(remotes['party']),
+    players: playerGrants(remotes['players'])
+  };
 }
 
 function text(value: unknown): string {
@@ -711,19 +722,19 @@ export function asServerDraft(value: unknown): ServerDraft | null {
     port: number,
     encoding: stream,
     login: asLoginSteps(value['login']),
-    locate: asLocateMethod(value['locate']),
     // Bounded like a character's, and for the same reason: this crossed the
     // IPC boundary, so it is parsed rather than trusted.
     loops: asLoops(value['loops'], LOOP_LIMITS),
     database: text(value['database']).slice(0, 400),
+    // Parsed rather than trusted, like the loops: this crossed the IPC
+    // boundary. `normalizeMobRules` is the same coercion the config file goes
+    // through, so a row means one thing whichever door it arrived at.
+    mobRules: normalizeMobRules(value['mobRules']),
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
-    coins: asCoinNames(value['coins'])
+    locate: asLocateWord(value['locate']) ?? DEFAULT_LOCATE,
+    coins: asCoinNames(value['coins']),
+    fleeGoto: text(value['fleeGoto']).slice(0, 120)
   };
-}
-
-/** `LocateMethod`, crossed the IPC boundary — an unrecognised value is `'rm'`. */
-function asLocateMethod(value: unknown): LocateMethod {
-  return value === 'sys-status' || value === 'none' ? value : 'rm';
 }
 
 /**
@@ -815,6 +826,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       : PROFILE_ACCENTS[0],
     theme: isThemePreference(value['theme']) ? value['theme'] : '',
     login: asLoginSteps(value['login']),
+    locate: asLocateWord(value['locate']),
     hangUp: {
       enabled: hangUp['enabled'] === true,
       // Clamped rather than refused: a fraction outside the range is a slider
@@ -839,8 +851,8 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
     },
     fleeGoto: {
       enabled: fleeGoto['enabled'] === true,
-      belowHealth: Math.min(1, Math.max(0, Number(fleeGoto['belowHealth']) || 0)),
-      destination: text(fleeGoto['destination']).slice(0, 80)
+      belowHealth: unit(fleeGoto['belowHealth']),
+      command: text(fleeGoto['command']).slice(0, 120)
     },
     pvp: {
       notifyGang: pvp['notifyGang'] === true,
@@ -882,7 +894,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       // Capped low: every round is a fraction of a second, so a client asked to
       // look every round would spend most of a fight looking.
       refreshRounds: Math.min(20, Math.max(0, Math.trunc(Number(combat['refreshRounds']) || 0))),
-      monsters: asMonsterRules(combat['monsters']),
+      mobRules: normalizeMobRules(combat['mobRules']),
       maxTargetHealth: Math.max(0, Math.round(Number(combat['maxTargetHealth']) || 0)),
       minMobs: Math.max(0, Math.min(99, Math.round(Number(combat['minMobs']) || 0))),
       maxMonsterExperience: Math.max(0, Math.round(Number(combat['maxMonsterExperience']) || 0))
@@ -893,9 +905,28 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
      * the network is parsed, not trusted, and the value on the other end of it
      * is a number a form put in a string.
      */
-    // Clamped by the config's own reader, which is the one place a valid
-    // party setting is decided.
-    party: normalizeParty(party),
+    party: {
+      assistLeader: party['assistLeader'] === true,
+      defendParty: party['defendParty'] === true,
+      restWithLeader: party['restWithLeader'] === true,
+      askForHealBelow: unit(party['askForHealBelow']),
+      waitBelow: unit(party['waitBelow']),
+      waitMinutes: clamp(
+        party['waitMinutes'],
+        ...PARTY_RANGES.waitMinutes,
+        DEFAULT_CONFIG.automation.party.waitMinutes
+      ),
+      ignoreWait: party['ignoreWait'] === true,
+      ignoreParty: party['ignoreParty'] === true,
+      // On unless said off: it is what the client has always done.
+      askHealth: party['askHealth'] !== false,
+      parSeconds: clamp(
+        party['parSeconds'],
+        ...PARTY_RANGES.parSeconds,
+        DEFAULT_CONFIG.automation.party.parSeconds
+      ),
+      parAfterRound: party['parAfterRound'] === true
+    },
     health: {
       /*
        * The shipped pair when a payload omits them, rather than 0.
@@ -1080,11 +1111,6 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       // 0 is no limit, so a missing or unreadable figure is the unlimited one.
       attackCasts: Math.max(0, Math.min(99, Math.round(Number(spells['attackCasts']) || 0))),
       areaCasts: Math.max(0, Math.min(99, Math.round(Number(spells['areaCasts']) || 0))),
-      drain: typeof spells['drain'] === 'string' ? spells['drain'].trim().slice(0, 40) : '',
-      areaDrain:
-        typeof spells['areaDrain'] === 'string' ? spells['areaDrain'].trim().slice(0, 40) : '',
-      drainBelow: unit(spells['drainBelow']),
-      drainTo: unit(spells['drainTo']),
       heal: typeof spells['heal'] === 'string' ? spells['heal'].trim().slice(0, 40) : '',
       healPartyWith:
         typeof spells['healPartyWith'] === 'string'
@@ -1094,6 +1120,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       healBelowInCombat: unit(spells['healBelowInCombat']),
       healTo: unit(spells['healTo']),
       healParty: spells['healParty'] === true,
+      autoChooseHeal: spells['autoChooseHeal'] === true,
       minMana: unit(spells['minMana']),
       cures: asCures(spells['cures']),
       blessings: asBlessings(spells['blessings']),
@@ -1144,13 +1171,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       afterMinutes: Math.max(1, Math.min(1440, Math.round(Number(afk['afterMinutes']) || 5))),
       reply: typeof afk['reply'] === 'string' ? afk['reply'].trim().slice(0, 120) : ''
     },
-    remotes: {
-      enabled: remotes['enabled'] === true,
-      gangpath: remotes['gangpath'] === true,
-      gang: remoteNames(remotes['gang']),
-      party: remoteNames(remotes['party']),
-      players: playerGrants(remotes['players'])
-    },
+    remotes: remotesDraft(remotes),
     talk: { lookAtPlayers: isRecord(value['talk']) && value['talk']['lookAtPlayers'] === true },
     statline: { control: isRecord(value['statline']) && value['statline']['control'] === true },
     rewrites: normalizeRewrites(value['rewrites'])
@@ -1290,16 +1311,13 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
         attackFallback: text(spells['attackFallback']).slice(0, 40),
         attackCasts: Math.max(0, Math.min(99, Math.round(Number(spells['attackCasts']) || 0))),
         areaCasts: Math.max(0, Math.min(99, Math.round(Number(spells['areaCasts']) || 0))),
-        drain: text(spells['drain']).slice(0, 40),
-        areaDrain: text(spells['areaDrain']).slice(0, 40),
-        drainBelow: unit(spells['drainBelow']),
-        drainTo: unit(spells['drainTo']),
         heal: text(spells['heal']).slice(0, 40),
         healPartyWith: text(spells['healPartyWith']).slice(0, 40),
         healBelow: unit(spells['healBelow']),
         healBelowInCombat: unit(spells['healBelowInCombat']),
         healTo: unit(spells['healTo']),
         healParty: spells['healParty'] === true,
+        autoChooseHeal: spells['autoChooseHeal'] === true,
         minMana: unit(spells['minMana']),
         cures: asCures(spells['cures']),
         blessings: asBlessings(spells['blessings']),
@@ -1312,13 +1330,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
       drop: asIf.drop,
       search: asIf.search,
       banking: asIf.banking,
-      remotes: {
-        enabled: remotes['enabled'] === true,
-        gangpath: remotes['gangpath'] === true,
-        gang: remoteNames(remotes['gang']),
-        party: remoteNames(remotes['party']),
-        players: playerGrants(remotes['players'])
-      },
+      remotes: remotesDraft(remotes),
       talk: {
         lookAtPlayers: isRecord(automation['talk']) && automation['talk']['lookAtPlayers'] === true
       },
@@ -1422,7 +1434,7 @@ function engagePolicy(value: unknown): EngagePolicy {
   return ENGAGE_POLICIES.includes(value as EngagePolicy) ? (value as EngagePolicy) : 'hostile';
 }
 
-/** The three cure names, trimmed and bounded like every other spell name here. */
+/** The cure names, trimmed and bounded like every other spell name here. */
 function asCures(value: unknown): CuresDraft {
   const raw = isRecord(value) ? value : {};
   return {

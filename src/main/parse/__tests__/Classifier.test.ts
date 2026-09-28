@@ -1,3 +1,6 @@
+import { DENOMINATIONS } from '../../../shared/character';
+import { coinReader, STOCK_COIN } from '../../../shared/coins';
+import { parseCoinEntry } from '../inventory';
 import { describe, expect, it } from 'vitest';
 
 import { SpellMessageBook, spellLoreOf } from '../../../shared/spell-messages';
@@ -24,7 +27,7 @@ function line(plain: string, raw = plain): StreamLine {
  * the line and names nobody, which is the honest degradation rather than the
  * behaviour under test.
  */
-const KNOWN = new Set(['orc rogue', 'giant rat', 'cave rat']);
+const KNOWN = new Set(['orc rogue', 'giant rat', 'cave rat', 'massive ice dragon']);
 const NAMES = {
   present: () => [],
   mob: (name: string) =>
@@ -281,55 +284,6 @@ describe('combat', () => {
      */
     const creep = expectType('A giant rat creeps in the room from the above!', 'mob-arrives-room');
     expect(creep).toMatchObject({ attacker: 'giant rat', direction: 'above' });
-  });
-
-  /*
-   * The rest of the family, read the way MegaMUD's `ParseInOut` reads them —
-   * by phrase — and the server table's own departures and follows
-   * (2026-09-23). Paramud's `enters the room from` was the one that walked
-   * fifteen dogs in unread.
-   */
-  it('reads every way a monster comes and goes', () => {
-    const arrives = (line: string) => expectType(line, 'mob-arrives-room');
-    const leaves = (line: string) => expectType(line, 'mob-leaves-room');
-    expect(arrives('A giant war dog enters the room from the south.')['line']).toBe(
-      'giant war dog enters'
-    );
-    expect(arrives('The giant rat enters from the west.')['mob']).toBe('giant rat');
-    expect(arrives('A kobold thief sneaks into the room from nowhere.')['line']).toBe(
-      'kobold thief sneaks'
-    );
-    expect(arrives('An alchemist walks into the room!')['line']).toBe('alchemist walks');
-    expect(arrives('A giant rat walks in from the west, riddled with arrows!')['line']).toBe(
-      'giant rat walks'
-    );
-    // Following this character in is an arrival, not a swing that missed.
-    expect(arrives('The orc rogue charges after you with a battle cry!')['line']).toBe(
-      'orc rogue charges'
-    );
-    expect(arrives('The ice sorceress follows you into the room!')['line']).toBe(
-      'ice sorceress follows'
-    );
-    expect(arrives('The brine hag pursues you in from the north!')['line']).toBe(
-      'brine hag pursues'
-    );
-    expect(leaves('The large yeti stomps out to the north.')['line']).toBe('large yeti stomps');
-    expect(leaves('The giant rat walks out of the room to the east.')['line']).toBe(
-      'giant rat walks'
-    );
-    expect(leaves('The goblin leaves to the south.')['mob']).toBe('goblin');
-  });
-
-  it('leaves what only looks like coming and going to what it is', () => {
-    const not = (line: string, type: string) =>
-      expect(
-        new Classifier().classify({ seq: 1, at: 1, text: line, plain: line, terminator: 'newline' })
-          .block.type
-      ).not.toBe(type);
-    not('street, and dark, narrow alleyways lead off to the east and west.', 'mob-leaves-room');
-    not('Damyr just left the Realm.', 'mob-leaves-room');
-    not('You summon a powerful tempest into the room!', 'mob-arrives-room');
-    not('You notice Warrax sneaking out to the north.', 'mob-leaves-room');
   });
 
   it('reads combat state and experience', () => {
@@ -619,14 +573,6 @@ describe('conversation, movement, items', () => {
     expect(expectType('The gate is closed!', 'direction-failed')['barrier']).toBe('gate');
     // `l n` at a shut door (Door.cs:98): a look's refusal, not the move's.
     expectType('The door is closed in that direction!', 'peek-failed');
-    // bbs.thelucks.org's wording (2026-09-23), with the barrier the walker opens
-    // or unlocks. Unread, the walk stood at the door resending the step.
-    expect(
-      expectType('There is a closed door in that direction!', 'direction-failed')['barrier']
-    ).toBe('door');
-    expect(
-      expectType('There is a closed gate in that direction!', 'direction-failed')['barrier']
-    ).toBe('gate');
     // A refused *look* is not a refused move: the walker acts on the other one.
     expect(expectType('There are no exits to the south!', 'peek-failed')['direction']).toBe(
       'south'
@@ -663,6 +609,11 @@ describe('conversation, movement, items', () => {
   it('reads item actions', () => {
     expect(expectType('You took a rusty dagger.', 'player-gets')['item']).toBe('a rusty dagger');
     expect(expectType('Rayzor picks up a torch.', 'player-gets')['player']).toBe('Rayzor');
+    // Somebody else's coins: GreaterMUD ends it without a stop (todo 757).
+    expect(expectType('Kenwood picks up some silver nobles', 'player-gets')).toMatchObject({
+      player: 'Kenwood',
+      item: 'some silver nobles'
+    });
     expect(
       expectType('You just bought 2 healing potion for 40 copper farthings.', 'user-buys')
     ).toMatchObject({ quantity: '2', item: 'healing potion', price: '40' });
@@ -671,22 +622,6 @@ describe('conversation, movement, items', () => {
   it('reads presence announcements', () => {
     expect(expectType('Masta just entered the Realm.', 'player-enters')['player']).toBe('Masta');
     expect(expectType('Masta just left the Realm.', 'player-exits')['player']).toBe('Masta');
-  });
-
-  // Worded apart for up and down, and read as a monster leaving until 2026-09-25.
-  it('reads a player climbing in or out as a player', () => {
-    expect(expectType('Fatty just left upwards.', 'player-leaves-room')['player']).toBe('Fatty');
-    expect(expectType('Fatty just left downwards.', 'player-leaves-room')['direction']).toBe(
-      'down'
-    );
-    expect(expectType('Fatty just left to the south.', 'player-leaves-room')['direction']).toBe(
-      'south'
-    );
-    expect(
-      expectType('Fatty walks into the room from above.', 'player-arrives-room')['direction']
-    ).toBe('above');
-    // What only looks like a direction is still the realm's own sentence.
-    expect(expectType('Fatty just left the Realm.', 'player-exits')['player']).toBe('Fatty');
   });
 
   /*
@@ -1144,8 +1079,8 @@ describe('the receipt for an addressed message carries what was said', () => {
   });
 
   it('leaves the earlier of two in flight unbound rather than misquoted', () => {
-    // One slot, the attack-command binding's shape: the second send overwrote
-    // the first, so the first receipt states the send with no body invented.
+    // One slot: the second send overwrote the first, so the first receipt
+    // states the send with no body invented.
     const next = sends('/soul hi', '/brack yo');
     expect(next('--- Telepath Sent to Soul ---').groups['sent']).toBeUndefined();
     expect(next('--- Telepath Sent to Brackle ---').groups['sent']).toBe('yo');
@@ -1398,25 +1333,6 @@ describe('buying and selling', () => {
     expect(g).toMatchObject({ item: 'quarterstaff', price: '0' });
   });
 
-  // Live, 2026-09-23: a price in several denominations and the realm's own
-  // currency. Read as bought, the cost kept unconverted.
-  it('reads a purchase priced in several denominations', () => {
-    const g = expectType(
-      'You just bought amber talisman for 6 Krabby Patties, 44 platinum pieces, 80 gold crowns.',
-      'user-buys'
-    );
-    expect(g).toMatchObject({
-      item: 'amber talisman',
-      cost: '6 Krabby Patties, 44 platinum pieces, 80 gold crowns'
-    });
-    expect(g['price']).toBeUndefined();
-  });
-
-  it('reads a free purchase', () => {
-    const g = expectType('You just bought black star key for nothing.', 'user-buys');
-    expect(g).toMatchObject({ item: 'black star key' });
-  });
-
   it('reads what was sold, which mirrors it', () => {
     const g = expectType('You sold quarterstaff for 0 copper farthings.', 'user-sells');
     expect(g).toMatchObject({ item: 'quarterstaff', price: '0' });
@@ -1562,6 +1478,42 @@ describe('combat, anchored on the frame', () => {
     ).toBe('everyone in the room');
   });
 
+  /*
+   * The guard's sentence, which only the attacker is sent (`AttackCommand.cs:342`,
+   * `Player.cs:6138`): no article and no full stop on either side. Paradigm's
+   * wire (`2026-09-12_20-41-11_festus`), captures/089 (a ward with a title) and
+   * captures/040 (after the prompt, where the tail is read on its own).
+   */
+  it('reads a guard stepping in front of its ward', () => {
+    expect(
+      expectType('thin wild dog moves to protect nasty wild dog', 'mob-protects')
+    ).toMatchObject({ guard: 'thin wild dog', ward: 'nasty wild dog' });
+    expect(
+      expectType('vampire elder moves to protect Ozrinom the Vampire Lord', 'mob-protects')
+    ).toMatchObject({ guard: 'vampire elder', ward: 'Ozrinom the Vampire Lord' });
+    const tails = new Classifier(NAMES).classify(
+      line('[HP=201/MA=66]:ice golem moves to protect ice sorceress')
+    ).tails;
+    expect(tails?.map((tail) => [tail.type, tail.groups['guard']])).toEqual([
+      ['mob-protects', 'ice golem']
+    ]);
+  });
+
+  /* Talk quoting the phrase is talk, and a stopped line is scenery (763, review). */
+  it('does not read talk or a stopped line as a guard stepping in', () => {
+    for (const text of [
+      'Soul gossips: the golem moves to protect the queen',
+      'Soul says "ant moves to protect queen"',
+      'Soul telepaths: x moves to protect y',
+      'The statue moves to protect the gate.'
+    ]) {
+      expect(
+        new Classifier().classify({ seq: 1, at: 1, text, plain: text, terminator: 'newline' }).block
+          .type
+      ).not.toBe('mob-protects');
+    }
+  });
+
   it('reads a miss between two other parties, with or without a weapon', () => {
     expect(expectType('Cercio swings at massive ice dragon!', 'player-misses')).toMatchObject({
       attacker: 'Cercio',
@@ -1634,6 +1586,39 @@ describe('combat, anchored on the frame', () => {
       damage: '8',
       kind: 'fire'
     });
+  });
+});
+
+/*
+ * `sys go`'s three refusals (`SysCommand.cs` `GotoCommand`), each off
+ * orohost's wire: a bad room (`logs/2026-08-30_20-57-36_main.log:757`), a
+ * malformed one (`2026-08-27_23-45-31_main.log:429`) and a mudop on a live
+ * realm (`2026-09-19_00-44-05_vaelor2.log:591`, glued to the prompt).
+ */
+describe('a sysop command the realm refuses', () => {
+  it('reads all three of the teleport’s refusals', () => {
+    for (const text of [
+      'Map and/or Room not found',
+      'Incorrect syntax',
+      'Command not allowed in live realm.'
+    ]) {
+      expectType(text, 'sys-refused');
+    }
+    const tails = new Classifier(NAMES).classify(
+      line('[HP=33/MA=22]:Command not allowed in live realm.')
+    ).tails;
+    expect(tails?.map((tail) => tail.type)).toEqual(['sys-refused']);
+  });
+
+  it('does not read the sentence quoted, or a sibling that is not the teleport’s', () => {
+    // Positive control: the bare sentence is read.
+    expectType('Map and/or Room not found', 'sys-refused');
+    for (const text of [
+      'Soul says "Map and/or Room not found"',
+      'Incorrect syntax or player not found'
+    ]) {
+      expect(classify(text).type, text).not.toBe('sys-refused');
+    }
   });
 });
 
@@ -3308,5 +3293,126 @@ describe('the terminator reaches the block', () => {
     const closed = feed('[HP=33/33]:', 'flush');
     expect(closed.batch?.type).toBe('user-inventory');
     expect(closed.batch?.terminator).toBe('flush');
+  });
+});
+
+/*
+ * Todo 826: players moving up and down, monsters leaving, and a room's own
+ * prose never read as either. Each line is quoted from where it was seen.
+ */
+describe('arrivals and departures', () => {
+  it('reads a player going up or down', () => {
+    // captures/006:40 and captures/113:5.
+    expect(expectType('FourQueTwo just left upwards.', 'player-leaves-room')['player']).toBe(
+      'FourQueTwo'
+    );
+    expect(
+      expectType('Alathar walks into the room from below.', 'player-arrives-room')
+    ).toMatchObject({ player: 'Alathar', vertical: 'below' });
+    // captures/001:2396: leaving the realm is not leaving the room.
+    expectType('Electra just left the Realm.', 'player-exits');
+  });
+
+  it('reads a monster leaving, named or not, with or without an article', () => {
+    // The wire, 2026-09-21_15-27-56_soul.log:1013, and captures/005:833.
+    expect(
+      expectType('big elite guardsman just left to the west.', 'mob-leaves-room')
+    ).toMatchObject({ mob: 'big elite guardsman', direction: 'west' });
+    expectType('angry warlock bandit just left to the south.', 'mob-leaves-room');
+    // captures/155:14: one lowercase word is a monster, not a player.
+    expectType('guardsman just left to the west.', 'mob-leaves-room');
+    // The realm's own departure verbs, on the wire (festus logs, 2026-09-18 and 09-21).
+    expectType('A giant crab scurries off to the north.', 'mob-leaves-room');
+    expectType('The large wild dog lopes out to the west!', 'mob-leaves-room');
+  });
+
+  it("reads the server's default departure and a way up or down", () => {
+    // Source only (`Mob.GetMobExitMessage`, `Exit.GetExitName`): no capture has these yet.
+    expectType('dark priest exits the room to the east.', 'mob-leaves-room');
+    expectType('A large lashworm crawls off to the above!', 'mob-leaves-room');
+    expectType('giant crab just left to the below.', 'mob-leaves-room');
+  });
+
+  it('reads a lowercase one-word arrival as a monster', () => {
+    // captures/002:548.
+    expectType('shade walks into the room from the north.', 'mob-arrives-room');
+  });
+
+  it("never reads a room's description as somebody leaving", () => {
+    // captures/005:287-293: the room's prose ends `leads out to the east.`
+    const classifier = new Classifier(NAMES);
+    const types = [
+      'Mossy Cave, Waterfall',
+      '    The dark brown walls of this naturally-formed cave are covered with a pale',
+      'down the side of the hole, following the waterfall into the darkness, and a',
+      'smooth tunnel leads out to the east.'
+    ].map((text) => classifier.classify(line(text)).block.type);
+    expect(types).toEqual([
+      'room-name',
+      'room-description',
+      'room-description',
+      'room-description'
+    ]);
+  });
+});
+
+/* Todo 830: a realm's renamed coins, read back to the stock ones where the server names them. */
+describe('renamed coins', () => {
+  const reader = coinReader({ runic: 'dime bag' });
+  const read = (plain: string) =>
+    new Classifier(
+      NAMES,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => reader
+    ).classify(line(plain)).block;
+
+  it("reads a pickup of the realm's coin as the stock one", () => {
+    expect(read('You picked up 3 dime bags')).toMatchObject({
+      type: 'user-gets-coins',
+      groups: { count: '3', coin: 'runic coins' }
+    });
+  });
+
+  it('leaves a coin named in speech as it was said', () => {
+    expect(read('Soul says "selling 3 dime bags"').groups['message']).toBe('selling 3 dime bags');
+  });
+
+  // The stock phrases the reader writes are the ones the coin rules read.
+  it.each(DENOMINATIONS)('reads every stock %s phrase', (coin) => {
+    expect(parseCoinEntry(`2 ${STOCK_COIN[coin]}s`)).toEqual({ denomination: coin, count: 2 });
+    expect(classify(`You picked up 2 ${STOCK_COIN[coin]}s`).type).toBe('user-gets-coins');
+  });
+});
+
+/*
+ * Todo 834: a miss between two others whose verb is two words. No capture or
+ * log of ours has one (all of them searched 2026-09-26); the line is the
+ * fork author's, `The red wyvern swoops down at Fatty!`, with a monster this
+ * realm names.
+ */
+describe('a miss between two others with a two-word verb', () => {
+  it('names the monster, not the monster and its verb', () => {
+    // The article stays on the name, as the tracker expects and drops.
+    expect(expectType('The giant rat swoops down at Fatty!', 'player-misses')).toMatchObject({
+      attacker: 'The giant rat',
+      target: 'Fatty'
+    });
+  });
+
+  it('leaves the attacker out when the realm has no such monster', () => {
+    const g = expectType('The red wyvern swoops down at Fatty!', 'player-misses');
+    expect(g['attacker']).toBeUndefined();
+    expect(g['target']).toBe('Fatty');
+  });
+
+  it('still names a player swinging at a monster with one verb', () => {
+    expect(expectType('Soul swings at giant rat!', 'player-misses')).toMatchObject({
+      attacker: 'Soul',
+      target: 'giant rat'
+    });
   });
 });

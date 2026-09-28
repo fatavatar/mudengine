@@ -4,7 +4,6 @@ import BentoCard, { type CardChrome, type CardTab } from './BentoCard';
 import CardTable, { type Column } from './CardTable';
 import {
   EXP_RATE_SETTLE_MS,
-  isStated,
   ratio,
   vitalLevel,
   type CharacterState,
@@ -166,17 +165,7 @@ function VitalsCard({ character, session, thresholds, ask, ...chrome }: VitalsCa
     afflictions.poisoned === 'yes' ? t('cards.vitals.afflicted.poisoned') : null,
     afflictions.diseased === 'yes' ? t('cards.vitals.afflicted.diseased') : null,
     afflictions.held === 'yes' ? t('cards.vitals.afflicted.held') : null,
-    afflictions.confused === 'yes' ? t('cards.vitals.afflicted.confused') : null,
-    // What only the realm's message table says; see `CharacterState.heard`.
-    // Confusion the tracker has already read is said above, once.
-    isStated(character, 'confused') && afflictions.confused !== 'yes'
-      ? t('cards.vitals.stated.confused')
-      : null,
-    isStated(character, 'losing-hp') ? t('cards.vitals.stated.losingHp') : null,
-    isStated(character, 'no-attack') ? t('cards.vitals.stated.noAttack') : null,
-    isStated(character, 'hp-regen') || isStated(character, 'mana-regen')
-      ? t('cards.vitals.stated.regenerating')
-      : null
+    afflictions.confused === 'yes' ? t('cards.vitals.afflicted.confused') : null
   ].filter((word): word is string => word !== null);
 
   const badge = inCombat ? (

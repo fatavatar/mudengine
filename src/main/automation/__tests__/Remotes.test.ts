@@ -2,19 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandQueue } from '../CommandQueue';
 import { Remotes } from '../Remotes';
+import { t } from '../../app/i18n';
 import { DEFAULT_CONFIG } from '../../../shared/config';
-import {
-  EMPTY_CHARACTER,
-  NO_AFFLICTIONS,
-  type CharacterState,
-  type PartyMember
-} from '../../../shared/character';
+import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
 import { wireExit, wireItem } from '../../../shared/entities';
 import type { AutomationConfig } from '../../../shared/config';
 import type { Block } from '../../../shared/blocks';
 import { NO_LOOP, type LoopProgress } from '../../../shared/loops';
 import type { WalkProgress } from '../../../shared/walk';
 import { ACTIONABLE_REMOTES } from '../../../shared/remotes';
+import { NO_PLAYERS, recordOf, type PlayerRegistry } from '../../../shared/players';
 
 /**
  * Every name these tests speak as.
@@ -55,6 +52,7 @@ const config: AutomationConfig = {
   remotes: {
     enabled: true,
     gangpath: true,
+    autoJoin: false,
     gang: [],
     // Empty, so nothing here is granted by a party listing arriving: these
     // cases are about the answer, and the gate has its own block below.
@@ -91,6 +89,8 @@ let peers: Remotes;
 let clients: string[];
 let placed: string[];
 let comebacks: string[];
+/** What the registry holds, read through `peer` as the session's tracker is. */
+let registry: PlayerRegistry;
 /** Whether the fixture's `comeBack` says a walk started. See the block below. */
 let walks = true;
 
@@ -102,10 +102,12 @@ beforeEach(() => {
   clients = [];
   placed = [];
   comebacks = [];
+  registry = NO_PLAYERS;
   walks = true;
   queue = new CommandQueue(config, { send: (command) => sent.push(command) });
   peers = new Remotes(config, queue, {
     notice: (m) => notices.push(m),
+    peer: (who) => recordOf(registry, who),
     commanded: (from, raw) => commanded.push(`${from}:${raw}`),
     clientNamed: (from, client, extended) => clients.push(`${from}:${client ?? '-'}:${extended}`),
     placed: (from, map, room, name) => placed.push(`${from}:${map}/${room}:${name ?? '-'}`),
@@ -157,7 +159,7 @@ describe('answering @health', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('no stat sheet');
+    expect(notices).toContain(t('automation.remotes.healthUnknown', { from: 'Soul' }));
   });
 });
 
@@ -173,7 +175,9 @@ describe('answering the questions MegaMUD 2.1 was seen to answer', () => {
     sent.length = 0;
     asked('@lives', who());
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('does not have that number yet');
+    expect(notices).toContain(
+      t('automation.remotes.answerUnknown', { from: 'Rand', raw: 'lives' })
+    );
   });
 
   it('answers @stats, its own extension, off the stat sheet and not before it', () => {
@@ -191,7 +195,9 @@ describe('answering the questions MegaMUD 2.1 was seen to answer', () => {
     sent.length = 0;
     asked('@stats', who());
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('does not have that number yet');
+    expect(notices).toContain(
+      t('automation.remotes.answerUnknown', { from: 'Rand', raw: 'stats' })
+    );
   });
 
   it('answers @wealth and @enc from the listing', () => {
@@ -219,7 +225,7 @@ describe('answering the questions MegaMUD 2.1 was seen to answer', () => {
     };
     asked('@exp', who());
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('does not have that number yet');
+    expect(notices).toContain(t('automation.remotes.answerUnknown', { from: 'Rand', raw: 'exp' }));
     asked('@where', who({ room }));
     asked('@who', who({ room }));
     asked('@what', who({ room }));
@@ -282,7 +288,9 @@ describe('answering the questions MegaMUD 2.1 was seen to answer', () => {
     sent.length = 0;
     asked('@have copper ring', who({ inventory: { ...EMPTY_CHARACTER.inventory, items } }));
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('only ever been seen answering for one');
+    expect(notices).toContain(
+      t('automation.remotes.haveUncaptured', { from: 'Rand', item: 'copper ring', count: 2 })
+    );
     sent.length = 0;
     asked('@have ring', who({ inventory: { ...EMPTY_CHARACTER.inventory, items } }));
     expect(sent).toEqual(['/Rand {no}']);
@@ -344,7 +352,7 @@ describe('answering the imperative ones', () => {
     peers.onBlock(said('conversation-telepath', 'Sesub', '@do a ooze'), who());
     drain();
     expect(sent).toEqual(['a ooze', '/Sesub {ok}']);
-    expect(notices.join(' ')).toContain('Remote execution (@do) by Sesub: "a ooze"');
+    expect(notices).toContain(t('automation.remotes.ranDo', { from: 'Sesub', command: 'a ooze' }));
   });
 
   it('joins the sender’s party on @join', () => {
@@ -380,7 +388,7 @@ describe('answering the imperative ones', () => {
     peers.onBlock(said('conversation-local', 'Rend', '@get-all'), who());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('nothing is listed');
+    expect(notices).toContain(t('automation.remotes.getAllEmpty', { from: 'Rend' }));
   });
 
   it('runs what the leader tells the party to run', () => {
@@ -417,6 +425,122 @@ describe('answering the imperative ones', () => {
   });
 });
 
+/*
+ * Todo 07: an invitation is the ask, so `join` goes out without the `@join`
+ * the leader would telepath next (captures/112: `Swampfox has invited you to
+ * follow him.`, `Swampfox telepaths: @join`, `join Swampfox`).
+ */
+describe('joining when invited', () => {
+  const invited = (leader: string): Block =>
+    ({
+      type: 'party-invited',
+      domain: 'party',
+      raw: '',
+      plain: '',
+      text: '',
+      groups: { leader },
+      confidence: 1,
+      at: 0,
+      seq: 1
+    }) as unknown as Block;
+
+  const joining = (over: Partial<AutomationConfig['remotes']> = {}): Remotes =>
+    new Remotes({ ...config, remotes: { ...config.remotes, autoJoin: true, ...over } }, queue, {
+      notice: (m) => notices.push(m)
+    });
+
+  it('joins a leader allowed @join as soon as they invite', () => {
+    joining().onBlock(invited('Swampfox'), who());
+    drain();
+    expect(sent).toEqual(['join Swampfox']);
+  });
+
+  it('sends one join for the invitation and the @join behind it', () => {
+    const remotes = joining();
+    remotes.onBlock(invited('Swampfox'), who());
+    remotes.onBlock(said('conversation-telepath', 'Swampfox', '@join'), who());
+    drain();
+    expect(sent).toEqual(['join Swampfox']);
+  });
+
+  it('waits for @join while the switch is off', () => {
+    peers.onBlock(invited('Swampfox'), who());
+    drain();
+    expect(sent).toEqual([]);
+    expect(notices).toEqual([]);
+  });
+
+  it('does not join a leader without @join, and says so', () => {
+    joining({ players: {} }).onBlock(invited('Swampfox'), who());
+    drain();
+    expect(sent).toEqual([]);
+    expect(notices).toEqual([
+      t('automation.remotes.autoJoinNotGranted', { from: 'Swampfox', unresolvedClause: '' })
+    ]);
+  });
+
+  it('says the gang is unresolved rather than that the leader is not granted', () => {
+    joining({ players: {}, gang: ['join'] }).onBlock(invited('Swampfox'), who());
+    drain();
+    expect(sent).toEqual([]);
+    expect(notices).toEqual([
+      t('automation.remotes.autoJoinNotGranted', {
+        from: 'Swampfox',
+        unresolvedClause: t('automation.remotes.unresolvedGang')
+      })
+    ]);
+  });
+
+  it('says a leader denied @join by name is denied', () => {
+    const players = { swampfox: { allow: [], deny: ['join' as const] } };
+    joining({ players }).onBlock(invited('Swampfox'), who());
+    drain();
+    expect(notices).toEqual([t('automation.remotes.autoJoinDenied', { from: 'Swampfox' })]);
+  });
+
+  it('answers a later @join once the prompt after the join has come', () => {
+    const remotes = joining();
+    remotes.onBlock(invited('Swampfox'), who());
+    drain();
+    expect(sent).toEqual(['join Swampfox']);
+    remotes.onBlock(
+      { ...invited('x'), type: 'status-line', groups: {} } as unknown as Block,
+      who()
+    );
+    remotes.onBlock(said('conversation-telepath', 'Swampfox', '@join'), who());
+    drain();
+    expect(sent).toEqual(['join Swampfox', 'join Swampfox']);
+  });
+
+  it('does not wait on a join the queue dropped', () => {
+    // Held behind a half-typed line, so the join waits in the queue, then dropped with it.
+    queue.noteTyping(true);
+    const remotes = joining();
+    remotes.onBlock(invited('Swampfox'), who());
+    drain();
+    expect(sent).toEqual([]);
+    queue.clear();
+    remotes.onBlock(said('conversation-telepath', 'Swampfox', '@join'), who());
+    drain();
+    expect(sent).toEqual(['join Swampfox']);
+  });
+
+  it('does not join while following somebody else, and says so', () => {
+    const party = { ...EMPTY_CHARACTER.party, following: 'Buster' };
+    joining().onBlock(invited('Swampfox'), who({ party }));
+    drain();
+    expect(sent).toEqual([]);
+    expect(notices).toEqual([t('automation.remotes.autoJoinInParty', { from: 'Swampfox' })]);
+  });
+
+  it('reads nothing into this character inviting somebody', () => {
+    const own = { ...invited('x'), groups: { player: 'Swampfox' } } as unknown as Block;
+    joining().onBlock(own, who());
+    drain();
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('the two it refuses', () => {
   /*
    * Refused *to the sender*, not merely dropped: somebody who sent one and
@@ -430,7 +554,13 @@ describe('the two it refuses', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatch(/^>Sirkilla \{no: /);
     expect(sent.join(' ')).not.toContain('Gambit');
-    expect(notices.join(' ')).toContain('refused');
+    expect(notices).toContain(
+      t('automation.remotes.refusedUnsupported', {
+        from: 'Sirkilla',
+        raw: 'kill',
+        reason: t('automation.remotes.refusal.kill')
+      })
+    );
   });
 
   it('will not hang up', () => {
@@ -449,7 +579,7 @@ describe('the ones with no captured reply', () => {
     peers.onBlock(said('conversation-telepath', 'Rend', '@seen'), who());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('Unsupported remote command @seen');
+    expect(notices).toContain(t('automation.remotes.unread', { from: 'Rend', raw: 'seen' }));
   });
 });
 
@@ -544,100 +674,25 @@ describe('asking, which is the other half of the same vocabulary', () => {
 
   /*
    * `@wait` and `@ok` are the pacing pair, sent on the **crossing** rather than
-   * on every status line — a character recovering for a minute is one message.
-   * On the walker's figures: under `restBelow` (0.35 here) to stop, back to
-   * `restTo` (0.7) to go on.
+   * on every status line — a character resting for a minute is one message.
    */
-  it('tells the leader it has to stop, once, and that it is ready again', () => {
-    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
-    const at = (hp: number) =>
-      who({ party, vitals: { ...EMPTY_CHARACTER.vitals, hp, hpMax: 100 } });
-    peers.onCharacter(at(30));
-    peers.onCharacter(at(30));
-    // Past the floor it stopped at, short of the figure that ends it.
-    peers.onCharacter(at(50));
-    drain();
-    expect(sent).toEqual(['/Soul @wait']);
-    peers.onCharacter(at(75));
-    drain();
-    expect(sent).toEqual(['/Soul @wait', '/Soul @ok']);
-  });
-
-  /*
-   * skinny behind Fatty: sat down because the leader had and said @wait, and
-   * a MegaMUD leader waiting on it rested in every room after (2026-09-24);
-   * then said it on the step out of that rest, still reading `(Resting)`
-   * after Fatty had walked off (2026-09-25). Sitting down is not a reason.
-   */
-  it('does not say @wait for sitting down', () => {
-    const leader = (activity: PartyMember['activity']): PartyMember => ({
-      name: 'Soul',
-      className: null,
-      health: 1,
-      mana: null,
-      rank: null,
-      activity,
-      invited: false,
-      vitals: null
+  it('tells the leader it has sat down, once, and that it is up again', () => {
+    const resting = who({
+      party: { engaged: {}, threatened: {}, following: 'Soul', members: [] },
+      vitals: { ...EMPTY_CHARACTER.vitals, resting: true }
     });
-    const sitting = (activity: PartyMember['activity'], meditating = false) =>
-      who({
-        party: { engaged: {}, threatened: {}, following: 'Soul', members: [leader(activity)] },
-        vitals: {
-          ...EMPTY_CHARACTER.vitals,
-          hp: 60,
-          hpMax: 100,
-          resting: !meditating,
-          meditating
-        }
-      });
-    peers.onCharacter(sitting({ state: 'resting' }));
-    peers.onCharacter(sitting(null));
-    peers.onCharacter(sitting(null, true));
-    drain();
-    expect(sent).toEqual([]);
-  });
-
-  /* Held where it stands: it cannot follow, and no setting says otherwise. */
-  it('says @wait while held, and @ok once it can move', () => {
-    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
-    peers.onCharacter(who({ party, afflictions: { ...NO_AFFLICTIONS, held: 'yes' } }));
-    drain();
-    expect(sent).toEqual(['/Soul @wait']);
-    peers.onCharacter(who({ party, afflictions: { ...NO_AFFLICTIONS, held: 'no' } }));
+    peers.onCharacter(resting);
+    peers.onCharacter(resting);
+    peers.onCharacter(
+      who({ party: { engaged: {}, threatened: {}, following: 'Soul', members: [] } })
+    );
     drain();
     expect(sent).toEqual(['/Soul @wait', '/Soul @ok']);
-  });
-
-  /* One @wait for one stop, whatever it turns into while it lasts. */
-  it('says @wait once when one reason gives way to another', () => {
-    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
-    const hurt = { ...EMPTY_CHARACTER.vitals, hp: 30, hpMax: 100 };
-    peers.onCharacter(who({ party, afflictions: { ...NO_AFFLICTIONS, held: 'yes' } }));
-    peers.onCharacter(who({ party, vitals: hurt, afflictions: { ...NO_AFFLICTIONS, held: 'no' } }));
-    drain();
-    expect(sent).toEqual(['/Soul @wait']);
-  });
-
-  /* Blind waits as the walk does, and walks as it does when told to. */
-  it('follows the movement settings for blindness', () => {
-    const party = { engaged: {}, threatened: {}, following: 'Soul', members: [] };
-    const blind = who({ party, afflictions: { ...NO_AFFLICTIONS, blind: 'yes' } });
-    const walking = new Remotes(
-      { ...config, movement: { ...config.movement, walkWhileBlind: true } },
-      queue
-    );
-    walking.onCharacter(blind);
-    drain();
-    expect(sent).toEqual([]);
-    peers.onCharacter(blind);
-    drain();
-    expect(sent).toEqual(['/Soul @wait']);
   });
 
   /* A leader telling itself to wait would be talking to nobody. */
   it('says nothing when this character is not following anybody', () => {
-    peers.onCharacter(who({ afflictions: { ...NO_AFFLICTIONS, held: 'yes' } }));
+    peers.onCharacter(who({ vitals: { ...EMPTY_CHARACTER.vitals, resting: true } }));
     drain();
     expect(sent).toEqual([]);
   });
@@ -691,7 +746,9 @@ describe('the channel an answer goes back on', () => {
       peers.onBlock(said(channel, 'Soul', '@health'), hurt());
       drain();
       expect(sent).toEqual([]);
-      expect(notices.join(' ')).toContain('realm-wide');
+      expect(notices).toContain(
+        t('automation.remotes.refusedRealmWide', { from: 'Soul', raw: 'health' })
+      );
     });
 
     /*
@@ -703,7 +760,9 @@ describe('the channel an answer goes back on', () => {
       peers.onBlock(said(channel, 'Soul', '@do who'), hurt());
       drain();
       expect(sent).toEqual([]);
-      expect(notices.join(' ')).toContain('realm-wide');
+      expect(notices).toContain(
+        t('automation.remotes.refusedRealmWide', { from: 'Soul', raw: 'do' })
+      );
     });
 
     it(`does not join a party from ${channel}`, () => {
@@ -717,7 +776,9 @@ describe('the channel an answer goes back on', () => {
       peers.onBlock(said(channel, 'Soul', '@kill Gambit'), hurt());
       drain();
       expect(sent).toEqual([]);
-      expect(notices.join(' ')).toContain('realm-wide');
+      expect(notices).toContain(
+        t('automation.remotes.refusedRealmWide', { from: 'Soul', raw: 'kill' })
+      );
     });
   }
 
@@ -858,6 +919,7 @@ describe('the gate: who may ask, and for what', () => {
     remotes: {
       enabled: true,
       gangpath: true,
+      autoJoin: false,
       gang: gang as never,
       party: [],
       players: Object.fromEntries(
@@ -892,7 +954,9 @@ describe('the gate: who may ask, and for what', () => {
     peers.onBlock(said('conversation-telepath', 'Yang', '@do who'), live());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('has not been granted');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', { from: 'Yang', raw: 'do', unresolvedClause: '' })
+    );
   });
 
   it('ignores somebody granted nothing at all', () => {
@@ -912,7 +976,13 @@ describe('the gate: who may ask, and for what', () => {
     peers.onBlock(said('conversation-telepath', 'Rend', '@health'), live());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('Rend has not been granted');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Rend',
+        raw: 'health',
+        unresolvedClause: ''
+      })
+    );
   });
 
   it('lets a deny beat what the gang grants, and says which', () => {
@@ -923,7 +993,9 @@ describe('the gate: who may ask, and for what', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('denied to Spike');
+    expect(notices).toContain(
+      t('automation.remotes.refusedDenied', { from: 'Spike', raw: 'health' })
+    );
   });
 
   /*
@@ -967,7 +1039,13 @@ describe('the gate: who may ask, and for what', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).not.toContain('nothing has said yet');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Spike',
+        raw: 'health',
+        unresolvedClause: ''
+      })
+    );
   });
 
   it('refuses somebody a listing wrote with no gang at all', () => {
@@ -978,7 +1056,13 @@ describe('the gate: who may ask, and for what', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).not.toContain('nothing has said yet');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Spike',
+        raw: 'health',
+        unresolvedClause: ''
+      })
+    );
   });
 
   it('cannot decide while the asker is only known from an arrival', () => {
@@ -989,7 +1073,13 @@ describe('the gate: who may ask, and for what', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('nothing has said yet');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Spike',
+        raw: 'health',
+        unresolvedClause: t('automation.remotes.unresolvedGang')
+      })
+    );
   });
 
   it('names an unresolved gang so a configured one is not silently refused', () => {
@@ -997,7 +1087,13 @@ describe('the gate: who may ask, and for what', () => {
     peers.onBlock(said('conversation-gangpath', 'Spike', '@health'), live());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('nothing has said yet');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Spike',
+        raw: 'health',
+        unresolvedClause: t('automation.remotes.unresolvedGang')
+      })
+    );
   });
 
   /*
@@ -1046,7 +1142,13 @@ describe('the gate: who may ask, and for what', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('not on the party listing');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Rend',
+        raw: 'health',
+        unresolvedClause: t('automation.remotes.notInParty')
+      })
+    );
   });
 
   it('refuses somebody who is in no party with this character', () => {
@@ -1054,7 +1156,13 @@ describe('the gate: who may ask, and for what', () => {
     peers.onBlock(said('conversation-telepath', 'Rend', '@health'), live());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('not on the party listing');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Rend',
+        raw: 'health',
+        unresolvedClause: t('automation.remotes.notInParty')
+      })
+    );
   });
 
   it('lets a deny by name beat what the party grants', () => {
@@ -1068,7 +1176,9 @@ describe('the gate: who may ask, and for what', () => {
     );
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('denied to Rend');
+    expect(notices).toContain(
+      t('automation.remotes.refusedDenied', { from: 'Rend', raw: 'health' })
+    );
   });
 
   it('grants only what the party list names, not the rest of the vocabulary', () => {
@@ -1103,7 +1213,7 @@ describe('the gangpath is answered on only when it is switched on', () => {
    */
   const inGang = (gangpath: boolean): AutomationConfig => ({
     ...config,
-    remotes: { enabled: true, gangpath, gang: ['health'], party: [], players: {} }
+    remotes: { enabled: true, gangpath, autoJoin: false, gang: ['health'], party: [], players: {} }
   });
 
   const together = (): CharacterState =>
@@ -1141,7 +1251,9 @@ describe('the gangpath is answered on only when it is switched on', () => {
     peers.onBlock(said('conversation-gangpath', 'Spike', '@health'), together());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('does not answer on the gangpath');
+    expect(notices).toContain(
+      t('automation.remotes.refusedGangpathOff', { from: 'Spike', raw: 'health' })
+    );
   });
 
   /*
@@ -1151,7 +1263,14 @@ describe('the gangpath is answered on only when it is switched on', () => {
   it('does not act on one with it off either', () => {
     peers.configure({
       ...inGang(false),
-      remotes: { enabled: true, gangpath: false, gang: ['do'], party: [], players: {} }
+      remotes: {
+        enabled: true,
+        gangpath: false,
+        autoJoin: false,
+        gang: ['do'],
+        party: [],
+        players: {}
+      }
     });
     peers.onBlock(said('conversation-gangpath', 'Spike', '@do who'), together());
     drain();
@@ -1168,7 +1287,7 @@ describe('a channel this client never answers on, from somebody with no grant', 
    */
   const ungranted = (): AutomationConfig => ({
     ...config,
-    remotes: { enabled: true, gangpath: true, gang: [], party: [], players: {} }
+    remotes: { enabled: true, gangpath: true, autoJoin: false, gang: [], party: [], players: {} }
   });
 
   const live = (): CharacterState =>
@@ -1200,14 +1319,22 @@ describe('a channel this client never answers on, from somebody with no grant', 
     peers.onBlock(said('conversation-gossip', 'Soul', '@health'), live());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('realm-wide');
+    expect(notices).toContain(
+      t('automation.remotes.refusedRealmWide', { from: 'Soul', raw: 'health' })
+    );
   });
 
   it('still refuses an addressed channel out loud, so the refusal is visible', () => {
     peers.configure(ungranted());
     peers.onBlock(said('conversation-telepath', 'Rend', '@health'), live());
     drain();
-    expect(notices.join(' ')).toContain('has not been granted');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Rend',
+        raw: 'health',
+        unresolvedClause: ''
+      })
+    );
   });
 });
 
@@ -1221,9 +1348,9 @@ describe('a channel this client never answers on, from somebody with no grant', 
  * and the moment one of them fails the plain wording goes instead.
  */
 describe('talking to another one of these clients', () => {
-  /** A registry entry saying what is known about somebody's client. */
-  const knowing = (name: string, extended: 'unknown' | 'yes' | 'no'): Partial<CharacterState> => ({
-    players: {
+  /** A registry entry saying what is known about somebody's client, held where `peer` reads. */
+  const knowing = (name: string, extended: 'unknown' | 'yes' | 'no'): void => {
+    registry = {
       [name.toLowerCase()]: {
         name,
         alignment: null,
@@ -1250,8 +1377,8 @@ describe('talking to another one of these clients', () => {
         lastCommand: null,
         lastCommandAt: null
       }
-    }
-  });
+    };
+  };
 
   const inRoom = (map: number, number: number, name: string): Partial<CharacterState> => ({
     room: { ...structuredClone(EMPTY_CHARACTER.room), map, number, name }
@@ -1264,7 +1391,8 @@ describe('talking to another one of these clients', () => {
   });
 
   it('asks the extended question only of somebody who said they run this client', () => {
-    peers.ask('Soul', 'where', who(knowing('Soul', 'yes')));
+    knowing('Soul', 'yes');
+    peers.ask('Soul', 'where', who());
     drain();
     expect(sent).toEqual(['/Soul @where-room']);
   });
@@ -1294,8 +1422,27 @@ describe('talking to another one of these clients', () => {
     expect(clients).toEqual([]);
   });
 
+  // The positive control is `asks every member of the party for its numbers`.
+  it('does not ask a party member which client it runs once the registry has said', () => {
+    knowing('Soul', 'yes');
+    const soul = { name: 'Soul', className: null, health: null, mana: null, rank: null };
+    peers.askParty(
+      who({
+        party: {
+          engaged: {},
+          threatened: {},
+          following: null,
+          members: [{ ...soul, activity: null, invited: false, vitals: null }]
+        }
+      })
+    );
+    drain();
+    expect(sent).toEqual(['/Soul @health']);
+  });
+
   it('reads where a peer said it is standing, by address', () => {
-    peers.ask('Soul', 'where', who(knowing('Soul', 'yes')));
+    knowing('Soul', 'yes');
+    peers.ask('Soul', 'where', who());
     drain();
     peers.onBlock(said('conversation-telepath', 'Soul', '{1/2150 Town Gates}'), who());
     expect(placed).toEqual(['Soul:1/2150:Town Gates']);
@@ -1308,21 +1455,20 @@ describe('talking to another one of these clients', () => {
    * vocabulary, so it can only ever be about an extended question.
    */
   it('falls back to the plain wording when the extended one is refused', () => {
-    peers.ask('Rand', 'where', who(knowing('Rand', 'yes')));
+    knowing('Rand', 'yes');
+    peers.ask('Rand', 'where', who());
     drain();
     expect(sent).toEqual(['/Rand @where-room']);
 
-    peers.onBlock(
-      said('conversation-telepath', 'Rand', '{command invalid or not allowed}'),
-      who(knowing('Rand', 'yes'))
-    );
+    peers.onBlock(said('conversation-telepath', 'Rand', '{command invalid or not allowed}'), who());
     drain();
     expect(sent).toEqual(['/Rand @where-room', '/Rand @where']);
     expect(clients).toEqual(['Rand:-:no']);
   });
 
   it('falls back when nothing comes back at all, and says so', () => {
-    peers.ask('Rand', 'where', who(knowing('Rand', 'yes')));
+    knowing('Rand', 'yes');
+    peers.ask('Rand', 'where', who());
     drain();
     /*
      * The positive control: the sweep really runs on this side of the deadline
@@ -1330,16 +1476,18 @@ describe('talking to another one of these clients', () => {
      * seconds, so the clock is read from here rather than from the ask.
      */
     vi.advanceTimersByTime(20_000);
-    peers.onCharacter(who(knowing('Rand', 'yes')));
+    peers.onCharacter(who());
     drain();
     expect(sent).toEqual(['/Rand @where-room']);
 
     vi.advanceTimersByTime(10_000);
-    peers.onCharacter(who(knowing('Rand', 'yes')));
+    peers.onCharacter(who());
     drain();
     expect(sent).toEqual(['/Rand @where-room', '/Rand @where']);
     expect(clients).toEqual(['Rand:-:no']);
-    expect(notices.join(' ')).toContain('Nothing came back from Rand');
+    expect(notices).toContain(
+      t('automation.remotes.extendedLapsed', { who: 'Rand', name: 'where' })
+    );
   });
 
   it('answers @where-room with the realm’s own address and the room’s name', () => {
@@ -1361,16 +1509,18 @@ describe('talking to another one of these clients', () => {
   });
 
   it('carries this character’s own address out with @comeback-room', () => {
-    peers.ask('Soul', 'comeback', who({ ...knowing('Soul', 'yes'), ...inRoom(1, 2150, 'Gates') }));
+    knowing('Soul', 'yes');
+    peers.ask('Soul', 'comeback', who(inRoom(1, 2150, 'Gates')));
     drain();
     expect(sent).toEqual(['/Soul @comeback-room 1/2150']);
   });
 
   it('sends no @comeback-room from a room the realm data has not placed', () => {
-    peers.ask('Soul', 'comeback', who(knowing('Soul', 'yes')));
+    knowing('Soul', 'yes');
+    peers.ask('Soul', 'comeback', who());
     drain();
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('no address');
+    expect(notices).toContain(t('automation.remotes.comebackUnplaced', { who: 'Soul' }));
   });
 
   it('walks to the address somebody sends, and acknowledges only a walk that started', () => {
@@ -1393,7 +1543,7 @@ describe('talking to another one of these clients', () => {
     drain();
     expect(comebacks).toEqual([]);
     expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('readable map/room');
+    expect(notices).toContain(t('automation.remotes.comebackUnreadable', { from: 'Soul' }));
   });
 });
 
@@ -1454,7 +1604,13 @@ describe('@heal', () => {
     // And not to somebody who is not in the party.
     healer.onBlock(said('conversation-local', 'Rend', '@heal'), inParty(100, 'Soul'));
     expect(wanted).toEqual(['Soul']);
-    expect(notices.join(' ')).toContain('not on the party listing');
+    expect(notices).toContain(
+      t('automation.remotes.refusedNotGranted', {
+        from: 'Rend',
+        raw: 'heal',
+        unresolvedClause: t('automation.remotes.notInParty')
+      })
+    );
   });
 
   it('asks the room once on the crossing, not on every status line', () => {
@@ -1567,99 +1723,93 @@ describe('@heal', () => {
   });
 });
 
-/*
- * MegaMUD's party pacing (2026-09-24): Ignore @party If Following, Request
- * Party Health, Par Frequency and Send PAR after combat round.
- */
+/* Todo 831: MegaMUD's party settings, on both ends of the party. */
 describe('party pacing', () => {
-  const member = (name: string) => ({
+  let paced: string[];
+  const make = (party: Partial<AutomationConfig['party']>, health = {}): Remotes => {
+    paced = [];
+    return new Remotes(
+      {
+        ...config,
+        party: { ...config.party, ...party },
+        health: { ...config.health, ...health }
+      },
+      queue,
+      {
+        notice: (m) => notices.push(m),
+        pace: (who, ready) => paced.push(`${who}:${ready ? 'ok' : 'wait'}`)
+      }
+    );
+  };
+  const member = (name: string, health: number | null) => ({
     name,
     className: null,
-    health: 0.9,
+    health,
     mana: null,
     rank: null,
     activity: null,
     invited: false,
     vitals: null
   });
-  const inParty = (over: Partial<CharacterState> = {}, following: string | null = null) =>
-    who({
-      party: {
-        engaged: {},
-        threatened: {},
-        following,
-        members: [member('Vaelor'), member('Soul')]
-      },
-      ...over
+  it('walks on through @wait under Ignore @wait If Leading, and says so', () => {
+    make({ ignoreWait: true }).onBlock(said('conversation-telepath', 'Soul', '@wait'), who());
+    expect(paced).toEqual([]);
+    expect(notices).toContain(t('automation.remotes.ignoredWait', { from: 'Soul' }));
+    make({}).onBlock(said('conversation-telepath', 'Soul', '@wait'), who());
+    expect(paced).toEqual(['Soul:wait']);
+  });
+
+  it('refuses @party under Ignore @party If Following, and says so', () => {
+    const following = who({
+      party: { engaged: {}, threatened: {}, following: 'Soul', members: [member('Soul', 1)] }
     });
-  const withParty = (party: Partial<AutomationConfig['party']>): Remotes =>
-    new Remotes({ ...config, party: { ...config.party, ...party } }, queue, {
-      notice: (m) => notices.push(m)
-    });
-  const blow = (): Block =>
-    ({ ...said('mob-hits', 'x', 'x'), type: 'mob-hits', domain: 'combat' }) as Block;
-
-  it('refuses the leader’s @party while following, when told to, and says so', () => {
-    const wary = withParty({ ignorePartyWhenFollowing: true });
-    wary.onBlock(said('conversation-local', 'Swampfox', '@party go rift'), inParty({}, 'Swampfox'));
-    drain();
-    expect(sent).toEqual([]);
-    expect(notices.join(' ')).toContain('Ignore @party If Following');
-    // Leading, it is not following anybody, so there is nothing to ignore.
-    wary.onBlock(said('conversation-local', 'Swampfox', '@party go rift'), inParty());
-    drain();
-    expect(sent).toEqual(['go rift']);
-  });
-
-  it('asks a joiner for nothing but the client they run when Request Party Health is off', () => {
-    withParty({ requestPartyHealth: false }).askParty(inParty());
-    drain();
-    expect(sent).toEqual(['/Soul @version']);
-  });
-
-  it('asks for the listing on its clock, twice as often in a fight', () => {
-    const pacing = withParty({ parEverySeconds: 15 });
-    pacing.onCharacter(inParty());
-    drain();
-    expect(sent).toEqual(['party']);
-    vi.advanceTimersByTime(16_000);
-    pacing.onCharacter(inParty());
-    drain();
-    expect(sent).toEqual(['party']);
-    pacing.onCharacter(inParty({ inCombat: true }));
-    drain();
-    expect(sent).toEqual(['party', 'party']);
-  });
-
-  /*
-   * `join` says whom this character follows and nothing about who else is
-   * there: a follower that waited for a listing to count itself in a party
-   * never asked for one (skinny, 2026-09-24).
-   */
-  it('asks for the listing when following before any listing has arrived', () => {
-    withParty({ parEverySeconds: 10 }).onCharacter(
-      who({ party: { engaged: {}, threatened: {}, following: 'Fatty', members: [] } })
+    make({ ignoreParty: true }).onBlock(
+      said('conversation-local', 'Soul', '@party stat'),
+      following
     );
     drain();
-    expect(sent).toEqual(['party']);
+    expect(sent).toEqual([]);
+    expect(notices).toContain(t('automation.remotes.ignoredParty', { from: 'Soul' }));
   });
 
-  it('never asks for the listing out of a party, or when the clock is off', () => {
-    withParty({ parEverySeconds: 15 }).onCharacter(who());
-    withParty({ parEverySeconds: 0 }).onCharacter(inParty());
+  it('asks a joining member for @health only under Request Party Health', () => {
+    const party = who({
+      party: { engaged: {}, threatened: {}, following: null, members: [member('Soul', 1)] }
+    });
+    make({ askHealth: false }).askParty(party);
+    drain();
+    expect(sent).not.toContain('/Soul @health');
+    make({ askHealth: true }).askParty(party);
+    drain();
+    expect(sent).toContain('/Soul @health');
+  });
+
+  it("asks the leader to wait when this character's own walk would stand still, not while the leader rests", () => {
+    const follower = (hp: number, leaderResting = false): CharacterState =>
+      who({
+        vitals: { ...EMPTY_CHARACTER.vitals, hp, hpMax: 100 },
+        party: {
+          engaged: {},
+          threatened: {},
+          following: 'Soul',
+          members: [
+            {
+              ...member('Soul', 1),
+              activity: leaderResting ? ({ state: 'resting' } as never) : null
+            }
+          ]
+        }
+      });
+    const remotes = make({}, { restBelow: 0.5, restTo: 0.8 });
+    // The leader resting is its own rest; nothing asked.
+    remotes.onCharacter(follower(30, true));
     drain();
     expect(sent).toEqual([]);
-  });
-
-  it('asks for the listing once a round, after its blows', () => {
-    const pacing = withParty({ parAfterRound: true });
-    const fighting = inParty({ inCombat: true });
-    pacing.onBlock(blow(), fighting);
-    pacing.onBlock(blow(), fighting);
+    // Up and walking, and this character under its floor: wait, then ok at the line.
+    remotes.onCharacter(follower(30));
+    remotes.onCharacter(follower(60));
+    remotes.onCharacter(follower(85));
     drain();
-    expect(sent).toEqual(['party']);
-    pacing.onBlock(blow(), fighting);
-    drain();
-    expect(sent).toEqual(['party', 'party']);
+    expect(sent).toEqual(['/Soul @wait', '/Soul @ok']);
   });
 });

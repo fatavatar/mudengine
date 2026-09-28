@@ -25,9 +25,7 @@ import type { ExperienceTable } from './experience';
 import type { Direction, RoomCommand, WorldLair, WorldShop, WorldSpell } from './world';
 import type { WoundBand } from './wounds';
 import type { StatedSheet } from './stated';
-import { NO_PLAYERS, type PlayerRegistry } from './players';
 import { NO_TALLY, type CombatTally } from './tally';
-import type { MessageAction, MessageEffect } from './messageTriggers';
 
 /**
  * Where the session is in the login sequence.
@@ -97,32 +95,6 @@ export interface Afflictions {
   confused: Affliction;
 }
 
-/**
- * Something a row of the realm's message table started and nothing has ended.
- *
- * **Beside the afflictions, not among them.** An affliction is what this
- * client reads off the wire itself, three-state because nobody may have said;
- * this is what the *player's* table says a sentence means (`MessageTriggers`,
- * imported from MegaMUD's `Messages.md`), held until the row's own ending
- * arrives. Where the two overlap — blind, poisoned, diseased, held — a row
- * also sets the affliction, so every reader of those flags already answers
- * it; the conditions the client had no word for (confused, losing hit points,
- * unable to attack) live only here.
- */
-export interface StatedEffect {
-  /** The row's name, for the player to recognise: `confusion`, `net`. */
-  name: string;
-  effects: readonly MessageEffect[];
-  /** What the row says to do about it while it lasts. */
-  action: MessageAction;
-  since: number;
-}
-
-/** Whether the realm's messages say this is on the character now. */
-export function isStated(state: Pick<CharacterState, 'heard'>, effect: MessageEffect): boolean {
-  return state.heard.some((entry) => entry.effects.includes(effect));
-}
-
 export const NO_AFFLICTIONS: Afflictions = {
   blind: 'unknown',
   poisoned: 'unknown',
@@ -175,22 +147,6 @@ export interface ActiveBuff {
    * whichever of them it really is. Absent when the buff was named by a cast.
    */
   candidates?: readonly string[];
-  /**
-   * Set when this character's own cast established it, so `appliedAt` is the
-   * cast. Absent for a buff first seen on the sheet or cast by somebody else,
-   * whose `appliedAt` is only when the client noticed it — and a duration
-   * measured from that is a lie in the direction that recasts early (a
-   * hellfire shield on the login sheet ended 29s later, and was recast every
-   * 36s from then on, 2026-09-23). Only these are timed.
-   */
-  cast?: true;
-  /**
-   * Epoch ms of the last `st` sheet that printed it. Present means the sheet
-   * speaks for this effect, so its watchdog can ask the sheet before recasting
-   * (`Blessings`), and a sheet that still lists it past the watchdog says the
-   * clock was wrong.
-   */
-  listedAt?: number;
 }
 
 /**
@@ -657,6 +613,20 @@ export const DENOMINATIONS = ['runic', 'platinum', 'gold', 'silver', 'copper'] a
 
 export type Denomination = (typeof DENOMINATIONS)[number];
 
+/** The denomination a word names, or undefined for one the ladder does not (a realm's renamed coin). */
+function denominationOf(word: string): Denomination | undefined {
+  return DENOMINATIONS.find((name) => name === word);
+}
+
+/**
+ * The denomination a coin noun names: its first word only (`gold` of `gold
+ * crowns`, `Runic` of `Runic Coins`), because the rest is realm data and a
+ * realm that renames a coin stops being counted rather than being guessed.
+ */
+export function coinNamed(noun: string): Denomination | undefined {
+  return denominationOf(noun.trim().split(/\s+/)[0]?.toLowerCase() ?? '');
+}
+
 /**
  * How many of each the listing named.
  *
@@ -851,10 +821,10 @@ export interface Progress {
  *
  * It is part of the character model as far as every caller is concerned, so
  * moving the file must not move anybody's import. It moved because it was the
- * *value* `players.ts` imported from here while this file imports `NO_PLAYERS`
- * from there — a cycle that left `EMPTY_CHARACTER.players` undefined for
- * whichever module the bundler evaluated second. `./alignment` has the whole
- * account.
+ * *value* `players.ts` imported from here while this file imported `NO_PLAYERS`
+ * from there (the registry was a field here until todo 730) — a cycle that
+ * left `EMPTY_CHARACTER.players` undefined for whichever module the bundler
+ * evaluated second. `./alignment` has the whole account.
  */
 export { ALIGNMENTS, isHostile } from './alignment';
 export type { Alignment } from './alignment';
@@ -1144,6 +1114,13 @@ export function partyActivity(flag: string | undefined): PartyActivity | null {
   return { state: 'unknown', flag };
 }
 
+/**
+ * What a member was seen fighting: one monster as the room spelled it, or the
+ * whole room at once (`<Name> moves to attack everyone in the room.`), which
+ * names no monster (todo 756).
+ */
+export type PartyFight = { kind: 'mob'; target: string; at: number } | { kind: 'room'; at: number };
+
 export interface Party {
   /**
    * Who this character is following, or null when leading or alone.
@@ -1165,7 +1142,7 @@ export interface Party {
    * about fights; the assist reads it through `following`, and only while the
    * monster is still in the room and the sighting is fresh.
    */
-  engaged: Record<string, { target: string; at: number }>;
+  engaged: Record<string, PartyFight>;
   /**
    * The monster last seen attacking each member, keyed like `engaged` and from
    * the same volunteered sentences read the other way round — the attacker a
@@ -1181,26 +1158,6 @@ export interface Party {
 }
 
 export const NO_PARTY: Party = { following: null, members: [], engaged: {}, threatened: {} };
-
-/**
- * The members of the party this character leads whose listed health is under
- * `below`, lowest first — MegaMUD's *Wait For Party Members*. A real member
- * (not an invitation, not this character) with a figure the listing stated.
- * Following, none: the leader decides when the party moves.
- */
-export function membersBelow(state: CharacterState, below: number): PartyMember[] {
-  if (below <= 0 || state.party.following !== null) return [];
-  const me = state.name?.toLowerCase() ?? null;
-  return state.party.members
-    .filter(
-      (member) =>
-        !member.invited &&
-        member.health !== null &&
-        member.health < below &&
-        member.name.toLowerCase() !== me
-    )
-    .sort((a, b) => (a.health ?? 0) - (b.health ?? 0));
-}
 
 /**
  * A room nobody has read yet.
@@ -1318,9 +1275,9 @@ export interface GangListing {
  * `at` is when this figure was last made true, and it is load-bearing rather
  * than decorative. A `bank` states it; a deposit or a withdrawal made in the
  * same room then *maintains* it, which is the standing shape here and is what
- * `CharacterTracker.creditVault` does — the sentence names no bank, but the
- * `bank` that answered in this room did, and the room has not changed. What
- * nothing can maintain is another session, another character, or interest, so
+ * `Ledger.creditVault` (`parse/ledger.ts`) does — the sentence names no bank,
+ * but the `bank` that answered in this room did, and the room has not changed.
+ * What nothing can maintain is another session, another character, or interest, so
  * a balance is still a reading from a moment that may already have moved. A
  * card shows the time beside the figure so a stale number reads as stale
  * instead of as current.
@@ -1356,12 +1313,13 @@ export function bankKey(name: string): string {
 
 /**
  * The balance this character's record holds for a bank row: by the shop id
- * the header printed, else by the name through `bankKey`, since one realm
- * prints no id and the two spell the article differently. Null is a vault
- * nobody has asked, never an empty one.
+ * the header printed, searched across every row first, else by the name
+ * through `bankKey`, since one realm prints no id (a null id matches no row
+ * by id) and the two spell the article differently. Null is a vault nobody
+ * has asked, never an empty one.
  */
 export function balanceOf(
-  shop: { id: number; name: string },
+  shop: { id: number | null; name: string },
   banks: readonly BankBalance[]
 ): BankBalance | null {
   const byId = banks.find((bank) => bank.shop !== null && bank.shop === shop.id);
@@ -1506,22 +1464,6 @@ export interface CharacterState {
    */
   attributeSpans: AttributeSpans | null;
   /**
-   * Everything known about other players, kept between sightings.
-   *
-   * `online` above is *who is in the realm now* and is replaced wholesale by
-   * the next listing; this is what has been learned about each of them and
-   * survives their walking out of the room. See `src/shared/players.ts` for why
-   * the two are separate rather than one richer roster: the roster is a
-   * listing the server maintains and this is an accumulation the client keeps,
-   * and merging them would mean every `who` erased the accumulation.
-   *
-   * Seeded from, and kept in, the realm's player book (`PlayerBook`): the
-   * facts about each of them outlive the session and are shared by every
-   * character dialling the same realm. What is this session's own — whether
-   * *it* has seen them online, whether they are in *its* party — is not.
-   */
-  players: PlayerRegistry;
-  /**
    * Whether a fight is on.
    *
    * Kept as its own field beside `combat.engaged` because they answer different
@@ -1566,11 +1508,6 @@ export interface CharacterState {
   mortallyWounded: boolean;
   /** What the server has said is wrong with this character. See `Affliction`. */
   afflictions: Afflictions;
-  /**
-   * What the realm's message table says is on this character. See
-   * `StatedEffect`. Not `stated`, which is the `stat all` sheet.
-   */
-  heard: readonly StatedEffect[];
   /**
    * The duration spells the wire has confirmed on this character, newest last.
    *
@@ -1627,7 +1564,6 @@ export const EMPTY_CHARACTER: CharacterState = {
     meditating: false
   },
   room: emptyRoom(),
-  players: NO_PLAYERS,
   progress: {
     level: null,
     exp: null,
@@ -1682,7 +1618,6 @@ export const EMPTY_CHARACTER: CharacterState = {
   party: NO_PARTY,
   stealth: 'unknown',
   afflictions: NO_AFFLICTIONS,
-  heard: [],
   buffs: [],
   spellbook: null,
   abilities: null,
@@ -1760,7 +1695,7 @@ export function vitalLevel(
  * and the standing rule is that unknown is never the reassuring answer.
  *
  * Here rather than in `remotes.ts` because it is a fact about the roster, and
- * three readers want it: the permission gate in `Remotes.evidenceAbout`, the
+ * three readers want it: the permission gate in `evidenceAbout` (`RemoteEvidence.ts`), the
  * Gang card, and the flyout that says why somebody is getting through.
  */
 export function gangOnRoster(
@@ -1789,7 +1724,7 @@ export function ownGang(state: CharacterState): string | null | undefined {
  * Has this name **joined** this character's party?
  *
  * Here rather than in either caller because it is the party half of one
- * permission gate, and the gate has two readers: `Remotes.evidenceAbout`, which
+ * permission gate, and the gate has two readers: `evidenceAbout` (`RemoteEvidence.ts`), which
  * answers the `@` command, and the Player flyout's Access face, which tells the
  * player whether it will be answered. `AutoCombat.quarry`'s lesson is that two
  * halves of one gate in two files agree exactly until one of them is edited.
@@ -1834,8 +1769,48 @@ export function joinedTheParty(state: CharacterState, name: string | null): bool
  * hang-up watch and the roster notices — and two of them had grown their own
  * copy of these four lines.
  */
-export function ownAlignment(state: CharacterState): Alignment | null {
+export function ownAlignment(state: Pick<CharacterState, 'name' | 'online'>): Alignment | null {
   if (state.name === null) return null;
   const mine = state.name.toLowerCase();
   return state.online.find((entry) => entry.name.toLowerCase() === mine)?.alignment ?? null;
+}
+
+/**
+ * The party members standing here under `share` of their health, by name
+ * (todo 831): what a leader waits for (`PartyConfig.waitBelow`). Not this
+ * character, not an invitation nobody accepted, and not a member who has
+ * walked out of the room, who has stood up. An unstated health is not low.
+ */
+export function membersBelow(state: CharacterState, share: number): string[] {
+  if (share <= 0) return [];
+  const here = new Set(state.room.occupants.map((who) => who.name.toLowerCase()));
+  return joinedMembers(state)
+    .filter((member) => here.has(member.name.toLowerCase()))
+    .filter((member) => member.health !== null && member.health < share)
+    .map((member) => member.name);
+}
+
+/** Everybody besides this character who has joined its party: an invitation is not membership. */
+export function joinedMembers(state: CharacterState): PartyMember[] {
+  const self = state.name?.toLowerCase() ?? null;
+  return state.party.members.filter(
+    (member) => !member.invited && member.name.toLowerCase() !== self
+  );
+}
+
+/** The same, by name. */
+export function partyMembers(state: CharacterState): string[] {
+  return joinedMembers(state).map((member) => member.name);
+}
+
+/** Whether anybody besides this character has joined its party. */
+export function inAParty(state: CharacterState): boolean {
+  return joinedMembers(state).length > 0;
+}
+
+/** The party member this character follows, from the party listing, or undefined. */
+export function leaderOf(state: CharacterState): PartyMember | undefined {
+  const leader = state.party.following?.toLowerCase();
+  if (leader === undefined) return undefined;
+  return state.party.members.find((member) => member.name.toLowerCase() === leader);
 }

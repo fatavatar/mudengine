@@ -24,8 +24,9 @@ import {
   type MapObstacle,
   type Vertical
 } from '../../shared/map';
-import { roomId, type Direction, type RoomId } from '../../shared/world';
-import { describeObstacle } from './obstacle';
+import type { SurvivalLevel } from '../../shared/survival';
+import { roomId, type Direction, type RoomId, type WorldRoom } from '../../shared/world';
+import { describeObstacle, leverOpening } from './obstacle';
 import type { WorldGraph } from './WorldGraph';
 import { tuning } from '../app/tuning';
 
@@ -47,7 +48,15 @@ function verticalOf(directions: Direction[]): Vertical {
   return null;
 }
 
-export function localMap(graph: WorldGraph, centre: RoomId, radius = DEFAULT_RADIUS): LocalMap {
+/** A lair's level for the character the map is drawn for; null where it is not known. */
+export type LairLevel = (room: WorldRoom) => SurvivalLevel | null;
+
+export function localMap(
+  graph: WorldGraph,
+  centre: RoomId,
+  radius = DEFAULT_RADIUS,
+  lairLevel: LairLevel = () => null
+): LocalMap {
   const start = graph.byId(centre);
   if (!start) return { centre: null, cells: [], dropped: 0 };
 
@@ -70,6 +79,8 @@ export function localMap(graph: WorldGraph, centre: RoomId, radius = DEFAULT_RAD
     };
     const place = room.shop === undefined ? undefined : graph.shop(room.shop)?.kind;
     if (place !== undefined) cell.place = place;
+    const odds = room.lair === undefined ? null : lairLevel(room);
+    if (odds !== null) cell.lairOdds = odds;
 
     // A door is a property of the passage, so it travels with the exit.
     const blocked: Partial<Record<Direction, MapObstacle>> = {};
@@ -80,7 +91,7 @@ export function localMap(graph: WorldGraph, centre: RoomId, radius = DEFAULT_RAD
       blocked[exit.direction] = describeObstacle(
         exit.requirement,
         graph,
-        graph.leversHere(cell.id, exit.direction)
+        leverOpening(graph, cell.id, exit.direction)
       );
     }
     if (Object.keys(blocked).length > 0) cell.blocked = blocked;
@@ -112,7 +123,7 @@ export function localMap(graph: WorldGraph, centre: RoomId, radius = DEFAULT_RAD
               obstacle: describeObstacle(
                 exit.requirement,
                 graph,
-                graph.leversHere(cell.id, exit.direction)
+                leverOpening(graph, cell.id, exit.direction)
               )
             }
           : {})

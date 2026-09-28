@@ -15,12 +15,12 @@ import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
 import { tuning } from '../app/tuning';
 import type { SafetyDecision } from '../../shared/automation';
-import type { CharacterState } from '../../shared/character';
-import { STOCK_COIN_READER, type CoinReader } from '../../shared/coins';
+import { DENOMINATIONS, type CharacterState, type Denomination } from '../../shared/character';
 import type { MovementConfig } from '../../shared/config';
 import { restorePlan } from '../../shared/gear';
 import { sameItem } from '../../shared/items';
 import { roomId, type RoomId, type Route } from '../../shared/world';
+import type { SessionModule } from './Module';
 
 export interface RecoveryPlanner {
   /** Where the character stands, or null while unplaced. */
@@ -33,6 +33,8 @@ export interface RecoveryPlanner {
   moveInFlight(): boolean;
   walking(): boolean;
   busy(): boolean;
+  /** The word that picks a coin up on this realm (todo 830); omitted, the denomination. */
+  coinWord?(coin: Denomination): string;
 }
 
 export interface RecoveryEvents {
@@ -48,7 +50,7 @@ type Phase =
 
 const ACTION = 'recover gear';
 
-export class GearRecovery {
+export class GearRecovery implements SessionModule {
   /** The death last acted on, so one death is one attempt. */
   private handled: number | null = null;
   /**
@@ -75,14 +77,6 @@ export class GearRecovery {
     private readonly events: RecoveryEvents = {},
     private readonly now: () => number = () => Date.now()
   ) {}
-
-  /** What this realm calls its coins; the stock names until told. */
-  private coins: CoinReader = STOCK_COIN_READER;
-
-  /** The purse is asked for by the realm's own word — see `AutoLoot.useCoins`. */
-  useCoins(reader: CoinReader): void {
-    this.coins = reader;
-  }
 
   configure(config: MovementConfig, enabled: boolean): void {
     this.config = config;
@@ -253,10 +247,10 @@ export class GearRecovery {
       // And the purse, which the death dropped beside the kit.
       const cash = state.room.cash;
       if (cash !== null) {
-        for (const coin of ['runic', 'platinum', 'gold', 'silver', 'copper'] as const) {
+        for (const coin of DENOMINATIONS) {
           if (cash[coin] <= 0) continue;
           this.queue.enqueue({
-            command: `get ${this.coins.word(coin)}`,
+            command: `get ${this.planner.coinWord?.(coin) ?? coin}`,
             priority: 'probe',
             coalesceKey: `recover:${coin}`,
             expiresAt: this.now() + expiresMs,

@@ -143,6 +143,16 @@ connection:
 # be stated per character, which was the same answer written out once per
 # character on that realm and as many places for it to drift.
 #
+# And its `locate:` key -- how the client asks where you are standing: `rm`,
+# which is what a realm with no key gets, or `none` for a realm with no such
+# command, where nothing is asked and the room is worked out from what you walk
+# into. A character may state its own in its `profile.yaml`.
+#
+# Its `coins:` block names a coin the realm renamed, singular, by coin:
+# `coins: { runic: dime bag }`. A coin it does not name keeps its usual
+# name. The client reads the realm's word as that coin, counts it and picks
+# it up by it (`get dime`). A character may state its own, coin by coin.
+#
 # The settings screen writes them, and `resources/servers/` ships Paradigm's
 # six -- four game realms on port 2323 and two test realms on 2324, differing
 # only in the realm number their `login:` script answers with. There is
@@ -402,12 +412,12 @@ ui:
     keepDark: true
     darkTheme: dark
 
-  # The client's own mark, at the left of the status rail.
+  # The client's own mark and its version, at the top right of the card rail.
   #
   # On by default: it is the one place the client says what it is, and a brand
   # nobody ever sees is the same as none. Turn it off if you would rather the
-  # status rail held nothing but facts about the session -- it is not in the way
-  # of anything either way, since it takes the height that line already has.
+  # rail held nothing but cards -- it is not in the way of anything either way,
+  # since it shares the row of the put-away cards' chip.
   showLogo: true
 
   # What the console draws in place of what the realm printed: a list of
@@ -828,20 +838,20 @@ automation:
     walkWhileBlind: false
     walkWhilePoisoned: false
 
+    # And confusion -- MegaMUD's IgnoreConfusion, whose default (0) waits it
+    # out too. A confused character's commands are thrown away before the
+    # server reads them, each on a roll the spell's own strength sets ("You
+    # fumble in confusion!"), so a step taken confused may be spent for
+    # nothing. Off, a route or a loop stands still until the confusion wears
+    # off, and says so.
+    walkWhileConfused: false
+
     # Turn auto-combat back on when a route you asked for arrives. The usual
     # reason to walk with it off is to get somewhere without fighting on the
     # way, and on arrival that reason is gone. A loop's leg and an errand are
     # not journeys with an arrival in them. Flips the switch in this file, so
     # the toolbar shows it.
     fightOnArrival: true
-
-    # And confusion -- MegaMUD's Ignore Confusion, off by default as MegaMUD's
-    # is. Nothing on the wire says a character is confused in words this
-    # client knows; a realm's message table does (import MegaMUD's
-    # Messages.md on the realm's settings page), and while it says so a route
-    # or a loop stands still. A confused character's commands misfire.
-    walkWhileConfused: false
-
 
     # Ways and places routes keep out of, in the realm's own words: a way whose
     # script phrase says one (`go vortex`), or a room whose name does (the
@@ -1066,6 +1076,10 @@ automation:
   # say each address one person. Off, a gangpath `@` command is read and never
   # answered, however much is granted below.
   #
+  # `autoJoin` joins a party when its leader invites you, without waiting for
+  # the @join the leader would telepath next. Only somebody granted @join below
+  # is joined, and never while you are already in a party.
+  #
   # `gang` is what anybody in **this character's** gang may ask for. One list,
   # not one per gang: a character is in one at a time. Leave one gang for
   # another and the new one inherits the list -- the Gang card says so on every
@@ -1125,6 +1139,7 @@ automation:
   remotes:
     enabled: false
     gangpath: false
+    autoJoin: false
     gang: []
     party: [health, bless-expired, heal]
     players: {}
@@ -1260,9 +1275,7 @@ automation:
     # holds no lair in is looked into first (`l <direction>`), entered only if
     # it is empty, rested in, and stepped back from when nothing else has the
     # character. Where no neighbour is safe the rest goes ahead where it is,
-    # said once. Never while following a party: where the party stands is the
-    # leader's to choose, and a follower rests beside it. On: it acts only
-    # when resting was going to act.
+    # said once. On: it acts only when resting was going to act.
     restNextDoor: true
 
     # Rest before stepping through a trap, until health covers what the trap
@@ -1285,11 +1298,9 @@ automation:
     # `Your command had no effect.` in the room.
     meditateBelow: 0
 
-    # And how far up to meditate before a walk or a lap goes on: the mana half
-    # of restTo. 0 is meditateBelow and a small margin, which is what the hold
-    # did before this was a setting. Raised to meditateBelow if set under it --
-    # a figure to stop at below the one to start at is two opposite
-    # instructions.
+    # Keep meditating to this share of mana, as restTo does for health: `med`
+    # goes out again after something interrupts it, and a walk or loop waits
+    # until mana is back here. 0 meditates once. Never below meditateBelow.
     meditateTo: 0
 
     # Potions and anything else, with its own condition -- *use this when that
@@ -1404,11 +1415,18 @@ automation:
   # overlaid by whichever other set applies, so `Moving` is one line about boots
   # rather than a second copy of everything the character owns.
   #
-  # `when` is `always`, `moving` (a route or a lap under way) or `fighting`
-  # (anything swinging). A fighting set may add `mob:` to apply against one
-  # monster only -- the lap fought with throwing hammers and the one boss that
-  # wants the magic weapon. Most specific wins, and two sets that match equally
-  # are decided by the order they are written in.
+  # `when` is `always`, `moving` (a route or a lap under way), `backstab` or
+  # `fighting` (anything swinging). A fighting set may add `mob:` to apply
+  # against one monster only -- the lap fought with throwing hammers and the one
+  # boss that wants the magic weapon. Most specific wins, and two sets that
+  # match equally are decided by the order they are written in.
+  #
+  # A `backstab` set is MegaMUD's backstab weapon as a set: worn between
+  # fights while your opener is `bs`, and swapped for the fighting set once the
+  # backstab has started the fight. It goes on before the step's `sn`, because
+  # wearing anything breaks sneaking, and it is laid over the moving set, so it
+  # only needs the weapon. A weapon the game will not backstab with is not put
+  # on again that session.
   #
   # The off-hand comes off before a two-handed weapon goes on, and the weapon
   # hand is sent before the rest, so coming back the other way frees the hand
@@ -1422,6 +1440,9 @@ automation:
   #     - name: Moving
   #       when: moving
   #       wear: [brown leather boots]
+  #     - name: Backstab
+  #       when: backstab
+  #       wear: [ice crystal falchion]
   #     - name: Boss
   #       when: fighting
   #       mob: nasty sandworm
@@ -1498,6 +1519,11 @@ automation:
     # it spends mana on a reading you did not type.
     autoChoose: false
 
+    # The spell to attack with. Blank casts nothing. It opens the fight in
+    # place of `combat.attack` (after a `bs` or `ju` opener, which still goes
+    # first), and the server casts it every round from then on by itself, so
+    # a round sends nothing more while it does: only `combat.attack`, once,
+    # when the spell is capped, has no effect, or the mana runs short.
     attack: ''
 
     # The spell for a crowded room -- MegaMUD's MultAttack. When at least
@@ -1526,26 +1552,10 @@ automation:
     # 0 is no limit. MegaMUD's own default is 1: open with the spell, then let
     # the melee round carry the fight, which is what a caster with a small
     # pool wants for a night's grinding. Counted on the server's confirmation
-    # (a cast that fizzles is not one), and a new target starts the count
-    # again.
+    # of each cast it repeats (a cast that fizzles is not one), and a new
+    # target starts the count again.
     attackCasts: 0
     areaCasts: 0
-
-    # Drain when hurt. A drain hurts the target and heals the caster by it --
-    # the realm's DrainLife (`vampiric assault`), or a hit whose EndCast is a
-    # heal on the caster (`necromantic storm` ends in `suck the life force`).
-    # Below `drainBelow` of maximum health, `drain` is cast instead of
-    # `attack` and `areaDrain` instead of `areaAttack`, under the same casts,
-    # crowd and mana tests, until health is back to `drainTo`. 0 there
-    # switches back the moment health is over `drainBelow`, and every switch
-    # re-engages the fight and restarts the character's round, so a gap is
-    # worth leaving. A `drainTo` below `drainBelow` is raised to it. A blank
-    # spell keeps the ordinary one -- or, with `autoChoose` on, `drain` is
-    # picked from the spellbook's drains. `drainBelow: 0` never drains.
-    drain: ''
-    areaDrain: ''
-    drainBelow: 0
-    drainTo: 0
 
     # Heal if below -- MegaMUD's Health tab, kept beside the attack spell
     # because it is the same mechanism: one cast, chosen by a number, under
@@ -1577,6 +1587,20 @@ automation:
     healBelow: 0
     healTo: 0
     healParty: false
+
+    # Auto Choose Best Heal. On, the heal is picked each cast from your
+    # spellbook and the realm's figures instead of from `heal` and
+    # `healPartyWith`: the cheapest spell expected to cover what is missing,
+    # else the one that mends most. With more than one person hurt, a
+    # party-wide heal such as `healing rain` is weighed against one heal on
+    # the worst of them. Hit points mended low on the bar count for more than
+    # those mended near the top, so three people at 68%, 71% and 35% get a
+    # major heal on the one at 35% unless the rain does nearly as much for
+    # them. The choice is printed when it changes, and where it cannot be
+    # made (a member whose client never answered @health, a book not yet
+    # read) the spell in the box is cast. Off by default because it casts
+    # spells you did not type.
+    autoChooseHeal: false
 
     # Ask a carried item for the blessing it casts, when that blessing is not
     # up -- the half of MegaMUD's AutoBless this client had no answer to: a
@@ -1617,9 +1641,11 @@ automation:
     # `The dizzying poison runs its course.`, `You are inflicted with a hideous
     # rotting disease!` / `The disease dies down.`. Cast bare once per onset
     # (a targetless cast lands on you), again after thirty seconds if the condition is still
-    # stated. Blank casts nothing. `freedom` is MegaMUD's Freedom: cast when
-    # the character cannot move (`Your legs are paralyzed!`, a net, webbing,
-    # or anything a realm's message table says holds it).
+    # stated. Blank casts nothing. `freedom` is MegaMUD's Freedom, for a
+    # character held where it stands -- `Your legs are paralyzed!`, a net, a
+    # knockdown: whatever the realm marks `HoldPerson`. The realm's `freedom`
+    # and `cure paralysis` end every such hold, and the hold's own ending
+    # (`You can move again!`) is how the client knows it worked.
     cures:
       blindness: ''
       poison: ''
@@ -1766,33 +1792,48 @@ automation:
     # nothing to hide for. Off, because it spends a command per fight.
     hideForOpener: false
 
-    # How named monsters are treated -- MegaMUD's Monster Details, one row per
-    # monster. A row names a monster and only what differs from one nobody
-    # listed:
+    # How named monsters are treated -- MegaMUD's Attack Priority List and its
+    # avoid list, as one row per monster.
     #
-    #   relationship  friend (never attacked, even when it swings first), avoid
-    #                 (never started on, hit back), enemy (the default), escape
-    #                 (run from), hangup (end the session when it is here)
-    #   priority      first, high, default, low, last -- the order the rest are
-    #                 attacked in
-    #   notHostile, noBackstab, stopToKill, and a preAttack or attack spell
+    # Nine treatments. Four are MegaMUD's relationships, and none of them is
+    # ever opened on: `never` (its Avoid) is left alone, not even hit back;
+    # `friend` will not attack you, so it is never hit back either, and it is
+    # not a threat -- rested beside, left out of `threats`; `escape` is run
+    # from while it is here, under `safety.retreat` and only while the client
+    # is taking the character somewhere; `hangup` hangs up while it is here,
+    # under `safety.hangUp` and the realm's penalty. Nothing is opened beside
+    # an `escape` or `hangup` monster, and one that swings is hit back. The
+    # other five -- first, high, default, low, last -- are the order the rest
+    # are attacked in. A monster no row names is `default`, so this is
+    # somewhere to add the one that matters rather than a ranking of the realm.
     #
-    #   monsters:
-    #     - { mob: town guard, relationship: friend }
-    #     - { mob: gnoll shaman, priority: first }
-    #     - { mob: gigantic black ooze, attack: mmis }
+    #   mobRules:
+    #     - { mob: town guard, treat: never }
+    #     - { mob: gnoll shaman, treat: first }
+    #     - { mob: giant rat, treat: last }
     #
-    # Where a monster with a priority is in the room the band decides outright
-    # and the client's own weighing is skipped -- which is the point: a ranking
-    # the realm's arithmetic could overturn is one nobody can predict from
-    # reading it. Every refusal still applies first, so a band says which of
-    # the monsters worth attacking to attack, never that one is.
+    # A banded row may also say how its monster is fought -- MegaMUD's monster
+    # table. `cast` is the spell that opens on it in place of the attack verb,
+    # cast at most `times` times (0 is no limit) before the character's own
+    # spells and then `attack` carry the fight; `noBackstab` keeps the `bs`
+    # opener for something else; `notHostile` says it does not attack first,
+    # whatever the realm says -- it is rested beside and opened on only at
+    # `engage: all`, and the Room and Reference cards show both words:
     #
-    # Laid one field at a time: the realm's own table (servers/<id>/monsters.yaml,
-    # imported from Monsters.md on the realm's page) under this list, and this
-    # list under a character's own rows. A field left out keeps what the broader
-    # one says.
-    monsters: []
+    #     - { mob: gnoll shaman, treat: first, cast: { spell: harm, times: 2 } }
+    #     - { mob: black bear, treat: default, noBackstab: true }
+    #     - { mob: old hermit, treat: default, notHostile: true }
+    #
+    # Where a banded monster is in the room the band decides outright and the
+    # client's own weighing is skipped -- which is the point: a ranking the
+    # realm's arithmetic could overturn is one nobody can predict from reading
+    # it. `never` and every other refusal still apply first, so a band says
+    # which of the monsters worth attacking to attack, never that one is.
+    #
+    # A realm may state its own list in `servers/<id>/server.yaml`, and it is
+    # merged rather than replaced: a row here wins for the monster it names,
+    # and the realm's rows for every other monster still apply.
+    mobRules: []
 
     # And a refusal from the realm's own column rather than a name: decline
     # anything it says has more health than this. 0 never refuses.
@@ -1846,35 +1887,31 @@ automation:
     # tuning.remotes.healAskAgainMs while still under it. 0 never asks.
     askForHealBelow: 0
 
-    # Leading, pause the loop while any member's health on the party listing is
-    # under this share, as a @wait would -- MegaMUD's Wait For Party Members. How
-    # fresh that figure is depends on parEverySeconds below. Ignored while
-    # following. 0 never waits.
-    waitForMembersBelow: 0
+    # Leading, stop the loop while a member in the room is under this share of
+    # health, as a follower's @wait does -- MegaMUD's Wait For Party Members.
+    # 0 waits for nobody's health.
+    waitBelow: 0
 
-    # Leading, the most minutes to pause for the party -- a @wait whose @ok
-    # never came, or a member whose health never rose -- before walking on:
-    # MegaMUD's If Leading Wait No Longer Than. 0 waits as long as it takes.
-    waitNoLongerMinutes: 0
+    # Leading, give up a wait and walk on after this many minutes -- MegaMUD's
+    # If Leading Wait No Longer Than. 0 waits until everyone is ready.
+    waitMinutes: 2
 
-    # Leading, walk on through a follower's @wait -- MegaMUD's Ignore @wait If
-    # Leading. waitForMembersBelow still pauses the loop for a member's health.
-    ignoreWaitWhenLeading: false
+    # Leading, walk on through a follower's @wait. A member under waitBelow
+    # still stops the loop.
+    ignoreWait: false
 
-    # Following, refuse the leader's @party <command> -- MegaMUD's Ignore @party
-    # If Following, for a leader trusted to help but not to type for you.
-    ignorePartyWhenFollowing: false
+    # Following, leave the leader's @party commands unanswered.
+    ignoreParty: false
 
-    # Telepath @health to whoever joins, for their real health and mana rather
-    # than the listing's percentage -- MegaMUD's Request Party Health.
-    requestPartyHealth: true
+    # Telepath @health to a member who joins -- MegaMUD's Request Party Health.
+    askHealth: true
 
-    # Ask for the party listing every this many seconds in a fight, and twice
-    # that out of one, while in a party -- MegaMUD's Par Frequency (15 there).
-    # 0 asks only when the party changes (onPartyChange). Never under 5.
-    parEverySeconds: 0
+    # In a party, send par every this many seconds in a fight and twice that
+    # out of one -- MegaMUD's Par Frequency. 0 sends it only when the party
+    # changes.
+    parSeconds: 0
 
-    # And after every combat round -- MegaMUD's Send PAR after combat round.
+    # In a party, send par after every combat round.
     parAfterRound: false
 
   # Keeping a character alive, rather than playing it.
@@ -1947,6 +1984,29 @@ automation:
       # `map/room` so a name several rooms share is not guessed at.
       safeHavenRoom: ''
 
+    # The last-ditch escape, below the retreat: the realm's own teleport, sent
+    # mid-fight once the walk out has had its turn. Never above retreat's
+    # belowHealth while the retreat is on, and never across its move.
+    #
+    # The command is written out literally because every realm spells it its
+    # own way -- GreaterMUD `sys go 1 297`, MajorMUD `sys goto silvermere`.
+    # Say it once for the realm (`fleeGoto: sys go 1 297` in its server.yaml);
+    # a character's own `command` here replaces the realm's. This file's is
+    # used only where neither says one, and empty everywhere sends nothing.
+    #
+    # On GreaterMUD `sys` is a sysop's command: a player is answered `Your
+    # command had no effect.`, said in the terminal, and not sent again that
+    # connection. A sysop lands at once, mid-fight, and the fight ends.
+    fleeGoto:
+      enabled: false
+
+      # Fraction of maximum health at or below which the teleport goes out --
+      # under the retreat's, above the hang-up's.
+      belowHealth: 0.2
+
+      # Empty follows the realm.
+      command: ''
+
     # Hanging up to escape.
     #
     # READ THIS BEFORE TURNING IT ON. Every MegaMUD-era client offers
@@ -1967,17 +2027,6 @@ automation:
     # The five-minute window is the part nothing on screen shows. Combat has
     # ended, the room is empty, and a hangup is still penalised.
     #
-    # A second way out, for a realm that answers `sys status` (see `locate` on
-    # the realm): there `sys goto <place>` is a real command that moves the
-    # character in one round, so it is its own, more desperate rung -- below
-    # retreat's belowHealth and above hangUp's. The fight is broken off the
-    # way a retreat breaks it; once it is over, this sends `sys goto` to
-    # `destination` instead of walking. Empty `destination` never sends it.
-    fleeGoto:
-      enabled: false
-      belowHealth: 0.2
-      destination: ''
-
     # Walking out is the escape that works. Hanging up is the escape that
     # works afterwards. See docs/greatermud/combat.md.
     hangUp:

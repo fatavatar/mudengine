@@ -3,10 +3,10 @@
  *
  * A heal is chosen by a number; a cure is chosen by the server saying a
  * condition is on this character, which the tracker keeps as a three-state
- * flag (`CharacterState.afflictions`) set and cleared only by the wire. Three
- * conditions have a cure spell to configure: blindness, poison and disease.
- * Paralysis is tracked too and has none here, because no capture names a
- * spell that ends it and a spell name from memory is a command said out loud.
+ * flag (`CharacterState.afflictions`) set and cleared only by the wire. Four
+ * conditions have a cure spell to configure: blindness, poison, disease, and
+ * a hold (`freedom`, todo 810), whose success is the hold's own wear-off line
+ * (`Spell.cs` prints it on the way out), so no sentence of its own is read.
  *
  * ## Once per onset, then patiently
  *
@@ -23,30 +23,28 @@
  * on the caster, and the realm's short name is itself the command, never
  * behind `c` (`castWord`).
  */
-import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
 import { canPayFor, manaAtLeast } from './mana';
 import { t } from '../app/i18n';
-import type { Affliction, Afflictions, CharacterState } from '../../shared/character';
-import type { SpellsConfig } from '../../shared/config';
-import { cureGates, resolveSpell, spellCost, spellTargeting } from '../../shared/spellcraft';
+import type { Affliction, CharacterState } from '../../shared/character';
+import { CURES, type Cure, type SpellsConfig } from '../../shared/config';
+import {
+  CURE_CONDITION,
+  cureGates,
+  OPEN_CAST_GATE,
+  resolveSpell,
+  spellCost,
+  spellTargeting,
+  type CastGate
+} from '../../shared/spellcraft';
 import type { WorldSpell } from '../../shared/world';
 import { tuning } from '../app/tuning';
+import type { SessionModule } from './Module';
 
 /** How long a cure that changed nothing is trusted before it is tried again. */
 export const RETRY_MS = 30_000;
 
-type Cure = keyof SpellsConfig['cures'];
-const FLAG: Record<Cure, keyof Afflictions> = {
-  blindness: 'blind',
-  poison: 'poisoned',
-  disease: 'diseased',
-  // MegaMUD's Freedom: whatever holds the character where it stands.
-  freedom: 'held'
-};
-const CURES: readonly Cure[] = ['blindness', 'poison', 'disease', 'freedom'];
-
-export class Cures {
+export class Cures implements SessionModule {
   private lastCastAt = new Map<Cure, number>();
   private previous = new Map<Cure, Affliction>();
   /** The cures derived from the book and said, once each. */
@@ -67,31 +65,10 @@ export class Cures {
      */
     private readonly realmSpell: (name: string) => WorldSpell | null = () => null,
     /** Where a derived cure is said, once (todo 09). */
-    private readonly events: { notice?(message: string): void } = {}
+    private readonly events: { notice?(message: string): void } = {},
+    /** The one heal, blessing or cure a round, asked at the send (`CastRound`). */
+    private readonly gate: CastGate = OPEN_CAST_GATE
   ) {}
-
-  /** The one heal, blessing or cure a round allows. See `CastRound`. */
-  private gate: CastGate = OPEN_GATE;
-  /** The last cure this sent, and when, for the refusal that may answer it. */
-  private lastSent: { cure: Cure; at: number } | null = null;
-
-  useCastGate(gate: CastGate): void {
-    this.gate = gate;
-  }
-
-  /**
-   * The server answered `You have already cast a spell this round!`. If the
-   * last cast this module sent is what it answered, that cast failed: its
-   * clock is given back, so it goes again once the round has passed rather
-   * than on its retry floor (the player, 2026-09-23 — *this should be caught
-   * as a failure and retried later*).
-   */
-  noteRefused(): void {
-    const sent = this.lastSent;
-    this.lastSent = null;
-    if (sent === null || this.now() - sent.at > tuning().spells.refusedWindowMs) return;
-    this.lastCastAt.delete(sent.cure);
-  }
 
   configure(config: SpellsConfig, enabled: boolean): void {
     this.config = config;
@@ -125,7 +102,7 @@ export class Cures {
     if (best === null) return '';
     if (this.saidDerived.get(cure) !== best.name) {
       this.saidDerived.set(cure, best.name);
-      this.events.notice?.(t('automation.cure.derived', { affliction: cure, spell: best.name }));
+      this.events.notice?.(t('automation.cure.derived', { cure, spell: best.name }));
     }
     return best.name;
   }
@@ -133,7 +110,7 @@ export class Cures {
   onCharacter(state: CharacterState): void {
     if (!this.enabled || state.phase !== 'in-game') return;
     for (const cure of CURES) {
-      const current = state.afflictions[FLAG[cure]];
+      const current = state.afflictions[CURE_CONDITION[cure]];
       const before = this.previous.get(cure);
       this.previous.set(cure, current);
       if (current !== 'yes') continue;
@@ -147,7 +124,6 @@ export class Cures {
       const last = this.lastCastAt.get(cure);
       const onset = before !== 'yes';
       if (!onset && last !== undefined && at - last < RETRY_MS) continue;
-      if (!this.gate.mayCast()) continue;
 
       const found = resolveSpell(spell, state.spellbook, this.realmSpell);
       /*
@@ -157,18 +133,18 @@ export class Cures {
        * clock. See `canPayFor`.
        */
       if (!canPayFor(state, spellCost(found))) continue;
-      this.lastCastAt.set(cure, at);
+      // Spent when the cast leaves, so one held for the round stays due.
       this.queue.enqueue({
         command: found.word,
         priority: 'combat',
         coalesceKey: `cure:${cure}`,
         expiresAt: at + tuning().spells.cureExpiresMs,
-        stillWanted: () => this.gate.mayCast(),
+        stillWanted: () => this.gate.mayCast(found.configured),
+        reason: t('automation.cure.reason', { cure }),
         onSent: () => {
+          this.lastCastAt.set(cure, this.now());
           this.gate.noteCast();
-          this.lastSent = { cure, at: this.now() };
-        },
-        reason: t('automation.cure.reason', { affliction: cure })
+        }
       });
     }
   }

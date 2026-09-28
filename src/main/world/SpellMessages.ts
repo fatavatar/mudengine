@@ -9,32 +9,18 @@
  * on GreaterMUD and Paradigm, checked against both converted realms for the
  * kai powers.
  *
- * Read the way `i18n.ts` reads its file: once, at startup, into a structure
- * every session shares. A file that is missing or will not parse is reported
- * and answered with an empty book, so a client without it falls back to the
- * frames in `patterns.ts` rather than failing to start.
+ * Read the way `i18n.ts` reads its file: once, at startup, into rows every
+ * session shares (`client.ts` joins each realm's renamed spells onto them). A
+ * file that is missing or will not parse is reported and answered with no
+ * rows, so a client without it falls back to the frames in `patterns.ts`
+ * rather than failing to start.
  */
 import fs from 'node:fs';
 
-import {
-  parseSpellMessagesCsv,
-  SpellMessageBook,
-  type SpellMessageRow
-} from '../../shared/spell-messages';
+import { parseSpellMessagesCsv, type SpellMessageRow } from '../../shared/spell-messages';
 import { t } from '../app/i18n';
 
 export function loadSpellMessages(
-  file: string,
-  notify?: (message: string) => void
-): SpellMessageBook {
-  return SpellMessageBook.fromRows(loadSpellMessageRows(file, notify));
-}
-
-/**
- * The file's rows rather than a book of them, for a caller that lays a
- * realm's own spell names over them first (`withRealmSpellNames`).
- */
-export function loadSpellMessageRows(
   file: string,
   notify?: (message: string) => void
 ): SpellMessageRow[] {

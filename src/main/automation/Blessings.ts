@@ -46,26 +46,22 @@
  * entry allows it mid-fight, coalesced by the entry's spell — which is the
  * row's identity: the list holds one row per spell.
  */
-import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
 import { canPayFor, manaAtLeast } from './mana';
 import { t } from '../app/i18n';
 import type { ActiveBuff, CharacterState } from '../../shared/character';
 import type { BlessingConfig, SpellsConfig } from '../../shared/config';
 import type { Block } from '../../shared/blocks';
-import { resolveSpell, sameSpell, spellCost } from '../../shared/spellcraft';
+import {
+  OPEN_CAST_GATE,
+  resolveSpell,
+  sameSpell,
+  spellCost,
+  type CastGate
+} from '../../shared/spellcraft';
 import type { WorldSpell } from '../../shared/world';
 import { tuning } from '../app/tuning';
-
-/** What `Blessings` asks of the stat sheet. See its `askFirst`. */
-export interface BlessingSheet {
-  /** Ask for an `st` sheet; the tracker drops what it no longer prints. */
-  ask(): void;
-  /** Forget a measured duration the sheet has contradicted. */
-  forget(spell: string): void;
-}
-
-const NO_SHEET: BlessingSheet = { ask: () => {}, forget: () => {} };
+import type { SessionModule } from './Module';
 
 /** One key per blessing per person, so a party of four is four clocks. */
 function clockKey(entry: BlessingConfig, target: string): string {
@@ -82,89 +78,88 @@ function partyClockSeconds(entry: BlessingConfig): number {
   return entry.fallbackSeconds ?? 300;
 }
 
-export class Blessings {
+/** What the clocks read besides their configuration, named (todo 760). */
+export interface BlessingsDeps {
+  /** The clock; `Date.now` when omitted. */
+  readonly now?: () => number;
+  /**
+   * The observed duration of this character's own cast of a spell, in
+   * seconds — `Belongings.recallSpellDurations`, read through a callback
+   * so the store can arrive after construction. Null is *never measured*,
+   * which falls back to `blessWatchdogMs`; omitted, nothing is.
+   *
+   * The one thing here that is genuinely not realm data: it is measured off
+   * this character's own wire, which is why it stays its own callback while
+   * the id and the abbreviation folded into `realmSpell`.
+   */
+  readonly learnedDuration?: (spell: string) => number | null;
+  /**
+   * The realm's own row for a spell it names, whole; omitted, the realm names
+   * none.
+   *
+   * The entity rather than a projection of it. This module wanted two facts
+   * off the same row — the id, to tell a configured `bles` from a recorded
+   * `bless`, and the abbreviation, which is the word a cast sends — and was
+   * given two callbacks for them; anything wanting a third would have got a
+   * third. See `resolveSpell`.
+   */
+  readonly realmSpell?: (name: string) => WorldSpell | null;
+  /**
+   * Whether the character is on the ground (`Grounded.down`). The tick
+   * recasts from the last state it was handed, and a character down is
+   * handed none, so it asks (todo 755). Required: a construction that forgot
+   * it would read a character down as standing.
+   */
+  readonly onTheGround: () => boolean;
+  /** The one heal, blessing or cure a round, asked at the send (`CastRound`); omitted, none. */
+  readonly castGate?: CastGate;
+}
+
+export class Blessings implements SessionModule {
   private timer: NodeJS.Timeout | null = null;
   private state: CharacterState | null = null;
-  /** When each clock last had its cast proposed — `clockKey` → epoch ms. */
+  /** When each clock last had its cast sent — `clockKey` → epoch ms. */
   private readonly proposedAt = new Map<string, number>();
   /** When each party clock last saw its cast *confirmed* — `clockKey` → epoch ms. */
   private readonly castAt = new Map<string, number>();
   /** Party clocks a peer notification has marked due right now. */
   private readonly dueNow = new Set<string>();
   /**
-   * The last cast this module proposed anything at, module-wide: one blessing
+   * When this module last sent a cast, module-wide: one blessing
    * at a time, so a caster with three down works through them in priority
    * order at the pace the server confirms them rather than as one burst two
    * thirds of which is refused.
    */
   private lastProposalAt = 0;
-  /** When each self clock last asked the sheet whether its buff is still up. See `askFirst`. */
-  private readonly sheetAskedAt = new Map<string, number>();
+
+  private readonly now: () => number;
+  private readonly learnedDuration: (spell: string) => number | null;
+  private readonly realmSpell: (name: string) => WorldSpell | null;
+  private readonly onTheGround: () => boolean;
+  private readonly gate: CastGate;
 
   constructor(
     private config: SpellsConfig,
     private enabled: boolean,
     private readonly queue: CommandQueue,
-    private readonly now: () => number = () => Date.now(),
-    /**
-     * The observed duration of this character's own cast of a spell, in
-     * seconds — `Belongings.recallSpellDurations`, read through a callback
-     * so the store can arrive after construction. Null is *never measured*,
-     * which falls back to `blessWatchdogMs`.
-     *
-     * The one thing here that is genuinely not realm data: it is measured off
-     * this character's own wire, which is why it stays its own callback while
-     * the id and the abbreviation folded into `realmSpell`.
-     */
-    private readonly learnedDuration: (spell: string) => number | null = () => null,
-    /**
-     * The realm's own row for a spell it names, whole.
-     *
-     * The entity rather than a projection of it. This module wanted two facts
-     * off the same row — the id, to tell a configured `bles` from a recorded
-     * `bless`, and the abbreviation, which is the word a cast sends — and was
-     * given two callbacks for them; anything wanting a third would have got a
-     * third. See `resolveSpell`.
-     */
-    private readonly realmSpell: (name: string) => WorldSpell | null = () => null,
-    /**
-     * The `st` sheet, for a watchdog to ask before it recasts (`askFirst`), and
-     * the measured durations, for one the sheet has shown to be wrong.
-     */
-    private readonly sheet: BlessingSheet = NO_SHEET
+    deps: BlessingsDeps
   ) {
+    this.now = deps.now ?? (() => Date.now());
+    this.learnedDuration = deps.learnedDuration ?? (() => null);
+    this.realmSpell = deps.realmSpell ?? (() => null);
+    this.onTheGround = deps.onTheGround;
+    this.gate = deps.castGate ?? OPEN_CAST_GATE;
     // The toolbar's Auto-Bless switch, under the master one — as `configure`
     // folds it, so the first pass and every later one agree.
     this.enabled = enabled && config.autoBless;
   }
 
-  /** Whether a wire spelling and a configured one name the same spell (`shared/spellcraft`). */
-  private sameSpell(wire: string, configured: string): boolean {
-    return sameSpell(wire, configured, null, this.realmSpell);
-  }
-
-  /** The one heal, blessing or cure a round allows. See `CastRound`. */
-  private gate: CastGate = OPEN_GATE;
-  /** The last blessing this sent, and when, for the refusal that may answer it. */
-  private lastSent: { key: string; at: number } | null = null;
-
-  useCastGate(gate: CastGate): void {
-    this.gate = gate;
-  }
-
   /**
-   * The server answered `You have already cast a spell this round!`. If the
-   * last cast this module sent is what it answered, that cast failed: its
-   * clock is given back, so it goes again once the round has passed rather
-   * than on its retry floor (the player, 2026-09-23 — *this should be caught
-   * as a failure and retried later*).
+   * Whether a wire spelling and a configured one name the same spell: the
+   * realm accepts `bles` and prints `bless` (`sameSpell`, `spellcraft.ts`).
    */
-  noteRefused(): void {
-    const sent = this.lastSent;
-    this.lastSent = null;
-    if (sent === null || this.now() - sent.at > tuning().spells.refusedWindowMs) return;
-    this.proposedAt.delete(sent.key);
-    this.castAt.delete(sent.key);
+  private same(wire: string, configured: string): boolean {
+    return sameSpell(wire, configured, this.state?.spellbook, this.realmSpell);
   }
 
   configure(config: SpellsConfig, enabled: boolean): void {
@@ -179,7 +174,6 @@ export class Blessings {
     this.proposedAt.clear();
     this.castAt.clear();
     this.dueNow.clear();
-    this.sheetAskedAt.clear();
     this.lastProposalAt = 0;
     this.stop();
   }
@@ -211,7 +205,7 @@ export class Blessings {
       const spell = block.groups['spell']?.trim();
       if (spell === undefined || block.groups['target'] !== undefined) return;
       for (const entry of this.config.blessings) {
-        if (entry.target === 'self' && this.sameSpell(spell, entry.spell)) {
+        if (entry.target === 'self' && this.same(spell, entry.spell)) {
           this.proposedAt.delete(clockKey(entry, '@self'));
         }
       }
@@ -231,7 +225,7 @@ export class Blessings {
       const lower = target.toLowerCase();
       if (lower === 'yourself' || lower === 'you' || lower === own) return;
       for (const entry of this.config.blessings) {
-        if (entry.target !== 'party' || !this.sameSpell(spell, entry.spell)) continue;
+        if (entry.target !== 'party' || !this.same(spell, entry.spell)) continue;
         const key = clockKey(entry, target);
         this.castAt.set(key, block.at);
         this.dueNow.delete(key);
@@ -249,7 +243,7 @@ export class Blessings {
     if (!this.enabled) return;
     for (const entry of this.config.blessings) {
       if (entry.target !== 'party') continue;
-      if (!this.sameSpell(spell, entry.spell)) continue;
+      if (!this.same(spell, entry.spell)) continue;
       const key = clockKey(entry, from);
       this.dueNow.add(key);
       this.castAt.delete(key);
@@ -289,9 +283,20 @@ export class Blessings {
 
   /** One pass over the list; the interval calls it, and so does every state change. */
   check(): void {
+    const state = this.standingInRealm();
+    if (state !== null) this.propose(state, false);
+  }
+
+  /**
+   * The state to propose from, or null: switched on, in the realm and not on
+   * the ground. One gate for the tick and for `check`, which a peer's
+   * `@bless-expired` reaches through `Remotes` ahead of the session's own
+   * (todo 760): the two copies had drifted, and only the tick asked.
+   */
+  private standingInRealm(): CharacterState | null {
     const state = this.state;
-    if (!this.enabled || !state || state.phase !== 'in-game') return;
-    this.propose(state, false);
+    if (!this.enabled || !state || state.phase !== 'in-game' || this.onTheGround()) return null;
+    return state;
   }
 
   /**
@@ -304,9 +309,6 @@ export class Blessings {
   private propose(state: CharacterState, prioritized: boolean): void {
     const now = this.now();
     if (now - this.lastProposalAt < tuning().spells.blessCooldownMs) return;
-    // This round's heal or blessing already went: a second is refused, and
-    // the refusal switches the fight off (`CastRound`).
-    if (!this.gate.mayCast()) return;
 
     for (const entry of this.config.blessings) {
       if (entry.prioritizeOverHeal !== prioritized) continue;
@@ -334,16 +336,14 @@ export class Blessings {
     // meant: `You feel lucky!` is five spells, and a configured `bless` is up
     // whichever of them the server actually applied.
     const held = state.buffs.find((buff) =>
-      [buff.spell, ...(buff.candidates ?? [])].some((name) => this.sameSpell(name, entry.spell))
+      [buff.spell, ...(buff.candidates ?? [])].some((name) => this.same(name, entry.spell))
     );
+    if (held !== undefined && !this.lapsed(held, entry, now)) return false;
+
     // `@self`, not this character's name: a self cast goes out bare, so it
     // needs no name at all, and `@` keeps the clock apart from any party
     // member's — a player name cannot start with it.
     const key = clockKey(entry, '@self');
-    if (held !== undefined) {
-      if (!this.lapsed(held, entry, now)) return false;
-      if (this.askFirst(held, entry, key, now)) return false;
-    }
     const proposed = this.proposedAt.get(key) ?? 0;
     // The last proposal may still be queued, in flight, or refused; a
     // confirmation resets nothing here — the buff appearing on the list is
@@ -396,52 +396,12 @@ export class Blessings {
      * is what the todo asked for — *use the st time if available.*
      */
     if (buff.expiresAt !== undefined) return now >= buff.expiresAt;
-    return now - buff.appliedAt >= this.watchdogMs(buff, entry);
-  }
-
-  /** The measured duration plus slack, or the shipped watchdog before one. */
-  private watchdogMs(buff: ActiveBuff, entry: BlessingConfig): number {
     const learned = this.learnedDuration(buff.spell) ?? this.learnedDuration(entry.spell);
-    return learned !== null && learned > 0
-      ? learned * 1000 * (1 + tuning().spells.blessSlack)
-      : tuning().spells.blessWatchdogMs;
-  }
-
-  /**
-   * A watchdog that ran out on a buff the sheet speaks for asks the sheet
-   * before it recasts — true while that is the answer being waited on.
-   *
-   * The watchdog is a guess, and a wrong one recasts a shield that is up on
-   * every lap of it: a measured 29s for hellfire shield (its start taken from
-   * the login sheet rather than a cast) recast it every 36s all evening
-   * (2026-09-23), and the recast reset the clock before the real ending could
-   * ever correct the figure. The sheet is the check (the player's rule: *check
-   * stat*): a buff it no longer prints is dropped by the tracker and cast on
-   * the next pass, and one it still prints past the watchdog proves the
-   * measured duration wrong, which is then forgotten.
-   *
-   * A buff the sheet has never printed, a server-stated end, and a sheet that
-   * does not come within `blessRetryMs` all fall back to the recast.
-   */
-  private askFirst(buff: ActiveBuff, entry: BlessingConfig, key: string, now: number): boolean {
-    if (buff.expiresAt !== undefined || buff.listedAt === undefined) return false;
-    if (buff.listedAt >= buff.appliedAt + this.watchdogMs(buff, entry)) {
-      for (const name of new Set([buff.spell, entry.spell])) {
-        if (this.learnedDuration(name) !== null) this.sheet.forget(name);
-      }
-      // Now on the shipped watchdog; asked again only if that runs out too.
-      if (!this.lapsed(buff, entry, now)) return true;
-    }
-    const retry = tuning().spells.blessRetryMs;
-    const asked = this.sheetAskedAt.get(key);
-    const answered = asked !== undefined && buff.listedAt >= asked;
-    if (asked === undefined || (answered && now - buff.listedAt >= retry)) {
-      this.sheetAskedAt.set(key, now);
-      this.sheet.ask();
-      return true;
-    }
-    // Still printed a moment ago, or waiting on the answer — for a while.
-    return answered || now - asked < retry;
+    const watchdogMs =
+      learned !== null && learned > 0
+        ? learned * 1000 * (1 + tuning().spells.blessSlack)
+        : tuning().spells.blessWatchdogMs;
+    return now - buff.appliedAt >= watchdogMs;
   }
 
   /**
@@ -459,8 +419,8 @@ export class Blessings {
    * A null target is this character: cast bare, which lands on the caster.
    *
    * Returns whether anything was proposed. A blessing that cannot be paid for
-   * is not one, and **no clock is spent on it**: `proposedAt` is set only on
-   * the way past the check, so the recast goes out on the first status line
+   * is not one, and **no clock is spent on it**: `proposedAt` is set only
+   * when a cast is sent, so the recast goes out on the first status line
    * that can afford it rather than waiting out `blessRetryMs` afterwards. The
    * captured failure this closes is `way of the owl` at `KAI=1` for a spell
    * costing 2 — the server answering `You do not have enough mana to cast that
@@ -475,9 +435,6 @@ export class Blessings {
   ): boolean {
     const found = resolveSpell(entry.spell, state.spellbook, this.realmSpell);
     if (!canPayFor(state, spellCost(found))) return false;
-    this.proposedAt.set(key, now);
-    this.sheetAskedAt.delete(key);
-    this.lastProposalAt = now;
     const word = found.word;
     this.queue.enqueue({
       command: target === null ? word : `${word} ${target}`,
@@ -486,21 +443,16 @@ export class Blessings {
       priority: state.inCombat ? 'combat' : 'probe',
       coalesceKey: `blessing:${key}`,
       expiresAt: now + tuning().spells.buffExpiresMs,
-      /*
-       * Dropped unsent when this round's cast has gone meanwhile — and then it
-       * was never asked, so its retry clock is given back: the next round
-       * proposes it again rather than `blessRetryMs` later.
-       */
-      stillWanted: () => {
-        if (this.gate.mayCast()) return true;
-        this.proposedAt.delete(key);
-        return false;
-      },
+      stillWanted: () => this.gate.mayCast(found.configured),
+      reason: t('automation.blessing.reason', { name: entry.spell }),
+      // The clocks are spent when the cast leaves, so one held for the round
+      // is proposed again rather than waiting out `blessRetryMs`.
       onSent: () => {
+        const sentAt = this.now();
+        this.proposedAt.set(key, sentAt);
+        this.lastProposalAt = sentAt;
         this.gate.noteCast();
-        this.lastSent = { key, at: this.now() };
-      },
-      reason: t('automation.blessing.reason', { name: entry.spell })
+      }
     });
     return true;
   }
@@ -514,7 +466,7 @@ export class Blessings {
    */
   private notifyCaster(spell: string, before: CharacterState): void {
     if (!this.config.notifyPartyOnWearOff) return;
-    const held = before.buffs.find((buff) => this.sameSpell(buff.spell, spell));
+    const held = before.buffs.find((buff) => this.same(buff.spell, spell));
     const caster = held?.by ?? null;
     if (caster === null) return;
     const still = before.party.members.some(
@@ -540,8 +492,8 @@ export class Blessings {
        * fight can recast. Priority against the heal is meaningless on a tick
        * where nothing else is being decided.
        */
-      const state = this.state;
-      if (!this.enabled || !state || state.phase !== 'in-game') return;
+      const state = this.standingInRealm();
+      if (state === null) return;
       this.propose(state, true);
       this.propose(state, false);
     }, tuning().spells.buffTickMs);

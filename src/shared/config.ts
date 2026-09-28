@@ -21,6 +21,8 @@ import { bool, int, isRecord, str } from './values';
 import { asEvents, type ScheduledEvent } from './events';
 import { GEAR_WHENS, type GearSet, type GearWhen } from './gear';
 import { asLoops, mergeNamed, type Loop } from './loops';
+import { asCoinNames, type CoinNames } from './coins';
+import { asLocateWord, DEFAULT_LOCATE, type LocateWord } from './locate';
 /*
  * `DENOMINATIONS` is the one *value* this module takes from `character.ts`, and
  * it is safe: nothing under `character.ts` imports `config.ts` back, so the
@@ -28,7 +30,6 @@ import { asLoops, mergeNamed, type Loop } from './loops';
  * `src/shared/__tests__/module-cycle.test.ts`.
  */
 import { DENOMINATIONS, type Denomination, type VitalThresholds } from './character';
-import { asCoinNames, type CoinNames } from './coins';
 import {
   DEFAULT_CONSOLE_PALETTE,
   DEFAULT_THEME,
@@ -51,8 +52,7 @@ import {
 } from './notifications';
 import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
 import type { ConnectionTarget, StreamEncoding } from './types';
-import { mobKey } from './world';
-import { asMonsterRules, type MonsterRule } from './monsterRules';
+import { normalizeMobRules, type MobRule } from './mobRules';
 // A value import, and safe: `commands.ts` imports nothing from `shared/`, so
 // there is no cycle for a bundler to resolve the wrong way round.
 import { REREAD_ROOM } from './commands';
@@ -60,8 +60,10 @@ import { TRAINED_ATTRIBUTES, type TrainedAttribute } from './training';
 import { isAnsiColour, type ColourBand } from './template';
 import { DEFAULT_REWRITES, isRewriteEntity, type RewriteDesign, type VitalBands } from './rewrites';
 
-/** Chrome density, mirroring the `useDensity` preference. */
+/** Chrome density, as `ui.density` states it and the palette cycles it. */
 export type DensityPreference = 'auto' | 'comfortable' | 'compact';
+/** What `useDensity` resolves `auto` to for the window it measures. */
+export type Density = Exclude<DensityPreference, 'auto'>;
 
 /**
  * Which edge the character tabs sit on.
@@ -101,27 +103,6 @@ export interface LoginStep {
    */
   repeat?: boolean;
 }
-
-/**
- * Which word this realm asks for exact coordinates with, or whether to ask at
- * all.
- *
- * Not auto-detected. It used to be — `rm` tried, retired on the wire's own
- * refusal, nothing else offered — which is exactly right for a command the
- * client can safely *try*, and exactly wrong for one whose failure mode is
- * being spoken aloud in the room: a realm the client has not yet dialled
- * cannot be spared that first broadcast by anything it learns afterwards. A
- * player who already knows their BBS says so once, here, and neither
- * automatic answer is asked to guess it.
- *
- * - `'rm'` — GreaterMUD/Paradigm's word. `Location: <map>,<room>`.
- * - `'sys-status'` — the MajorMUD lineage's, for a realm with no `rm` at all
- *   (`bbs.thelucks.org`, WorldGroup, captured live 2026-09-21). `sys status`'s
- *   first line, `Room <n>  Map: <n>`.
- * - `'none'` — neither. The client falls back to dead reckoning and says so,
- *   the same as a realm that refused the configured word.
- */
-export type LocateMethod = 'rm' | 'sys-status' | 'none';
 
 /**
  * Answers to the login sequence.
@@ -170,10 +151,6 @@ export interface ConnectionConfig {
    * was retired 2026-08-29.
    */
   login: LoginConfig;
-  /** See `LocateMethod`. Resolved from the server's own setting; see `Server.locate`. */
-  locate: LocateMethod;
-  /** The realm's names for its coins. Resolved from the server's own; see `Server.coins`. */
-  coins: CoinNames;
 }
 
 /**
@@ -211,15 +188,6 @@ export interface Server {
    */
   login: LoginStep[];
   /**
-   * How this realm answers *where am I standing*, if at all.
-   *
-   * **On the realm, for the same reason `login` is.** Every character here is
-   * talking to the same dispatch table, so every character gets the same
-   * answer to whether `rm` or `sys status` is the word that works — this is a
-   * fact about the BBS, not about the account playing it.
-   */
-  locate: LocateMethod;
-  /**
    * The world every character on this realm walks: empty, a bundled world's
    * name, or a path to a realm database — `.mdb`, `.accdb`, `.sqlite` or
    * `.db`, or a `.zip` holding exactly one of those, which is how a realm is
@@ -243,18 +211,37 @@ export interface Server {
    */
   database: string;
   /**
+   * The realm's own rules for its monsters, merged under every character's.
+   *
+   * **On the realm, because a monster is.** A rule names a monster by the name
+   * this realm's data spells it, so a list written for one realm means nothing
+   * on another — and every character playing here wants the same answer to
+   * *which of these do I leave alone, and which first*. Stating it per
+   * character would be the same list written out once per character, which is
+   * what `login` and `database` above are on the realm to avoid.
+   *
+   * Merged rather than replaced: see `mergeMobRules`. A character's own row
+   * for a monster wins, and a monster only the realm names still counts.
+   */
+  mobRules: MobRule[];
+  /**
    * Whether a hang-up here is charged, for every character playing here that
    * does not say for itself; null leaves it to the options file. See
    * `HangUpConfig.penalties`.
    */
   hangPenalties: boolean | null;
   /**
-   * What this realm calls its coins, where it renames them. See `CoinNames`.
-   *
-   * **On the realm, for the reason `locate` is.** Every character here reads
-   * the same pack and the same floor, so the name is a fact about the place.
+   * How this realm is asked where a character stands: `rm`, or `none` for a
+   * realm with no such word. A character may state its own. See `shared/locate.ts`.
    */
+  locate: LocateWord;
+  /** This realm's own words for the coins it renamed; absent, the stock ones. See `CoinNames`. */
   coins: CoinNames;
+  /**
+   * This realm's teleport for the last-ditch escape, literally (`sys go 1
+   * 297`); empty states none. A character's own replaces it. See `FleeGotoConfig`.
+   */
+  fleeGoto: string;
 }
 
 export interface FontConfig {
@@ -367,13 +354,11 @@ export interface UiConfig {
    */
   showHud: boolean;
   /**
-   * The client's own mark, in the status rail.
+   * The client's own mark and version, at the head of the card rail.
    *
    * On by default: this is the one place the client says what it is, and a
-   * brand nobody ever sees is the same as none. Off is offered because a status
-   * rail is a line of facts about the session and somebody may not want a mark
-   * on it — not because the mark is in the way of anything, which it is not:
-   * it takes the height the line already has.
+   * brand nobody ever sees is the same as none. Off is offered for taste, not
+   * room: it shares the band the put-away chip already takes.
    */
   showLogo: boolean;
   /** How the console is painted when the chrome is light. See `ConsoleUiConfig`. */
@@ -691,7 +676,7 @@ export interface RetreatConfig {
   /**
    * How far to go, **not** how to choose the exit.
    *
-   * Choosing the exit is `SessionManager.escape`'s ladder and is not
+   * Choosing the exit is `Travel.escape`'s ladder and is not
    * configurable, because every rung of it is strictly better than the one
    * below and nobody would knowingly pick a worse one: retrace the trail
    * first, then an exit the realm data says leads back onto it, then any exit
@@ -714,6 +699,27 @@ export interface RetreatConfig {
 }
 
 /**
+ * The last-ditch escape below `retreat` (todo 813): the realm's own teleport,
+ * sent mid-fight in the emergency band, written out **literally** because each
+ * realm implementation spells it differently — GreaterMUD `sys go 1 297`,
+ * MajorMUD `sys goto silvermere` — and it is never derived. The realm's
+ * `server.yaml` (`fleeGoto:`) states the command; a character's own `command`
+ * replaces it, and this file's is used only where neither states one.
+ *
+ * Off by default. On GreaterMUD `sys` is a sysop's tool (`SysCommand.cs:196`);
+ * a player is answered `Your command had no effect.`, read as a refusal.
+ * Never above `retreat.belowHealth` while the retreat is on: the walked escape
+ * has the first word. See `FleeGoto`.
+ */
+export interface FleeGotoConfig {
+  enabled: boolean;
+  /** Fraction of maximum health at or below which the teleport is sent. */
+  belowHealth: number;
+  /** The literal command; empty follows the realm, and none anywhere sends nothing. */
+  command: string;
+}
+
+/**
  * Two, where there were three.
  *
  * The third was `flee`, and it did not describe a way out — it described
@@ -725,36 +731,6 @@ export interface RetreatConfig {
  */
 export const RETREAT_STRATEGIES = ['step-back', 'safe-haven'] as const;
 export type RetreatStrategy = (typeof RETREAT_STRATEGIES)[number];
-
-/**
- * A second way out, for the realms where one actually exists.
- *
- * `RetreatConfig` above is deliberately down to one axis — a direction, sent
- * because there is no working command for running away (see the note above
- * `RETREAT_STRATEGIES`). `sys goto` breaks that rule for exactly the realms
- * `SessionManager.locateWord` already knows answer to `sys status`: there, it
- * is a real command that relocates the character in one round, not a word the
- * parser drops. That makes it a *different* tool rather than a third rung on
- * the same ladder, and it belongs at its own, more desperate fraction of
- * health — the same relationship `HangUpConfig` has to `RetreatConfig`, an
- * independent and harsher fallback, not a setting on the first one.
- *
- * The break-off move is still `RetreatConfig`'s own — `wayOut` and `escape`
- * are shared by every trigger, flee included, because choosing an exit does
- * not change with the reason — and `sys goto` is refused mid-round the same
- * as any other command would be. This is only what runs once `*Combat Off*`
- * lands: a fixed destination instead of `retreat.strategy`'s own afterward.
- */
-export interface FleeGotoConfig {
-  enabled: boolean;
-  /** Fraction of maximum health below which the character flees outright. */
-  belowHealth: number;
-  /**
-   * The keyword `sys goto` is sent with, e.g. `sil`. Empty is none — refused,
-   * not guessed, the same as an empty `safeHavenRoom`.
-   */
-  destination: string;
-}
 
 /**
  * Which monsters auto-combat will open a fight with.
@@ -917,30 +893,34 @@ export interface CombatConfig {
    */
   refreshRounds: number;
   /**
-   * What this character says about particular monsters — MegaMUD's *Monster
-   * Details*: relationship, band, rest and backstab flags, and a spell to
-   * fight each with (`MonsterRule`).
+   * How named monsters are treated, one row each — MegaMUD's *Attack Priority
+   * List* and its *avoid* list, as one list rather than two.
    *
-   * **The one list about named monsters** (2026-09-24). Upstream's
-   * `mobRules` — `never` and five bands — said two of these fields, in a
-   * second panel beside this one: `never` is a Friend (never attacked, even
-   * when it swings first) and a band is `priority`. Folded in by
-   * `theMobRulesBecameMonsterRows`.
+   * **This replaces the weighing rather than ranking against it.** Where the
+   * room holds a listed monster, the band decides and `src/shared/menace.ts`
+   * is not consulted: somebody who writes *shamans first* means first, not
+   * first unless the arithmetic disagrees, and a ranking that the realm's own
+   * numbers could overturn is one nobody can predict from reading it. Within
+   * one band the room's own listing order decides, which is the order that
+   * was there before any weighing existed.
    *
-   * **A band replaces the weighing rather than ranking against it.** Where the
-   * room holds a monster with a priority, the band decides and
-   * `src/shared/menace.ts` is not consulted: somebody who writes *shamans
-   * first* means first. Every refusal still applies first — a band says
-   * which of the monsters worth attacking to attack, never that one is.
+   * A monster no row names is in `default`, so the list is somewhere to add
+   * the one monster that matters and never a ranking of the whole realm.
+   * Every refusal — `never`, the evil-point cost, the health and experience
+   * caps, the disposition gate — still applies **first**: a band says which of
+   * the monsters worth attacking to attack, never that one is worth attacking.
    *
-   * Laid **field by field**: the realm's imported table
-   * (`servers/<id>/monsters.yaml`) under the options file's rows, and those
-   * under the character's own (`withGlobalMonsters`, `withRealmMonsters`) —
-   * so a row need state only what it does differently, and a shaman's
-   * attack spell for a monster the realm marks Flee keeps the Flee. The
-   * player's own words, either file, outrank a table imported from MegaMUD.
+   * **`never` is the one treatment that is not a band.** It is the refusal the
+   * flat `avoid` list used to be, moved onto the row so that leaving a monster
+   * alone and saying where it comes in the order are one question asked once,
+   * in one place, about one monster — and so that it inherits the same
+   * narrowest-wins merge the bands do, which a replaced-wholesale list could
+   * not give it.
+   *
+   * Merged across the three scopes by monster, narrowest winning, unlike
+   * every other list here — see `mergeMobRules`.
    */
-  monsters: MonsterRule[];
+  mobRules: MobRule[];
   /**
    * Do not open on anything the realm says has more health than this.
    * 0 never refuses.
@@ -1060,6 +1040,12 @@ export interface RemotesConfig {
    * separately. Off, and a gangpath `@` command is read and never answered.
    */
   gangpath: boolean;
+  /**
+   * Join a party when its leader invites this character, without waiting for
+   * the `@join` that would follow. Only a leader granted `join` is joined, and
+   * never while this character is already in a party (`AutoJoin`).
+   */
+  autoJoin: boolean;
   /**
    * Remotes anybody in **this character's gang** may use.
    *
@@ -1263,7 +1249,7 @@ export interface LootConfig {
  * Searching every room the character arrives in, unasked.
  *
  * The realm hides exits — 249 of them in the shipped data are
- * `Hidden/Searchable` — and `WorldGraph.edgePenalty` already prices one at
+ * `Hidden/Searchable` — and `Router.edgePenalty` already prices one at
  * "costs the search", so a route may be planned through a corridor nobody has
  * looked for yet. `Walker` searches *reactively*, when a step it planned is
  * refused; this is the other half, and it is the half that finds an exit
@@ -1518,7 +1504,7 @@ export interface HealthConfig {
    * through a trap into a fight on the health the trap left it. Capped at the
    * maximum: a trap that takes more than the bar holds is walked at full
    * health, which is the most anything here can do about it. Read by
-   * `Walker.holdForTrap`; `Recovery` sits the character down to the figure
+   * `Holds.holdForTrap`; `Recovery` sits the character down to the figure
    * the walk names, on this switch alone — `restBelow: 0` does not turn it
    * off, since the two are two decisions.
    */
@@ -1532,15 +1518,10 @@ export interface HealthConfig {
    */
   meditateBelow: number;
   /**
-   * Keep meditating, and keep a walk or lap standing still, until mana
-   * reaches this fraction. 0 is `meditateBelow` plus a small margin
-   * (`tuning.loop.resumeMarginWhenUncapped`), which is what the hold did
-   * before this was a setting.
-   *
-   * The mana half of `restTo`, asked for on 2026-09-23: skinny's lap walked
-   * on at 42% with `meditateBelow` at 50%, and the hold that fixed it needed
-   * a figure to let go at. Clamped up to `meditateBelow` for `restTo`'s
-   * reason — a `to` under the `below` is two opposite instructions.
+   * Keep meditating to this fraction of mana: `restTo` for mana (todo 825).
+   * `meditateBelow` starts a stretch and this carries it on through whatever
+   * breaks it, and a route or a loop held for mana walks on here. 0 is the
+   * single sit-down; never below `meditateBelow`, clamped up as `restTo` is.
    */
   meditateTo: number;
   /**
@@ -1615,49 +1596,6 @@ export type PotionWhen = (typeof POTION_WHENS)[number];
 
 export const POTION_VERBS = ['drink', 'use'] as const;
 export type PotionVerb = (typeof POTION_VERBS)[number];
-
-/**
- * One monster, and how the automation treats it.
- *
- * The row shape of the monster list. `mob` is a `mobKey` — lowercased, the
- * leading article stripped — because that is the one spelling the wire ever
- * uses and the same normalisation the old flat `avoid` list always applied.
- */
-export interface MobRule {
-  /** The monster, keyed the way the wire spells it. */
-  mob: string;
-  /** Left alone, or the band it is attacked in. See `MOB_TREATMENTS`. */
-  treat: MobTreatment;
-}
-
-/**
- * The five bands, ordered exactly as they are attacked.
- *
- * The array's order **is** the ranking — `MOB_PRIORITIES.indexOf` is what
- * sorts a room — so these are never reordered for readability, and nothing
- * that is not a rank ever joins them. `default` is the middle on purpose:
- * `high` and `low` are defined against it, and a monster nobody listed is in
- * it, which is what makes the list something you add one row to rather than a
- * ranking of every monster in the realm.
- */
-export const MOB_PRIORITIES = ['first', 'high', 'default', 'low', 'last'] as const;
-export type MobPriorityBand = (typeof MOB_PRIORITIES)[number];
-
-/**
- * What a row may say: leave it alone, or where it comes in the order.
- *
- * Two kinds of fact in one closed union, deliberately — a refusal and a rank —
- * because they are answers to one question a player asks about one monster,
- * and because holding them apart is what made *never attack* a second list
- * that merged by different rules. `never` is first because it is read first:
- * `AutoCombat.choose` declines on it before anything is ranked at all. It is
- * **not** in `MOB_PRIORITIES`, so no ranking can ever sort on it.
- */
-export const MOB_TREATMENTS = ['never', ...MOB_PRIORITIES] as const;
-export type MobTreatment = (typeof MOB_TREATMENTS)[number];
-
-/** Where an unlisted monster sits: the middle band, and the reason it exists. */
-export const DEFAULT_MOB_PRIORITY: MobPriorityBand = 'default';
 
 /**
  * Walking, beyond the mechanics of a route — MegaMUD's **Movement**.
@@ -1847,9 +1785,10 @@ export interface MovementConfig {
    */
   walkWhilePoisoned: boolean;
   /**
-   * Walk on while the realm's message table says the character is confused —
-   * MegaMUD's *Ignore Confusion*. Off by default, as MegaMUD's is: a confused
-   * character's commands misfire, and a walk spends them. See `afflictionHolding`.
+   * Walk on while confused. Off, the walk waits the confusion out — MegaMUD's
+   * `IgnoreConfusion` default. A confused character's commands are thrown
+   * away at random before the server reads them (`CheckConfusion`), so every
+   * step is a gamble the walk would otherwise spend and re-send.
    */
   walkWhileConfused: boolean;
   /**
@@ -1946,6 +1885,14 @@ export interface TrainConfig {
 }
 
 /**
+ * The cures the client automates, one per condition the tracker keeps a flag
+ * for and a spell can end — MegaMUD's `BlindCmd`, `PoisonCmd`, `DiseaseCmd`
+ * and `FreedomCmd`. `freedom` answers `held` (todo 810).
+ */
+export const CURES = ['blindness', 'poison', 'disease', 'freedom'] as const;
+export type Cure = (typeof CURES)[number];
+
+/**
  * Casting — MegaMUD's **Spells** tab.
  *
  * MegaMUD's spell handling is a table per spell with a condition each, and
@@ -1980,6 +1927,10 @@ export interface SpellsConfig {
    * `c pressure points` answers `You do not know how to cast pressure.`).
    * The configured value stays the readable whole name, or an
    * abbreviation; `castWord` resolves it when the cast goes out.
+   *
+   * It opens the fight in place of `combat.attack`, and the server casts it
+   * every round from then on by itself, so a round sends only a change of
+   * action (todo 816, `AttackSpells`).
    */
   attack: string;
   /**
@@ -2038,35 +1989,6 @@ export interface SpellsConfig {
    * finish more cheaply.
    */
   areaCasts: number;
-  /**
-   * The spell that stands in for `attack` while health is low: one that hurts
-   * the target and heals the caster by it (`vampiric assault`, the realm's
-   * `DrainLife`). Blank keeps `attack`; with `autoChoose` on, blank derives it
-   * from the book's drains. Its picker offers only the spells the realm says
-   * drain (`spellServes`).
-   */
-  drain: string;
-  /**
-   * The same for the room spell: cast instead of `areaAttack`, under the area
-   * spell's own crowd and mana tests, while health is low. `necromantic storm`
-   * drains by its `EndCast`, a heal on the caster, and counts. Blank keeps
-   * `areaAttack`.
-   */
-  areaDrain: string;
-  /**
-   * The fraction of maximum health below which the drain spells replace the
-   * attack spells in a fight. 0 never drains.
-   */
-  drainBelow: number;
-  /**
-   * Keep draining until health is back to this fraction; 0 goes back to the
-   * attack spell the moment it is over `drainBelow`. The pair `healBelow` /
-   * `healTo` is, and for a sharper reason: every change of spell mid-fight
-   * re-engages it and restarts the character's round (`combatAction`), so a
-   * drain that lifts health one point over the line must not flip the fight
-   * back and forth. Clamped up to `drainBelow`, as `healTo` is.
-   */
-  drainTo: number;
   /**
    * The spell to heal **this character** with. Blank heals nobody.
    *
@@ -2133,6 +2055,17 @@ export interface SpellsConfig {
    * started on nor continued.
    */
   healTo: number;
+  /**
+   * *Auto Choose Best Heal* (todo 05, 2026-09-27). On, the heal is chosen per
+   * cast from the spellbook and the realm's figures rather than read from
+   * `heal` and `healPartyWith`: the cheapest spell expected to cover what is
+   * missing, and, with more than one person hurt, a party-wide heal where it
+   * is worth more than one heal on the worst of them (`planHeal`). A choice
+   * that cannot be made falls back to the configured spell and says so. Its
+   * own switch rather than `autoChoose`'s, because a player may want the
+   * heals chosen and the attack spell typed, or the other way round.
+   */
+  autoChooseHeal: boolean;
   /** Whether party members are healed at all. The toolbar's own toggle. */
   healParty: boolean;
   /**
@@ -2165,10 +2098,10 @@ export interface SpellsConfig {
    * onset (a targetless cast lands on the caster), and again after thirty seconds while the server
    * still says the condition is on — a cure it answers with nothing leaves the
    * flag where it was, and casting once per status line would spend the
-   * fight's budget on it. Blank casts nothing. `freedom` is MegaMUD's Freedom
-   * slot: the spell cast when the character cannot move (`held`).
+   * fight's budget on it. Blank casts nothing. `freedom` is cast while the
+   * character is held (paralysis, a net, a knockdown: every `HoldPerson`).
    */
-  cures: { blindness: string; poison: string; disease: string; freedom: string };
+  cures: Record<Cure, string>;
   /**
    * The blessings kept up on this character and on the party it travels with,
    * in priority order — index 0 is recast first when several are down.
@@ -2323,42 +2256,25 @@ export interface PartyConfig {
    */
   askForHealBelow: number;
   /**
-   * Leading, pause the loop while any member's health is under this share, as
-   * a `@wait` would — MegaMUD's *Wait For Party Members*. Read off the party listing (`PartyMember.health`), so how fresh
-   * it is is how often the listing is asked for (`parEverySeconds`). 0 never
-   * waits. Ignored while following: the leader decides when the party moves.
+   * Leading, stop the lap while a member here is under this share of health,
+   * as a follower's `@wait` stops it (MegaMUD's *Wait For Party Members*,
+   * `PartyWait%`, todo 831). 0 waits for nobody's health.
    */
-  waitForMembersBelow: number;
+  waitBelow: number;
+  /** Leading, give up a wait and walk on after this many minutes (`PartyWaitMax`). 0 waits for ever. */
+  waitMinutes: number;
+  /** Leading, pay no heed to a follower's `@wait`; a member under `waitBelow` still stops the lap (`IgnoreWait`). */
+  ignoreWait: boolean;
+  /** Following, refuse the leader's `@party <command>` (`IgnoreParty`). */
+  ignoreParty: boolean;
+  /** Ask a member for `@health` when they join (`AskHealth`). */
+  askHealth: boolean;
   /**
-   * Leading, the most minutes to pause for the party — for a `@wait`
-   * whose `@ok` never came, or a member whose health never rose — before
-   * walking on regardless: MegaMUD's *If Leading Wait No Longer Than*. 0 waits
-   * as long as it takes.
+   * In a party, send `par` every this many seconds in a fight and twice that
+   * out of one (`ParPeriod`). 0 sends it only when the party changes.
    */
-  waitNoLongerMinutes: number;
-  /**
-   * Leading, walk on through a follower's `@wait` — MegaMUD's *Ignore @wait If
-   * Leading*. `waitForMembersBelow` still pauses the loop for a member's health.
-   */
-  ignoreWaitWhenLeading: boolean;
-  /**
-   * Following, refuse the leader's `@party <command>` — MegaMUD's *Ignore @party
-   * If Following*, for a leader trusted to help but not to type for you.
-   */
-  ignorePartyWhenFollowing: boolean;
-  /**
-   * Telepath `@health` to a member who joins, for their absolute figures —
-   * MegaMUD's *Request Party Health*. On, as MegaMUD ships it.
-   */
-  requestPartyHealth: boolean;
-  /**
-   * Ask for the party listing every this many seconds while in a party, twice
-   * that out of combat — MegaMUD's *Par Frequency* (15 in MegaMUD). The
-   * listing is the only place another member's health shows. 0 asks only when
-   * the party changes (`onPartyChange`).
-   */
-  parEverySeconds: number;
-  /** Ask for the listing after every combat round too — MegaMUD's *Send PAR after combat round*. */
+  parSeconds: number;
+  /** In a party, send `par` after every combat round (`ParAfterRound`). */
   parAfterRound: boolean;
 }
 
@@ -2628,11 +2544,7 @@ export const DEFAULT_CONFIG: AppConfig = {
         // the flag the first one is answered and the login sits at the second.
         { when: '(N)onstop, (Q)uit, or (C)ontinue?', send: '', repeat: true }
       ]
-    },
-    // Paradigm's word. A realm without it says so in its own `locate:`.
-    locate: 'rm',
-    // The stock names. A realm that renames a coin says so in its own `coins:`.
-    coins: {}
+    }
   },
   /*
    * None. A realm is a directory under `realms/`, and the client seeds one
@@ -2770,14 +2682,9 @@ export const DEFAULT_CONFIG: AppConfig = {
         strategy: 'step-back',
         safeHavenRoom: ''
       },
-      // Off, and more desperate than `retreat` when it is on — see
-      // `FleeGotoConfig`. Between `retreat`'s 0.3 and `hangUp`'s 0.15: a fallback
-      // that only matters once the first one has already failed to save it.
-      fleeGoto: {
-        enabled: false,
-        belowHealth: 0.2,
-        destination: ''
-      },
+      // Off, and between the retreat's floor and the hang-up's, so the
+      // teleport has its turn before the panic button. See `FleeGotoConfig`.
+      fleeGoto: { enabled: false, belowHealth: 0.2, command: '' },
       pvp: { notifyGang: false, action: 'none' }
     },
     // Off, like every other thing the client would do without being asked. The
@@ -2795,7 +2702,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       politeAttacks: false,
       maxMobs: 0,
       refreshRounds: 3,
-      monsters: [],
+      mobRules: [],
       maxTargetHealth: 0,
       minMobs: 0,
       maxMonsterExperience: 0
@@ -2807,12 +2714,12 @@ export const DEFAULT_CONFIG: AppConfig = {
       defendParty: false,
       restWithLeader: false,
       askForHealBelow: 0,
-      waitForMembersBelow: 0,
-      waitNoLongerMinutes: 0,
-      ignoreWaitWhenLeading: false,
-      ignorePartyWhenFollowing: false,
-      requestPartyHealth: true,
-      parEverySeconds: 0,
+      waitBelow: 0,
+      waitMinutes: 2,
+      ignoreWait: false,
+      ignoreParty: false,
+      askHealth: true,
+      parSeconds: 0,
       parAfterRound: false
     },
     health: {
@@ -2863,6 +2770,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     remotes: {
       enabled: false,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       /*
        * The one grant that ships non-empty, and it is three names: see
@@ -2917,15 +2825,12 @@ export const DEFAULT_CONFIG: AppConfig = {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
-      drain: '',
-      areaDrain: '',
-      drainBelow: 0,
-      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
       healBelowInCombat: 0,
       healTo: 0,
+      autoChooseHeal: false,
       healParty: false,
       invokeItems: false,
       minMana: 0.15,
@@ -3189,13 +3094,7 @@ export function normalizeConfig(input: unknown): AppConfig {
         ['cp437', 'utf8', 'latin1'],
         DEFAULT_CONFIG.connection.encoding
       ),
-      login: normalizeLogin(connection['login']),
-      locate: oneOf<LocateMethod>(
-        connection['locate'],
-        ['rm', 'sys-status', 'none'],
-        DEFAULT_CONFIG.connection.locate
-      ),
-      coins: asCoinNames(connection['coins'])
+      login: normalizeLogin(connection['login'])
     },
     // Both keys, oldest last: `profiles:` was this block's name before a
     // profile came to mean a character.
@@ -3256,6 +3155,15 @@ function fraction(value: unknown, fallback: number): number {
   if (!Number.isFinite(n) || n < 0) return fallback;
   const asFraction = n > 1 ? n / 100 : n;
   return Math.min(1, Math.max(0, asFraction));
+}
+
+/**
+ * The `to` of a start-and-carry-on pair (`restTo`, `meditateTo`, `healTo`):
+ * clamped up to its `below`, since a line under the floor is two opposite
+ * instructions about one number, and 0 kept as 0, the single sit-down or cast.
+ */
+function ceilingOver(to: number, below: number): number {
+  return to === 0 ? 0 : Math.max(to, below);
 }
 
 function normalizeThresholds(value: unknown, fallback: VitalThresholds): VitalThresholds {
@@ -3494,11 +3402,6 @@ function normalizeServer(value: unknown): Server | null {
     // Empty is a real answer: a server with no menus at all, which is every
     // MUD reached directly rather than through a BBS front end.
     login: readLoginSteps(value['login']) ?? [],
-    locate: oneOf<LocateMethod>(
-      value['locate'],
-      ['rm', 'sys-status', 'none'],
-      DEFAULT_CONFIG.connection.locate
-    ),
     /*
      * Empty is a real answer here too: the realm the client ships.
      *
@@ -3508,8 +3411,11 @@ function normalizeServer(value: unknown): Server | null {
      * reported.
      */
     database: str(value['database'], ''),
+    mobRules: normalizeMobRules(value['mobRules']),
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
-    coins: asCoinNames(value['coins'])
+    locate: asLocateWord(value['locate']) ?? DEFAULT_LOCATE,
+    coins: asCoinNames(value['coins']),
+    fleeGoto: str(value['fleeGoto'], '').trim()
   };
 }
 
@@ -3916,18 +3822,11 @@ function normalizeHealth(value: unknown): HealthConfig {
      * and stand up at 40%. 0 stays 0 — that is the single sit-down, not a
      * lower bound.
      */
-    restTo: (() => {
-      const to = fraction(raw['restTo'], d.restTo);
-      return to === 0 ? 0 : Math.max(to, restBelow);
-    })(),
+    restTo: ceilingOver(fraction(raw['restTo'], d.restTo), restBelow),
     restNextDoor: bool(raw['restNextDoor'], d.restNextDoor),
     restBeforeTraps: fraction(raw['restBeforeTraps'], d.restBeforeTraps),
     meditateBelow,
-    // Clamped up to `meditateBelow`, as `restTo` is to `restBelow`; 0 stays 0.
-    meditateTo: (() => {
-      const to = fraction(raw['meditateTo'], d.meditateTo);
-      return to === 0 ? 0 : Math.max(to, meditateBelow);
-    })(),
+    meditateTo: ceilingOver(fraction(raw['meditateTo'], d.meditateTo), meditateBelow),
     potions: normalizePotionRules(raw['potions']),
     useWards: bool(raw['useWards'], d.useWards)
   };
@@ -3957,6 +3856,7 @@ function normalizeRemotes(value: unknown, d: RemotesConfig): RemotesConfig {
   return {
     enabled: bool(raw['enabled'], d.enabled),
     gangpath: bool(raw['gangpath'], d.gangpath),
+    autoJoin: bool(raw['autoJoin'], d.autoJoin),
     gang: remoteNames(raw['gang'], d.gang),
     party: remoteNames(raw['party'], d.party),
     players: playerGrants(raw['players'], d.players)
@@ -4255,15 +4155,6 @@ function normalizeSpells(value: unknown): SpellsConfig {
     attackFallback: str(raw['attackFallback'], d.attackFallback).trim(),
     attackCasts: int(raw['attackCasts'], d.attackCasts, 0, 99),
     areaCasts: int(raw['areaCasts'], d.areaCasts, 0, 99),
-    drain: str(raw['drain'], d.drain).trim(),
-    areaDrain: str(raw['areaDrain'], d.areaDrain).trim(),
-    drainBelow: fraction(raw['drainBelow'], d.drainBelow),
-    // Clamped as `healTo` is below, and for its reason.
-    drainTo: (() => {
-      const to = fraction(raw['drainTo'], d.drainTo);
-      const below = fraction(raw['drainBelow'], d.drainBelow);
-      return to === 0 ? 0 : Math.max(to, below);
-    })(),
     heal: str(raw['heal'], d.heal).trim(),
     healPartyWith: str(raw['healPartyWith'], d.healPartyWith).trim(),
     healBelow: fraction(raw['healBelow'], d.healBelow),
@@ -4274,11 +4165,8 @@ function normalizeSpells(value: unknown): SpellsConfig {
      * two opposite instructions about the same number. 0 stays 0 — that is
      * the single-cast answer, not a lower bound.
      */
-    healTo: (() => {
-      const to = fraction(raw['healTo'], d.healTo);
-      const below = fraction(raw['healBelow'], d.healBelow);
-      return to === 0 ? 0 : Math.max(to, below);
-    })(),
+    healTo: ceilingOver(fraction(raw['healTo'], d.healTo), fraction(raw['healBelow'], d.healBelow)),
+    autoChooseHeal: bool(raw['autoChooseHeal'], d.autoChooseHeal),
     healParty: bool(raw['healParty'], d.healParty),
     invokeItems: bool(raw['invokeItems'], d.invokeItems),
     minMana: fraction(raw['minMana'], d.minMana),
@@ -4304,7 +4192,13 @@ export const BLESSING_FALLBACK_MIN_S = 30;
 /** More blessings than this is a list nobody typed. */
 const MAX_BLESSINGS = 16;
 
-export function normalizeParty(value: unknown): PartyConfig {
+/** The whole-number party settings' bounds, one statement for the file and the settings screen. */
+export const PARTY_RANGES = {
+  waitMinutes: [0, 120],
+  parSeconds: [0, 3600]
+} as const satisfies Partial<Record<keyof PartyConfig, readonly [number, number]>>;
+
+function normalizeParty(value: unknown): PartyConfig {
   const raw = isRecord(value) ? value : {};
   const d = DEFAULT_CONFIG.automation.party;
   return {
@@ -4312,15 +4206,12 @@ export function normalizeParty(value: unknown): PartyConfig {
     defendParty: bool(raw['defendParty'], d.defendParty),
     restWithLeader: bool(raw['restWithLeader'], d.restWithLeader),
     askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow),
-    waitForMembersBelow: fraction(raw['waitForMembersBelow'], d.waitForMembersBelow),
-    waitNoLongerMinutes: int(raw['waitNoLongerMinutes'], d.waitNoLongerMinutes, 0, 240),
-    ignoreWaitWhenLeading: bool(raw['ignoreWaitWhenLeading'], d.ignoreWaitWhenLeading),
-    ignorePartyWhenFollowing: bool(raw['ignorePartyWhenFollowing'], d.ignorePartyWhenFollowing),
-    requestPartyHealth: bool(raw['requestPartyHealth'], d.requestPartyHealth),
-    // Never faster than the server acknowledges a command, and 0 is off.
-    parEverySeconds: ((seconds) => (seconds > 0 && seconds < 5 ? 5 : seconds))(
-      int(raw['parEverySeconds'], d.parEverySeconds, 0, 3600)
-    ),
+    waitBelow: fraction(raw['waitBelow'], d.waitBelow),
+    waitMinutes: int(raw['waitMinutes'], d.waitMinutes, ...PARTY_RANGES.waitMinutes),
+    ignoreWait: bool(raw['ignoreWait'], d.ignoreWait),
+    ignoreParty: bool(raw['ignoreParty'], d.ignoreParty),
+    askHealth: bool(raw['askHealth'], d.askHealth),
+    parSeconds: int(raw['parSeconds'], d.parSeconds, ...PARTY_RANGES.parSeconds),
     parAfterRound: bool(raw['parAfterRound'], d.parAfterRound)
   };
 }
@@ -4397,7 +4288,7 @@ function normalizeCombat(value: unknown): CombatConfig {
     // Capped low on purpose: every round is a fraction of a second, so a client
     // asked to look every round would spend most of a fight looking.
     refreshRounds: int(raw['refreshRounds'], d.refreshRounds, 0, 20),
-    monsters: asMonsterRules(raw['monsters']),
+    mobRules: normalizeMobRules(raw['mobRules']),
     minMobs: int(raw['minMobs'], d.minMobs, 0, 99),
     maxMonsterExperience: int(raw['maxMonsterExperience'], d.maxMonsterExperience, 0, 100_000_000),
     // Capped far above any health the shipped realm states, so a typo cannot
@@ -4406,51 +4297,15 @@ function normalizeCombat(value: unknown): CombatConfig {
   };
 }
 
-/**
- * Monster rows, keyed the way the wire spells the name.
- *
- * Keyed here rather than at every comparison, so `Giant Rat`, `giant rat` and
- * `the giant rat` in a config file are one row and match the one thing the
- * stream ever calls it. Bounded at 64, because a list this long is a rule file
- * written in the wrong place.
- *
- * A row naming no monster is dropped rather than defaulted, as a potion rule
- * and a supply row are: it could only ever match nothing. A treatment the
- * table does not know is dropped too — the runtime half of a closed union —
- * rather than falling back to `default`, which would silently turn a typo into
- * a row that reads as deliberate and does nothing. A typo in `never` is the
- * case that argues hardest for dropping it: defaulted, it would read as *leave
- * this alone* and attack it.
- *
- * The **first** row for a monster wins. Read now only by the migration that
- * folds these rows into `monsters` (`theMobRulesBecameMonsterRows`).
- */
-export function normalizeMobRules(value: unknown): MobRule[] {
-  const rows: MobRule[] = [];
-  if (!Array.isArray(value)) return rows;
-  const seen = new Set<string>();
-  for (const entry of value) {
-    if (!isRecord(entry)) continue;
-    const mob = mobKey(String(entry['mob'] ?? ''));
-    if (mob.length === 0 || seen.has(mob)) continue;
-    const treat = str(entry['treat'], DEFAULT_MOB_PRIORITY).trim() as MobTreatment;
-    if (!MOB_TREATMENTS.includes(treat)) continue;
-    seen.add(mob);
-    rows.push({ mob, treat });
-    if (rows.length >= 64) break;
-  }
-  return rows;
-}
-
 function normalizeSafety(value: unknown): SafetyConfig {
   const raw = isRecord(value) ? value : {};
   const hangUp = isRecord(raw['hangUp']) ? raw['hangUp'] : {};
   const retreat = isRecord(raw['retreat']) ? raw['retreat'] : {};
-  const fleeGoto = isRecord(raw['fleeGoto']) ? raw['fleeGoto'] : {};
   const pvp = isRecord(raw['pvp']) ? raw['pvp'] : {};
+  const fleeGoto = isRecord(raw['fleeGoto']) ? raw['fleeGoto'] : {};
   const f = DEFAULT_CONFIG.automation.safety.retreat;
+  const g = DEFAULT_CONFIG.automation.safety.fleeGoto;
   const d = DEFAULT_CONFIG.automation.safety.hangUp;
-  const fg = DEFAULT_CONFIG.automation.safety.fleeGoto;
   const p = DEFAULT_CONFIG.automation.safety.pvp;
   return {
     retreat: {
@@ -4466,9 +4321,9 @@ function normalizeSafety(value: unknown): SafetyConfig {
       safeHavenRoom: str(retreat['safeHavenRoom'], f.safeHavenRoom).trim()
     },
     fleeGoto: {
-      enabled: bool(fleeGoto['enabled'], fg.enabled),
-      belowHealth: fraction(fleeGoto['belowHealth'], fg.belowHealth),
-      destination: str(fleeGoto['destination'], fg.destination).trim()
+      enabled: bool(fleeGoto['enabled'], g.enabled),
+      belowHealth: fraction(fleeGoto['belowHealth'], g.belowHealth),
+      command: str(fleeGoto['command'], g.command).trim()
     },
     hangUp: {
       enabled: bool(hangUp['enabled'], d.enabled),
@@ -4527,76 +4382,63 @@ function normalizeLogging(value: unknown): LoggingConfig {
  * dependency-free by rule, so nothing in it can reach `tuning()`.
  */
 export function resumeAtHealth(health: HealthConfig, marginWhenUncapped: number): number {
-  if (health.restTo > 0) return health.restTo;
-  return Math.min(1, health.restBelow + marginWhenUncapped);
+  return resumeAt(health.restBelow, health.restTo, marginWhenUncapped);
 }
 
-/**
- * The mana fraction a walk or lap held for mana walks on again at — the
- * mana half of `resumeAtHealth`: `meditateTo` where it is set, and otherwise
- * the uncapped margin above `meditateBelow`. 0 where meditating is off.
- *
- * Reported 2026-09-23 on skinny: `med` went out at 46% and the next step of
- * the lap stood the character straight back up, so it walked the rest of the
- * lap between 42% and 44% with `meditateBelow` at 50%. Health had a hold and
- * mana had only the command.
- */
+/** The mana a journey held for mana walks on again at: the same pair, `meditateBelow`/`meditateTo`. */
 export function resumeAtMana(health: HealthConfig, marginWhenUncapped: number): number {
-  if (health.meditateBelow <= 0) return 0;
-  if (health.meditateTo > 0) return Math.max(health.meditateTo, health.meditateBelow);
-  return Math.min(1, health.meditateBelow + marginWhenUncapped);
+  return resumeAt(health.meditateBelow, health.meditateTo, marginWhenUncapped);
 }
 
 /**
- * Whether health is under the figure a walk may travel at — `restBelow` going
- * down, `resumeAtHealth` while already held. Unknown is not low. The walker,
- * the loop and a follower's `@wait` read it, so none of them stops or goes on
- * at a figure the others do not (2026-09-25).
+ * Whether a journey stays held for a vital (todo 825): under `below` to stop,
+ * and once `held`, under `resume` to stay stopped. An unknown figure or
+ * maximum never holds, and lets a held journey go.
  */
-export function healthHolding(
-  health: HealthConfig,
-  hp: number | null,
-  hpMax: number | null,
-  held: boolean,
-  marginWhenUncapped: number
-): boolean {
-  if (health.restBelow <= 0) return false;
-  if (hp === null || hpMax === null || hpMax <= 0) return false;
-  const floor = held ? resumeAtHealth(health, marginWhenUncapped) : health.restBelow;
-  return hp / hpMax < floor;
-}
-
-/**
- * Whether mana is under the figure a walk may travel at — `meditateBelow`
- * going down, `resumeAtMana` while already held. Unknown is not low.
- */
-export function manaHolding(
-  health: HealthConfig,
-  mana: number | null,
-  manaMax: number | null,
-  held: boolean,
-  marginWhenUncapped: number
-): boolean {
-  if (health.meditateBelow <= 0) return false;
-  if (mana === null || manaMax === null || manaMax <= 0) return false;
-  const floor = held ? resumeAtMana(health, marginWhenUncapped) : health.meditateBelow;
-  return mana / manaMax < floor;
-}
-
-/**
- * Whether a fight should be draining — `drainBelow` going down, `drainTo`
- * (or `drainBelow` where it is 0) while already draining. Unknown is not low.
- */
-export function drainHolding(
-  spells: SpellsConfig,
-  hp: number | null,
-  hpMax: number | null,
+export function holdsForVital(
+  value: number | null,
+  max: number | null,
+  below: number,
+  resume: number,
   held: boolean
 ): boolean {
-  if (spells.drainBelow <= 0) return false;
-  if (hp === null || hpMax === null || hpMax <= 0) return false;
-  const floor = held ? Math.max(spells.drainTo, spells.drainBelow) : spells.drainBelow;
-  return hp / hpMax < floor;
+  if (below <= 0 || value === null || max === null || max <= 0) return false;
+  return value / max < (held ? resume : below);
+}
+
+/**
+ * Whether this character's own walk stands still for health or for mana
+ * (todo 831): under the vital's floor to stop, and once `held`, under its line
+ * to stay. The one test a route (`Holds`), a lap (`LoopRunner`) and a
+ * follower's `@wait` (`Remotes`) share.
+ */
+export function stillFor(
+  vital: 'health' | 'mana',
+  vitals: { hp: number | null; hpMax: number | null; mana: number | null; manaMax: number | null },
+  health: HealthConfig,
+  held: boolean,
+  marginWhenUncapped: number
+): boolean {
+  return vital === 'health'
+    ? holdsForVital(
+        vitals.hp,
+        vitals.hpMax,
+        health.restBelow,
+        resumeAtHealth(health, marginWhenUncapped),
+        held
+      )
+    : holdsForVital(
+        vitals.mana,
+        vitals.manaMax,
+        health.meditateBelow,
+        resumeAtMana(health, marginWhenUncapped),
+        held
+      );
+}
+
+function resumeAt(below: number, to: number, marginWhenUncapped: number): number {
+  if (to > 0) return to;
+  return Math.min(1, below + marginWhenUncapped);
 }
 
 /** The connection target implied by the config, for the command strip. */

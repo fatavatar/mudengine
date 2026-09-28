@@ -162,6 +162,7 @@ export function createWebBridge(): IpcApi {
     macro: (session, line) => send(Send.macro, session, line),
     dropMacro: (session) => send(Send.dropMacro, session),
     resize: (session, size) => send(Send.resize, session, size),
+    lostEnter: (session, report) => send(Send.lostEnter, session, report),
     diagnostics: (on) => send(Send.diagnostics, on),
     debugFeed: (on) => send(Send.debugFeed, on),
 
@@ -174,6 +175,7 @@ export function createWebBridge(): IpcApi {
     saveDebug: (session) => invoke(Invoke.saveDebug, session),
     getCharacter: (session) => invoke(Invoke.getCharacter, session),
     routeTo: (session, map, room) => invoke(Invoke.routeTo, session, map, room),
+    routeBetween: (session, from, to) => invoke(Invoke.routeBetween, session, from, to),
     walkRoute: (session, route, run) => invoke(Invoke.walkRoute, session, route, run),
     startMoving: (session, loop, confirmed) => invoke(Invoke.startMoving, session, loop, confirmed),
     collectThenWalk: (session, items, route, run) =>
@@ -260,13 +262,6 @@ export function createWebBridge(): IpcApi {
       }
       return pickRealm();
     },
-    loadMessages: (realm) => invoke(Invoke.loadMessages, realm),
-    importMessages: (realm, fileName, text) => invoke(Invoke.importMessages, realm, fileName, text),
-    saveMessages: (realm, triggers) => invoke(Invoke.saveMessages, realm, triggers),
-    loadMonsters: (realm) => invoke(Invoke.loadMonsters, realm),
-    importMonsters: (realm, fileName, monsters) =>
-      invoke(Invoke.importMonsters, realm, fileName, monsters),
-    saveMonsters: (realm, monsters) => invoke(Invoke.saveMonsters, realm, monsters),
     searchRooms: (session, query) => invoke(Invoke.searchRooms, session, query),
     mobNames: (session) => invoke(Invoke.mobNames, session),
     worldInfo: (session) => invoke(Invoke.worldInfo, session),
@@ -277,6 +272,7 @@ export function createWebBridge(): IpcApi {
     questStop: (session) => invoke(Invoke.questStop, session),
     localMap: (session, map, room, radius) => invoke(Invoke.localMap, session, map, room, radius),
     roomBrief: (session, map, room) => invoke(Invoke.roomBrief, session, map, room),
+    slotGear: (session, slot) => invoke(Invoke.slotGear, session, slot),
     huntingGrounds: (session, measure) => invoke(Invoke.huntingGrounds, session, measure),
     trainers: (session) => invoke(Invoke.trainers, session),
     banks: (session) => invoke(Invoke.banks, session),
@@ -302,6 +298,7 @@ export function createWebBridge(): IpcApi {
     onDebug: (handler) => subscribe(Push.debug, handler),
     onBlock: (handler) => subscribe(Push.block, handler),
     onCharacter: (handler) => subscribe(Push.character, handler),
+    onPlayers: (handler) => subscribe(Push.players, handler),
     onWalk: (handler) => subscribe(Push.walk, handler),
     onLoop: (handler) => subscribe(Push.loop, handler),
     onAutomation: (handler) => subscribe(Push.automation, handler),

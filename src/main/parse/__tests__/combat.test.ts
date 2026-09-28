@@ -4,6 +4,7 @@ import { FightTracker, playerDies } from '../combat';
 import { EMPTY_CHARACTER, type CharacterState, type RoomOccupant } from '../../../shared/character';
 import { NO_LORE } from '../../../shared/lore';
 import type { FightRecord } from '../../../shared/fights';
+import { DEFAULT_INTERNAL } from '../../../shared/internal';
 
 /*
  * The cluster lifted out of `CharacterTracker` on 2026-08-29. The wire-level
@@ -27,6 +28,12 @@ const state = (over: Partial<CharacterState> = {}): CharacterState => ({
   ...structuredClone(EMPTY_CHARACTER),
   name: 'Vaelor',
   ...over
+});
+
+/** The same state with its target taken away, as a `*Combat Off*` would. */
+const NO_TARGET = (s: CharacterState): CharacterState => ({
+  ...s,
+  combat: { ...s.combat, target: null }
 });
 
 /** A fight whose room is whatever the test says, with a sink that keeps records. */
@@ -120,7 +127,7 @@ describe("this character's own swings", () => {
 describe('an engagement', () => {
   it('binds the attack command to the occupant the server would resolve it to', () => {
     const { tracker, s } = fight([mob('small giant rat')]);
-    tracker.noteAttack('giant rat', 'Attack', 900);
+    tracker.noteAttack('giant rat', 'aa giant rat', 900);
     const engaged = tracker.status(s, true, 1_000);
     expect(engaged.inCombat).toBe(true);
     // The base name binds, as the server's name-modifier system does.
@@ -131,27 +138,37 @@ describe('an engagement', () => {
     const { tracker, s } = fight([mob('giant rat')]);
     expect(tracker.status(s, true, 1_000).combat.target).toBeNull();
     const fighting = tracker.missed(s, 1_000, 'giant rat')!;
-    tracker.noteAttack('kobold', 'Attack', 1_900);
+    tracker.noteAttack('kobold', 'aa kobold', 1_900);
     expect(tracker.status(fighting, true, 2_000).combat.target).toBe('giant rat');
+    // And that engagement answered the kobold's attack, so nothing is owed.
+    expect(tracker.status(NO_TARGET(fighting), true, 2_010).combat.target).toBeNull();
   });
 
+  /*
+   * The server answers its commands in order, one `*Combat Engaged*` per
+   * attack that found its mark (`AttackCommand.cs:405`), so each engagement
+   * answers the oldest attack still owed one. Two attacks out before either was
+   * answered, orohost 2026-08-26 (`2026-08-26_23-03-07_main.mudcap.jsonl`,
+   * t=68194..68327): the first pair answered `pu small filthbug`.
+   */
   it('answers attacks in the order they went out, one per engagement', () => {
-    const { tracker, s } = fight([mob('giant rat'), mob('kobold thief')]);
-    tracker.noteAttack('giant rat', 'Attack', 900);
-    tracker.noteAttack('kobold thief', 'Attack', 910);
-    const first = tracker.status(s, true, 1_000);
-    expect(first.combat.target).toBe('giant rat');
-    const off = tracker.status(first, false, 1_010);
-    expect(tracker.status(off, true, 1_020).combat.target).toBe('kobold thief');
+    const { tracker, s } = fight([mob('large giant rat'), mob('small filthbug')]);
+    tracker.noteAttack('small filthbug', 'aa small filthbug', 68_194);
+    tracker.noteAttack('large giant rat', 'aa large giant rat', 68_205);
+    const first = tracker.status(tracker.status(s, false, 68_311), true, 68_311);
+    expect(first.combat.target).toBe('small filthbug');
+    const second = tracker.status(tracker.status(first, false, 68_327), true, 68_327);
+    expect(second.combat.target).toBe('large giant rat');
   });
 
-  it('drops an attack nothing answered, and one the server found nothing for', () => {
+  it('lets an attack nothing answered in time go, rather than bind a later engagement', () => {
     const { tracker, s } = fight([mob('giant rat'), mob('kobold thief')]);
-    tracker.noteAttack('giant rat', 'Attack', 0);
-    tracker.noteAttack('kobold thief', 'Attack', 9_000);
-    tracker.unanswered('kobold thief');
-    expect(tracker.status(s, true, 10_000).combat.target).toBeNull();
-    expect(tracker.hasEngagedWith('Attack')).toBe(false);
+    const bind = DEFAULT_INTERNAL.tuning.parse.engageBindMs;
+    tracker.noteAttack('giant rat', 'aa giant rat', 1_000);
+    expect(tracker.status(s, true, 1_000 + bind + 1).combat.target).toBeNull();
+    // An attack exactly at the edge is still owed.
+    tracker.noteAttack('kobold thief', 'aa kobold thief', 5_000);
+    expect(tracker.status(s, true, 5_000 + bind).combat.target).toBe('kobold thief');
   });
 });
 
@@ -236,7 +253,7 @@ describe('a monster heals while you fight it', () => {
    * measuring the wrong thing.
    */
   const opening = (tracker: FightTracker, s: CharacterState): CharacterState => {
-    tracker.noteAttack('cave bear', 'Attack', 0);
+    tracker.noteAttack('cave bear', 'aa cave bear', 0);
     return tracker.status(s, true, 0);
   };
   const strike = (

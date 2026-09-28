@@ -30,14 +30,23 @@ function drawn(source: string): string[] {
   return [...source.matchAll(/data-fieldset="([^"]+)"/g)].map((hit) => hit[1]!);
 }
 
+/**
+ * A form's own source and the shared `…Fields` sections it imports, since one
+ * of those (`PartyFields`, todo 831) draws its fieldsets for both forms.
+ */
+function composed(file: string): string {
+  const source = read(file);
+  const local = [...source.matchAll(/^import \w+(?:, \{[^}]*\})? from '\.\/(\w+Fields)';$/gm)].map(
+    (hit) => `${hit[1]!}.tsx`
+  );
+  return [source, ...local.map(read)].join('\n');
+}
+
 describe.each([
-  [
-    'SettingsScreen.tsx',
-    ['realm-mob-rules', 'realm-messages', 'realm-monsters', 'realm-hang-penalties', 'realm-coins']
-  ],
+  ['CharacterForm.tsx', [] as string[]],
   ['GlobalSettings.tsx', [] as string[]]
 ])('%s', (file, notNavigable) => {
-  const source = read(file);
+  const source = composed(file);
 
   /* The positive control: a regex that matched nothing would pass everything. */
   it('finds both halves at all', () => {
@@ -52,9 +61,8 @@ describe.each([
 
   /*
    * The other direction, minus the fieldsets that are deliberately not jump
-   * targets: the Realms page has no sections at all (`sections={[]}`), so its
-   * monster-rules, messages, monsters, hang-penalty and coin fieldsets have no
-   * rail to be listed in.
+   * targets. The Realms page has no sections at all (`sections={[]}`), so
+   * `ServerForm.tsx` has no rail to list its fieldsets in and is not here.
    */
   it('offers a jump target for every fieldset it tags', () => {
     const stray = drawn(source).filter(

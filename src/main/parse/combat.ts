@@ -6,14 +6,14 @@
  * the roster — and the first that is not pure, because a fight has a memory
  * the published state deliberately does not carry: the running damage tally
  * per monster (`Ledger`), which is what a health bar, a suspected death and
- * the lore's estimates are all read off, and the one-slot binding between an
- * attack command and the `*Combat Engaged*` that confirms it. Both live here
- * and nowhere else. Everything a case needs from the rest of the character is
+ * the lore's estimates are all read off, and the binding of an attack command
+ * to the `*Combat Engaged*` that confirms it, over the queue in `owed.ts`.
+ * Everything a case needs from the rest of the character is
  * passed in: the state, the time, the names the classifier vouched for.
  *
- * Two things stay with the tracker on purpose. Putting an attacker into the
+ * Two things stay out of this file on purpose. Putting an attacker into the
  * room's occupant list asks the realm's monster table and the roster, which
- * is the tracker's classification path, so it is injected (`withOccupant`).
+ * is the room's classification path (`room.ts`), so it is injected (`withOccupant`).
  * And the queue of `look <mob>` targets is the command path's — shared with
  * the room's expectation machinery — so the tracker binds a wound sentence to
  * its look and hands the name in.
@@ -29,12 +29,14 @@ import {
   type Room,
   type TargetHealth
 } from '../../shared/character';
-import type { CommandName } from '../../shared/commands';
+import type { Block } from '../../shared/blocks';
 import type { FightRecord, FightSink } from '../../shared/fights';
 import type { MobLore } from '../../shared/lore';
 import { mobKey, nameAnswersTo, roomAddress, roomId, type RoomId } from '../../shared/world';
 import { anchorToBand, type WoundBand } from '../../shared/wounds';
 import { tuning } from '../app/tuning';
+import { leavesRoom } from './departs';
+import { OwedAttacks } from './owed';
 
 /**
  * What one monster has taken in the fight currently running.
@@ -157,7 +159,7 @@ function struck(combat: Combat, at: number, blow: { by?: string; at?: string }):
  * Exact wins outright, because the C# clears its accumulated candidates on one.
  *
  * The **look** path does not come through here: its argument is resolved when
- * the command goes out (`CharacterTracker.occupantNamed`, reached through
+ * the command goes out (`occupantNamed`, `shared/aim.ts`, reached through
  * `CommandContext`), because the room a look asked about is the room the player
  * was looking at and the answer arrives some rounds later. An attack's
  * engagement comes back immediately, so resolving it here is the same room.
@@ -180,7 +182,7 @@ export interface FightSources {
   fights: FightSink;
   /**
    * Puts a name into the room's occupant list, classified against the realm
-   * and the roster — the tracker's, because classification asks the realm's
+   * and the roster — the room's (`RoomTracker`), because classification asks the realm's
    * monster table. Returns the room unchanged when the name is already there.
    */
   withOccupant(state: CharacterState, name: string): Room;
@@ -198,39 +200,22 @@ export class FightTracker {
   private ledgers = new Map<string, Ledger>();
 
   /**
-   * The attacks sent and not yet answered, oldest first, each exactly as
-   * typed after the verb.
+   * The attacks sent and not yet answered (`owed.ts`), one consumed per
+   * `*Combat Engaged*`: the server confirming an attack found its mark, and
+   * the earliest the client can know what it is fighting — the damage line the
+   * target used to wait for arrives a swing later, and a round-verb or a rule
+   * reading `{target}` in between was handed nothing.
    *
-   * Consumed one per `*Combat Engaged*`, which is the server confirming an
-   * attack found its mark and is the earliest the client can know what it is
-   * fighting — the damage line the target used to wait for arrives a swing
-   * later, and a round-verb or a rule reading `{target}` in between was
-   * handed nothing.
-   *
-   * **A queue, not a slot.** It was one slot that any other command
-   * overwrote, and on 2026-09-22 (`healbot`, three dark goblins) that lost
-   * the target twice a round: auto-heal's `c gdhe` went out behind an
-   * attack, or several attacks went out before the first was answered, and
-   * the engagements that came back bound nothing. The character then stood in
-   * a running fight with no target and hit back at every goblin that swung.
-   * An engagement is only ever the answer to an attack, so a command between
-   * the two cannot have caused it — and the server answers its commands in
-   * order, so the oldest attack outstanding is the one each engagement
-   * answers.
-   *
-   * What stops a stale entry binding somebody else's engagement is that
-   * nothing stays: an entry older than `tuning.parse.engageBindMs` is
-   * dropped, and a refusal that names the attack takes its entry
-   * (`unanswered`).
+   * **A queue, because the server answers in order** (todo 802): every attack
+   * that finds its mark prints one engagement (`AttackCommand.cs:405`), so each
+   * engagement answers the oldest attack still owed one. Not only an attack
+   * engages: a non-instant attack spell prints one too (`Spell.cs:2090`), so a
+   * cast at a listed monster is owed one (`attackAim`, todo 816); a cast at
+   * nobody enters no queue (todo 763 measured that trade). Against the echo over
+   * every recorded engagement, the one slot this replaced bound 1,237 wrongly;
+   * the queue let go by age alone, 271; retired by the echo as well, 67.
    */
-  private attacking: Array<{ aimed: string; verb: CommandName; at: number }> = [];
-  /**
-   * The attack verbs this realm has answered with `*Combat Engaged*` on this
-   * connection. A verb in here exists, so `You say "<verb> <name>"` is the
-   * server finding no `<name>`, not the realm lacking `<verb>`. See
-   * `CharacterTracker`'s `command-not-understood`.
-   */
-  private readonly engagedWith = new Set<CommandName>();
+  private readonly owed = new OwedAttacks();
 
   /**
    * The monster a death sentence has just taken out of the room, by key.
@@ -280,17 +265,6 @@ export class FightTracker {
    */
   private landed: { key: string; at: number; used: number } | null = null;
 
-  /**
-   * The fight a `*Combat Off*` just ended, for the `*Combat Engaged*` that may
-   * follow it. A cast or a switch of target mid-fight is answered by the pair,
-   * and the monsters hitting this character did not stop for it: emptying
-   * `attackers` there made the room spell's own re-engage drop the crowd that
-   * earned it, and the next decision switched a room of sea giants to one
-   * target (2026-09-28). Carried within `engageBindMs`, for whoever is still
-   * in the room.
-   */
-  private leftOff: { combat: Combat; at: number } | null = null;
-
   constructor(private readonly sources: FightSources) {}
 
   /**
@@ -298,7 +272,7 @@ export class FightTracker {
    * proc window, with one of its `allowance` procs still unclaimed — the round
    * half of reading an unattributed damage line as a weapon proc. The realm
    * half is the caller's, and `allowance` is what it found; see
-   * `CharacterTracker.readsAsProc`.
+   * `readsAsProc` (`proc.ts`).
    */
   /**
    * A line arrived between this character's blow and any proc it might have
@@ -317,33 +291,35 @@ export class FightTracker {
     return at >= landed.at && at - landed.at <= window;
   }
 
-  /**
-   * An attack with a named target went out, and joins the engagements owed.
-   * Anything else leaves them alone: see `attacking`.
-   */
-  noteAttack(aimed: string, verb: CommandName, at: number): void {
-    this.attacking.push({ aimed, verb, at });
-    // Bounded like the attacker list: a room of things cannot grow it.
-    if (this.attacking.length > tuning().parse.maxAttackers) this.attacking.shift();
+  /** An attack went out at `at`, sent as `command`, naming `aimed` or (a bare verb) nothing. */
+  noteAttack(aimed: string | null, command: string, at: number): void {
+    this.owed.sent(command, aimed, at);
+  }
+
+  /** Every block, for the echo and the prompt that settle an owed attack (`OwedAttacks.heard`). */
+  heard(block: Pick<Block, 'type' | 'text'>): void {
+    this.owed.heard(block);
   }
 
   /**
-   * The server said it found nothing to attack — `You say "a <name>"` — so
-   * the engagement that attack was owed is not coming. The newest entry for
-   * that text goes, since the refusal answers the one just sent.
+   * `guard moves to protect ward`, sent only to the attacker: the server makes
+   * the guard this character's target (`AttackCommand.cs:342-347`,
+   * `Player.cs:6136-6141`). Before the engagement — a melee attack, and
+   * GreaterMUD's spells — the attack owed on the ward is now the guard's, or
+   * the guard is owed at the head when nothing names the ward (a cast); after
+   * it — MajorMUD's spells, captures/005 and 136 — the fight is retargeted.
+   * An owed guard the character cannot hit is answered by no engagement
+   * (`Your weapon has no effect against this monster!`), so nothing binds.
    */
-  unanswered(aimed: string): void {
-    const key = mobKey(aimed);
-    for (let i = this.attacking.length - 1; i >= 0; i -= 1) {
-      if (mobKey(this.attacking[i]!.aimed) !== key) continue;
-      this.attacking.splice(i, 1);
-      return;
+  guarded(s: CharacterState, guard: string, ward: string, at: number): CharacterState | null {
+    if (this.owed.redirect(guard, ward)) return null;
+    if (!s.combat.engaged) {
+      this.owed.stepIn(guard, ward, at);
+      return null;
     }
-  }
-
-  /** Whether `*Combat Engaged*` has answered this verb on this connection. */
-  hasEngagedWith(verb: CommandName): boolean {
-    return this.engagedWith.has(verb);
+    const target = resolveAgainstRoom(s, guard);
+    const health = this.healthFor(target, at, roomAddress(s.room));
+    return { ...s, combat: { ...s.combat, target, health } };
   }
 
   /**
@@ -353,9 +329,7 @@ export class FightTracker {
    */
   forget(): void {
     this.ledgers.clear();
-    this.attacking = [];
-    this.leftOff = null;
-    this.engagedWith.clear();
+    this.owed.forget();
     this.landed = null;
     this.fell = null;
   }
@@ -377,7 +351,7 @@ export class FightTracker {
        */
       this.settleFight(s, at);
       /*
-       * `attacking` deliberately survives this. Re-attacking — or
+       * The owed attacks deliberately survive this. Re-attacking — or
        * switching targets — makes the server print `*Combat Off*` and
        * `*Combat Engaged*` as one answer to one command, and consuming
        * an entry on the Off half left the Engaged half nothing to bind.
@@ -388,7 +362,6 @@ export class FightTracker {
        * answer to an attack command, so an entry kept across an unrelated
        * Off can never bind to an engagement that command did not cause.
        */
-      this.leftOff = { combat: s.combat, at };
       return { ...s, inCombat: false, combat: NO_COMBAT };
     }
     /*
@@ -401,59 +374,24 @@ export class FightTracker {
      * listing has placed is kept as typed: the server just confirmed the
      * thing exists, and the damage lines that follow correct any
      * spelling. An existing target is never overwritten — the engagement
-     * of a fight already in progress says nothing new — but it still
-     * answers its attack, and the entry goes.
+     * of a fight already in progress says nothing new, though it still
+     * answers its attack.
      */
-    const stale = at - tuning().parse.engageBindMs;
-    while (this.attacking.length > 0 && this.attacking[0]!.at < stale) this.attacking.shift();
-    const owed = this.attacking.shift();
-    if (owed !== undefined) this.engagedWith.add(owed.verb);
-    const aimed = owed?.aimed ?? null;
-    const combat = this.carriedOver(s, at, aimed === null);
-    if (combat.target !== null || aimed === null) {
-      const health =
-        combat.target === s.combat.target
-          ? combat.health
-          : this.healthFor(combat.target, at, roomAddress(s.room));
-      return { ...s, inCombat: true, combat: { ...combat, engaged: true, health } };
+    const aimed = this.owed.answer(at);
+    if (s.combat.target !== null || aimed === null) {
+      return { ...s, inCombat: true, combat: { ...s.combat, engaged: true } };
     }
     const target = resolveAgainstRoom(s, aimed);
     return {
       ...s,
       inCombat: true,
       combat: {
-        ...combat,
+        ...s.combat,
         engaged: true,
         target,
         health: this.healthFor(target, at, roomAddress(s.room))
       }
     };
-  }
-
-  /**
-   * The fight an engagement takes up: `s.combat`, with what the `*Combat Off*`
-   * just before it dropped put back — see `leftOff`. The attackers still in
-   * the room, and the target too when the engagement names none of its own (a
-   * room spell cast bare); an aimed engagement is a switch of target and binds
-   * its own.
-   */
-  private carriedOver(s: CharacterState, at: number, keepTarget: boolean): Combat {
-    const left = this.leftOff;
-    this.leftOff = null;
-    if (left === null || at - left.at > tuning().parse.engageBindMs) return s.combat;
-    const here = new Set(s.room.occupants.map((who) => mobKey(who.name)));
-    const attackers = [
-      ...s.combat.attackers,
-      ...left.combat.attackers.filter(
-        (name) => here.has(mobKey(name)) && !s.combat.attackers.includes(name)
-      )
-    ];
-    const target =
-      s.combat.target ??
-      (keepTarget && left.combat.target !== null && here.has(mobKey(left.combat.target))
-        ? left.combat.target
-        : null);
-    return { ...s.combat, attackers, target };
   }
 
   /**
@@ -675,7 +613,7 @@ export class FightTracker {
      * death, and a namesake still standing is still fighting.
      */
     if (!died) return s;
-    return this.leaves(s, mobKey(s.combat.target ?? ''), true);
+    return leavesRoom(s, mobKey(s.combat.target ?? ''), true);
   }
 
   /**
@@ -699,56 +637,7 @@ export class FightTracker {
       ledger.killedBy = 'sentence';
     }
     this.fell = key;
-    return this.leaves(s, key, true);
-  }
-
-  /** A dead monster leaves the room, the target and the attacker list. */
-  private leaves(s: CharacterState, killed: string, one: boolean): CharacterState {
-    let dropped = false;
-    const occupants = s.room.occupants.filter((who) => {
-      if (mobKey(who.name) !== killed) return true;
-      if (one && dropped) return true;
-      dropped = true;
-      return false;
-    });
-    const stillHere = occupants.some((who) => mobKey(who.name) === killed);
-    /*
-     * Whether what left is what this character is fighting.
-     *
-     * `diedNamed` exists for the kill this character did *not* land, so the
-     * two are routinely different — and clearing the target on somebody
-     * else's kill loses the only thing that can attribute this character's
-     * own. Live, 2026-09-14: one of four dark monks was taken out of the room
-     * by a sentence, the target went with it, and the experience line that
-     * followed a real kill two lines later had nothing to name — so the
-     * monster the character had actually killed stayed in the room for the
-     * rest of the session and auto-combat went on choosing its corpse.
-     */
-    const wasTarget = mobKey(s.combat.target ?? '') === killed;
-    const keepsTarget = !wasTarget || stillHere;
-    return {
-      ...s,
-      room: { ...s.room, occupants },
-      /*
-       * The bar goes with the target — a reading of a monster that is not
-       * there is the stale-target problem wearing a percentage — and so
-       * does the dead monster's entry in `attackers`. It used to stay,
-       * and in the two lines between this and `*Combat Off*` retaliation
-       * read it as something still swinging and attacked a corpse —
-       * `Your command had no effect.`, once per kill, out of the budget
-       * the next fight needs (captured live, 2026-08-26).
-       */
-      combat: {
-        ...s.combat,
-        // A namesake still standing keeps the target and the bar: the fight
-        // with it is the same fight, and `aa` switches to it by itself.
-        target: keepsTarget ? s.combat.target : null,
-        health: keepsTarget ? s.combat.health : null,
-        attackers: stillHere
-          ? s.combat.attackers
-          : s.combat.attackers.filter((name) => mobKey(name) !== killed)
-      }
-    };
+    return leavesRoom(s, key, true);
   }
 
   /**

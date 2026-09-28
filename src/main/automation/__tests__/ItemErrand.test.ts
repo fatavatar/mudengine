@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { ItemErrand, type ItemPlanner, type ItemSources } from '../ItemErrand';
 import { tuning } from '../../app/tuning';
+import { t } from '../../app/i18n';
+import { notesOf } from '../../app/copyMatch';
 import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
 import type { SafetyDecision } from '../../../shared/automation';
 import type { SupplyItem } from '../../../shared/config';
@@ -251,7 +253,7 @@ describe('collecting what a route needs', () => {
     const auto = errand();
     auto.collect([KEY], OWED, ready());
     auto.onCharacter(carrying());
-    expect(notices.some((line) => line.includes('stays'))).toBe(true);
+    expect(notices).toContain(t('automation.collect.gotAndKept', { item: 'black star key' }));
   });
 
   it('refuses out loud where the realm names no source', () => {
@@ -278,8 +280,9 @@ describe('collecting what a route needs', () => {
       lairs: []
     };
     const refused = errand().collect([KEY], OWED, ready());
-    expect(refused).toContain('saracen raider');
-    expect(refused).toContain('reach');
+    expect(refused).toBe(
+      t('automation.collect.refusalDropperUnreachable', { mobs: 'saracen raider' })
+    );
     expect(loops).toHaveLength(0);
     expect(taking).toEqual([]);
     expect(decisions.at(-1)).toMatchObject({ action: 'collect', acted: false });
@@ -288,8 +291,7 @@ describe('collecting what a route needs', () => {
   it('says a dropper the realm only summons is not somewhere to go', () => {
     sources = { shops: [], asks: [], droppers: [{ mob: 'dao lord', placed: 0 }], lairs: [] };
     const refused = errand().collect([KEY], OWED, ready());
-    expect(refused).toContain('dao lord');
-    expect(refused).toContain('summons');
+    expect(refused).toBe(t('automation.collect.refusalDropperUnplaced', { mobs: 'dao lord' }));
     expect(loops).toHaveLength(0);
   });
 
@@ -304,16 +306,19 @@ describe('collecting what a route needs', () => {
       lairs: []
     };
     const refused = errand().collect([KEY], OWED, ready());
-    expect(refused).toContain('saracen raider');
+    expect(refused).toBe(
+      t('automation.collect.refusalDropperUnreachable', { mobs: 'saracen raider' })
+    );
     expect(refused).not.toContain('ghost of the tomb');
   });
 
   /* Zero and one are facts, not figures: three literal sentences. */
   it('says where the hunt starts without printing 0 or 1 as a count of steps', () => {
-    for (const [steps, word] of [
-      [0, 'here in Graveyard'],
-      [1, 'next door in Graveyard'],
-      [4, '4 steps away']
+    const where = { item: KEY.name, mob: 'zombie', room: 'Graveyard' };
+    for (const [steps, said] of [
+      [0, t('automation.collect.huntingHere', where)],
+      [1, t('automation.collect.huntingNextDoor', where)],
+      [4, t('automation.collect.hunting', { ...where, steps: 4 })]
     ] as const) {
       notices = [];
       sources = {
@@ -321,7 +326,7 @@ describe('collecting what a route needs', () => {
         ...dropped([{ id: '1/816', name: 'Graveyard', mob: 'zombie', steps }])
       };
       errand().collect([KEY], OWED, ready());
-      expect(notices.some((line) => line.includes(word))).toBe(true);
+      expect(notices).toContain(said);
     }
   });
 
@@ -365,7 +370,7 @@ describe('collecting what a route needs', () => {
     // Said as collected all the same, because it was.
     expect(decisions.at(-1)).toMatchObject({ action: 'collect', acted: true });
     // And not reported as a failure, because it has not failed yet.
-    expect(notices.some((line) => line.includes('did not start'))).toBe(false);
+    expect(notesOf(notices, 'automation.collect.refusalRouteRefused')).toEqual([]);
 
     // The room for that move lands: the way is planned again and walked.
     inFlight = false;
@@ -391,6 +396,10 @@ describe('collecting what a route needs', () => {
     auto.onCharacter(carrying());
     expect(walked).toHaveLength(0);
     expect(notices.some((line) => line.includes('there is no way there'))).toBe(true);
+    // As the one refusal, by the matcher the still-waiting case is checked with.
+    expect(notesOf(notices, 'automation.collect.refusalRouteRefused')).toEqual([
+      t('automation.collect.refusalRouteRefused', { why: 'there is no way there' })
+    ]);
   });
 
   /* And what it was taking is given back when the errand is abandoned. */
@@ -531,21 +540,108 @@ describe('collecting what saying something gets', () => {
     expect(walked).toEqual([OWED]);
   });
 
-  it('says nothing came of it when the listing after the phrase lacks the item', () => {
+  /*
+   * A script may `adddelay` before its `giveitem` (`mine ore`: `adddelay 10`
+   * then `giveitem 1162`, Textblocks 2622), so the listing asked straight after
+   * the phrase can come back before the item does (todo 814).
+   */
+  it('asks again while it waits, and a later listing of its own finds the item', () => {
     sources = { shops: [], ...dropped([]), asks: [SHOPKEEPER] };
-    const auto = asking();
-    auto.collect([MOLDY], OWED, ready());
     at = '8/486';
+    let clock = 0;
+    const auto = asking({}, () => clock);
+    auto.collect([MOLDY], OWED, ready());
     auto.onCharacter(ready());
     sentHooks.shift()!();
     auto.onCharacter(ready());
     sentHooks.shift()!();
     auto.noteListing('inventory');
     auto.onCharacter(ready());
+    // The first listing lacked it: still waiting, and not asked again at once.
+    expect(auto.running).toBe(true);
+    expect(decisions).toHaveLength(0);
+    expect(listed).toBe(1);
+    clock += tuning().quests.replyMs - 1;
+    auto.onCharacter(ready());
+    expect(listed).toBe(1);
+    // The positive control: a beat later it is asked again.
+    clock += 2;
+    auto.onCharacter(ready());
+    expect(listed).toBe(2);
+    sentHooks.shift()!();
+    // Somebody else's `i` does not settle it; its own does.
+    auto.noteListing('i');
+    auto.onCharacter(ready());
+    expect(auto.running).toBe(true);
+    auto.noteListing('inventory');
+    auto.onCharacter(carrying('moldy key'));
+    expect(walked).toEqual([OWED]);
+  });
+
+  /*
+   * Paradigm's Commander Markus *hands you the box (which you hide in a safe
+   * place)* (`2026-09-07_21-49-00_festus.log`): a handover can be a quest flag
+   * the pack never lists, so the wait ends, and says so.
+   */
+  it('gives up once the wait is spent, and says a handover may not be an item', () => {
+    sources = { shops: [], ...dropped([]), asks: [SHOPKEEPER] };
+    at = '8/486';
+    let clock = 0;
+    const auto = asking({}, () => clock);
+    auto.collect([MOLDY], OWED, ready());
+    auto.onCharacter(ready());
+    sentHooks.shift()!();
+    const answer = (): void => {
+      auto.onCharacter(ready());
+      while (sentHooks.length > 0) sentHooks.shift()!();
+      auto.noteListing('inventory');
+      auto.onCharacter(ready());
+    };
+    answer();
+    // The first listing lacked it and the window is not spent: still waiting.
+    expect(auto.running).toBe(true);
+    expect(listed).toBe(1);
+    /*
+     * Todo 765: bounded by how late a script's `giveitem` can land
+     * (`walk.handoverDelayMs`), not by the summons' minutes: the next ask
+     * already comes after the longest `adddelay`, and was once fifteen asks.
+     */
+    expect(tuning().quests.replyMs).toBeGreaterThanOrEqual(tuning().walk.handoverDelayMs);
+    clock += tuning().quests.replyMs;
+    answer();
+    expect(listed).toBe(2);
     expect(walked).toHaveLength(0);
     expect(auto.running).toBe(false);
     expect(decisions.at(-1)).toMatchObject({ action: 'collect', acted: false });
-    expect(notices.at(-1)).toContain('no moldy key came of it');
+    expect(notices.at(-1)).toBe(
+      t('automation.collect.refusalHandoverUnlisted', {
+        item: MOLDY.name,
+        say: SHOPKEEPER.say,
+        seconds: Math.round(tuning().quests.replyMs / 1000)
+      })
+    );
+  });
+
+  // A quiet wire sends no state, so the session's clock drives the asking.
+  it('asks again off the clock when nothing arrives', () => {
+    sources = { shops: [], ...dropped([]), asks: [SHOPKEEPER] };
+    at = '8/486';
+    let clock = 0;
+    const auto = asking({}, () => clock);
+    auto.collect([MOLDY], OWED, ready());
+    // Not said yet: the clock does not say it for the walk.
+    auto.tick(ready());
+    expect(said).toEqual([]);
+    auto.onCharacter(ready());
+    sentHooks.shift()!();
+    auto.tick(ready());
+    expect(listed).toBe(1);
+    sentHooks.shift()!();
+    auto.noteListing('inventory');
+    auto.tick(ready());
+    clock += tuning().quests.replyMs;
+    auto.tick(ready());
+    expect(listed).toBe(2);
   });
 
   it('waits on a summons for its loot, and gives up on the clock', () => {
@@ -587,7 +683,9 @@ describe('collecting what saying something gets', () => {
     auto.collect([MOLDY], OWED, ready());
     auto.onCharacter(ready());
     expect(said).toEqual([]);
-    expect(notices.at(-1)).toContain('Musty Store');
+    expect(notices.at(-1)).toBe(
+      t('automation.collect.refusalNotReached', { room: SHOPKEEPER.roomName })
+    );
     expect(auto.running).toBe(false);
   });
 
@@ -624,7 +722,17 @@ describe('collecting what saying something gets', () => {
       ])
     };
     errand().collect([{ id: 815, name: 'amber talisman' }], OWED, ready());
-    expect(notices.at(-1)).toContain('summoned when slaver leader dies');
+    expect(notices.at(-1)).toBe(
+      t('automation.collect.hunting', {
+        item: 'amber talisman',
+        mob: t('automation.collect.summonedBy', {
+          mob: 'dying slaver leader',
+          summoner: 'slaver leader'
+        }),
+        room: 'Slave Pens',
+        steps: 9
+      })
+    );
   });
 
   it('ends, and says so, when the phrase never goes out', () => {
@@ -641,7 +749,7 @@ describe('collecting what saying something gets', () => {
     stillQueued = false;
     auto.onCharacter(ready());
     expect(auto.running).toBe(false);
-    expect(notices.at(-1)).toContain('never went out');
+    expect(notices.at(-1)).toBe(t('automation.collect.refusalUnsent', { say: SHOPKEEPER.say }));
     expect(walked).toHaveLength(0);
   });
 
@@ -656,6 +764,6 @@ describe('collecting what saying something gets', () => {
     clock += tuning().walk.errandAskMs;
     auto.onCharacter(ready());
     expect(auto.running).toBe(false);
-    expect(notices.at(-1)).toContain('never went out');
+    expect(notices.at(-1)).toBe(t('automation.collect.refusalUnsent', { say: SHOPKEEPER.say }));
   });
 });

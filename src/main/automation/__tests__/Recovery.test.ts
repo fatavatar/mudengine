@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandQueue } from '../CommandQueue';
-import { Recovery } from '../Recovery';
+import { Recovery, type RecoverySettings } from '../Recovery';
 import { t } from '../../app/i18n';
 import { DEFAULT_CONFIG, type AutomationConfig, type HealthConfig } from '../../../shared/config';
 import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
+import type { MobRule } from '../../../shared/mobRules';
 import { DEFAULT_INTERNAL } from '../../../shared/internal';
 
 const automation: AutomationConfig = {
@@ -92,8 +93,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** What a reload hands `Recovery`, around the block under test. */
+const settings = (
+  health: HealthConfig,
+  enabled = true,
+  party = DEFAULT_CONFIG.automation.party,
+  mobRules: MobRule[] = []
+): RecoverySettings => ({ health, enabled, party, combat: { mobRules } });
+
 const make = (config: HealthConfig, enabled = true): Recovery =>
-  new Recovery(config, enabled, queue);
+  new Recovery(settings(config, enabled), queue);
 
 /** Runs the queue's pacing forward so whatever was proposed reaches `sent`. */
 const drain = (): void => void vi.advanceTimersByTime(500);
@@ -265,7 +274,7 @@ describe('resting while poisoned', () => {
   });
 
   const onGreaterMud = (config: HealthConfig, said: string[] = []): Recovery =>
-    new Recovery(config, true, queue, undefined, {
+    new Recovery(settings(config), queue, {
       notice: (message) => void said.push(message),
       poisonRefusesRest: () => true
     });
@@ -285,7 +294,7 @@ describe('resting while poisoned', () => {
       recovery.onCharacter(state({ hp: 20 - i, hpMax: 100, ...poisoned() }));
       drain();
     }
-    expect(said.filter((line) => /rest a poisoned/i.test(line))).toHaveLength(1);
+    expect(said.filter((line) => line === t('automation.recovery.restPoisoned'))).toHaveLength(1);
   });
 
   /* The positive control: the same character, once the poison is stated gone. */
@@ -329,7 +338,7 @@ describe('resting while poisoned', () => {
     drain();
     recovery.onCharacter(state({ hp: 20, hpMax: 100, ...poisoned() }));
     drain();
-    expect(said.filter((line) => /rest a poisoned/i.test(line))).toHaveLength(2);
+    expect(said.filter((line) => line === t('automation.recovery.restPoisoned'))).toHaveLength(2);
   });
 
   /*
@@ -343,7 +352,7 @@ describe('resting while poisoned', () => {
     expect(sent).toEqual(['rest']);
     sent.length = 0;
 
-    new Recovery(health({ restBelow: 0.5 }), true, queue, undefined, {
+    new Recovery(settings(health({ restBelow: 0.5 })), queue, {
       poisonRefusesRest: () => false
     }).onCharacter(state({ hp: 20, hpMax: 100, ...poisoned() }));
     drain();
@@ -601,25 +610,6 @@ describe('meditating', () => {
     expect(sent).toEqual([]);
   });
 
-  /*
-   * The mana half of `restTo`: a cast that broke the meditation above
-   * `meditateBelow` must not leave the character standing while the walk
-   * holds on for the margin (skinny, 2026-09-23).
-   */
-  it('meditates again after a break until the figure a held walk resumes at', () => {
-    vi.advanceTimersByTime(10_000);
-    const auto = make(health({ meditateBelow: 0.5 }));
-    auto.onCharacter(state({ mana: 45, manaMax: 100, meditating: true }));
-    auto.onCharacter(state({ mana: 55, manaMax: 100 }));
-    drain();
-    expect(sent).toEqual(['med']);
-    sent.length = 0;
-    vi.advanceTimersByTime(10_000);
-    auto.onCharacter(state({ mana: 61, manaMax: 100 }));
-    drain();
-    expect(sent).toEqual([]);
-  });
-
   /* Health first: the one that decides whether the character is alive. */
   it('rests rather than meditating when both are low', () => {
     make(health({ restBelow: 0.5, meditateBelow: 0.5 })).onCharacter(
@@ -651,43 +641,6 @@ describe('with a threat in the room', () => {
     drain();
     expect(sent).toEqual(['rest']);
   });
-
-  /*
-   * MegaMUD's Not hostile (roadmap step 3): the realm may rate it hostile, but
-   * the player says it will not open unprovoked, which is what the flag is for
-   * — resting in its room before attacking it. A friend is the same.
-   */
-  it('sits down beside a monster the table marks not hostile, or a friend', () => {
-    const threat = {
-      name: 'giant rat',
-      kind: 'mob' as const,
-      disposition: 'hostile' as const,
-      uncertain: false,
-      costly: 'never' as const,
-      charmed: false,
-      hidden: false,
-      free: false
-    };
-    const hurt = state({ hp: 10, hpMax: 100 });
-    const beside = { ...hurt, room: { ...hurt.room, occupants: [threat] } };
-
-    const calm = make(health({ restBelow: 0.5 }));
-    calm.configure(health({ restBelow: 0.5 }), true, undefined, [
-      { mob: 'giant rat', notHostile: true }
-    ]);
-    calm.onCharacter(beside);
-    drain();
-    expect(sent).toEqual(['rest']);
-
-    sent.length = 0;
-    const friendly = make(health({ restBelow: 0.5 }));
-    friendly.configure(health({ restBelow: 0.5 }), true, undefined, [
-      { mob: 'giant rat', relationship: 'friend' }
-    ]);
-    friendly.onCharacter(beside);
-    drain();
-    expect(sent).toEqual(['rest']);
-  });
 });
 
 /* Sitting down because the leader has: out of combat, and `med` only with mana. */
@@ -712,13 +665,16 @@ describe('resting with the leader', () => {
     threatened: {}
   });
   const withLeader = (): Recovery =>
-    new Recovery({ ...DEFAULT_CONFIG.automation.health }, true, queue, {
-      ...DEFAULT_CONFIG.automation.party,
-      assistLeader: false,
-      defendParty: false,
-      restWithLeader: true,
-      askForHealBelow: 0
-    });
+    new Recovery(
+      settings({ ...DEFAULT_CONFIG.automation.health }, true, {
+        ...DEFAULT_CONFIG.automation.party,
+        assistLeader: false,
+        defendParty: false,
+        restWithLeader: true,
+        askForHealBelow: 0
+      }),
+      queue
+    );
 
   it('rests when the leader rests', () => {
     withLeader().onCharacter(state({ hp: 100, hpMax: 100, party: together({ state: 'resting' }) }));
@@ -765,58 +721,9 @@ describe('resting with the leader', () => {
         party: together({ state: 'resting' })
       })
     );
-    new Recovery({ ...DEFAULT_CONFIG.automation.health }, true, queue).onCharacter(
+    new Recovery(settings({ ...DEFAULT_CONFIG.automation.health }), queue).onCharacter(
       state({ hp: 100, hpMax: 100, party: together({ state: 'resting' }) })
     );
-    drain();
-    expect(sent).toEqual([]);
-  });
-
-  /*
-   * skinny, 2026-09-25: under `meditateBelow` in a fight, back over it before
-   * the fight let him sit, `@wait` for mana said — and then `rest` beside a
-   * resting Fatty. The stretch began at the crossing, so it is `med`.
-   */
-  it('meditates beside a resting leader for a mana stretch begun in a fight', () => {
-    const recovery = new Recovery(health({ meditateBelow: 0.5, meditateTo: 0.95 }), true, queue, {
-      ...DEFAULT_CONFIG.automation.party,
-      restWithLeader: true
-    });
-    recovery.observe(state({ hp: 100, hpMax: 100, mana: 40, manaMax: 100 }));
-    recovery.onCharacter(
-      state({ hp: 100, hpMax: 100, mana: 60, manaMax: 100, party: together({ state: 'resting' }) })
-    );
-    drain();
-    expect(sent).toEqual(['med']);
-  });
-});
-
-/*
- * A floor crossed where nothing may sit down — a fight, a walk marching —
- * still begins the stretch the walker and a follower's `@wait` hold to
- * (2026-09-25). Seen by `observe`, on every status line.
- */
-describe('a stretch begun where sitting down was not allowed', () => {
-  it('rests on to restTo after health came back over restBelow', () => {
-    const recovery = make(health({ restBelow: 0.35, restTo: 0.7 }));
-    recovery.observe(state({ hp: 30, hpMax: 100 }));
-    recovery.onCharacter(state({ hp: 60, hpMax: 100 }));
-    drain();
-    expect(sent).toEqual(['rest']);
-  });
-
-  it('meditates on to meditateTo after mana came back over meditateBelow', () => {
-    const recovery = make(health({ restBelow: 0, meditateBelow: 0.5, meditateTo: 0.95 }));
-    recovery.observe(state({ hp: 100, hpMax: 100, mana: 40, manaMax: 100 }));
-    recovery.onCharacter(state({ hp: 100, hpMax: 100, mana: 60, manaMax: 100 }));
-    drain();
-    expect(sent).toEqual(['med']);
-  });
-
-  it('begins nothing above the floors', () => {
-    const recovery = make(health({ restBelow: 0.35, restTo: 0.7, meditateBelow: 0.5 }));
-    recovery.observe(state({ hp: 60, hpMax: 100, mana: 60, manaMax: 100 }));
-    recovery.onCharacter(state({ hp: 60, hpMax: 100, mana: 60, manaMax: 100 }));
     drain();
     expect(sent).toEqual([]);
   });
@@ -834,7 +741,7 @@ describe('a verb the realm refuses', () => {
 
   it('stops proposing med once the realm says it had no effect, and says so once', () => {
     const notices: string[] = [];
-    const recovery = new Recovery(health({ meditateBelow: 0.3 }), true, queue, undefined, {
+    const recovery = new Recovery(settings(health({ meditateBelow: 0.3 })), queue, {
       notice: (message) => notices.push(message)
     });
     recovery.onCharacter(low());
@@ -933,32 +840,102 @@ describe('a figure a walk is waiting for', () => {
 });
 
 /*
- * A row of the realm's message table saying *rest until full* — held on the
- * character (`CharacterState.stated`) until `SessionManager` lets it go.
+ * Todo 818: MegaMUD's *Not Hostile* is for resting in the room before the
+ * fight, and a `friend` will not attack at all. A row saying so is believed
+ * over the realm's `hostile`; the control is the same room with no row.
  */
-describe('resting to full because a message said to', () => {
-  const told = (action: 'rest-hp' | 'rest-mana'): CharacterState['heard'] => [
-    { name: 'poison pool', effects: [], action, since: 0 }
-  ];
+describe('resting beside what a row says does not attack first', () => {
+  const thug = (): CharacterState['room'] => {
+    const room = withMob('thug');
+    room.occupants = room.occupants.map((who) => ({ ...who, disposition: 'hostile' as const }));
+    return room;
+  };
+  const hurt = () => state({ hp: 20, hpMax: 100, room: thug() });
 
-  it('rests above restBelow while the row is held and health is not full', () => {
-    new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
-      state({ hp: 90, hpMax: 100, heard: told('rest-hp') })
-    );
+  it('does not rest beside a monster the realm says attacks on sight', () => {
+    new Recovery(settings(health({ restBelow: 0.5 })), queue).onCharacter(hurt());
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('rests beside it when its row says it does not attack first', () => {
+    const rows: MobRule[] = [{ mob: 'thug', treat: 'default', notHostile: true }];
+    new Recovery(
+      settings(health({ restBelow: 0.5 }), true, DEFAULT_CONFIG.automation.party, rows),
+      queue
+    ).onCharacter(hurt());
+    drain();
     expect(sent).toEqual(['rest']);
   });
 
-  it('meditates for mana where the class has it', () => {
-    new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
-      state({ hp: 100, hpMax: 100, mana: 5, manaMax: 50, heard: told('rest-mana') })
+  it('rests beside a friend, and a reload brings the row in', () => {
+    const recovery = new Recovery(settings(health({ restBelow: 0.5 })), queue);
+    recovery.configure(
+      settings(health({ restBelow: 0.5 }), true, DEFAULT_CONFIG.automation.party, [
+        { mob: 'thug', treat: 'friend' }
+      ])
     );
+    recovery.onCharacter(hurt());
+    drain();
+    expect(sent).toEqual(['rest']);
+  });
+});
+
+/*
+ * Todo 825: `meditateTo` carries a stretch of meditating as `restTo` carries a
+ * rest, and a stretch of either begins when the figure is seen under its
+ * floor, not only when the character is seen sitting.
+ */
+describe('meditating to a line, and resting to one from the floor', () => {
+  const full = { hp: 100, hpMax: 100 };
+
+  it('meditates under the floor, and again after a break, until the line', () => {
+    const recovery = make(health({ restBelow: 0, meditateBelow: 0.3, meditateTo: 0.8 }));
+    recovery.onCharacter(state({ ...full, mana: 20, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual(['med']);
+    recovery.onCharacter(state({ ...full, mana: 40, manaMax: 100, meditating: true }));
+    // A cast breaks it at 50%: above the floor, under the line.
+    recovery.onCharacter(state({ ...full, mana: 50, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual(['med', 'med']);
+    vi.advanceTimersByTime(DEFAULT_INTERNAL.tuning.rest.askedMs);
+    recovery.onCharacter(state({ ...full, mana: 80, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual(['med', 'med']);
+  });
+
+  it('carries on to the line from the floor, never having been seen meditating', () => {
+    const recovery = make(health({ restBelow: 0, meditateBelow: 0.3, meditateTo: 0.8 }));
+    recovery.onCharacter(state({ ...full, mana: 20, manaMax: 100 }));
+    drain();
+    vi.advanceTimersByTime(DEFAULT_INTERNAL.tuning.rest.askedMs);
+    recovery.onCharacter(state({ ...full, mana: 50, manaMax: 100 }));
+    drain();
+    expect(sent).toEqual(['med', 'med']);
+  });
+
+  it('never meditates on a mana figure with no maximum', () => {
+    const settings = health({ restBelow: 0, meditateBelow: 0.3, meditateTo: 0.8 });
+    make(settings).onCharacter(state({ ...full, mana: 20, manaMax: null }));
+    drain();
+    expect(sent).toEqual([]);
+    // The positive control: the same figure with its maximum is meditated on.
+    make(settings).onCharacter(state({ ...full, mana: 20, manaMax: 100 }));
+    drain();
     expect(sent).toEqual(['med']);
   });
 
-  it('does nothing without the row', () => {
-    new Recovery(health({ restBelow: 0.3, restTo: 0 }), true, queue).onCharacter(
-      state({ hp: 90, hpMax: 100 })
+  it('rests to the line after a fight took health under the floor, with no rest seen', () => {
+    const recovery = make(health({ restBelow: 0.5, restTo: 0.9 }));
+    recovery.onCharacter(
+      state({ hp: 30, hpMax: 100, inCombat: true, combat: fighting({ target: 'cave worm' }) })
     );
+    drain();
     expect(sent).toEqual([]);
+    // Healed in the fight to 60%: above the floor, under the line.
+    recovery.onCharacter(state({ hp: 60, hpMax: 100 }));
+    drain();
+    expect(sent).toEqual(['rest']);
   });
 });

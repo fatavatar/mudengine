@@ -10,12 +10,19 @@ import { swing, type ProwessSheet, type ProwessWeapon, type Reckoning } from './
 import type { RealmFamily } from './realm';
 // Type only: `survival.ts` imports this module's values, and a value the other
 // way would be the cycle `module-cycle.test.ts` exists to refuse.
-import type { Survival } from './survival';
+import type { Odds, Survival } from './survival';
 import { DODGE_ABILITY } from './abilities';
 import { statedNow } from './stated';
 import type { CharacterState, RoomOccupant } from './character';
 import type { MobEntity } from './entities';
-import { DEFAULT_MOB_PRIORITY, MOB_PRIORITIES, type MobPriorityBand, type MobRule } from './config';
+import {
+  DEFAULT_MOB_PRIORITY,
+  isBanded,
+  MOB_PRIORITIES,
+  type MobPriorityBand,
+  type MobRule,
+  type RowPeace
+} from './mobRules';
 import { mobKey } from './world';
 
 /**
@@ -221,8 +228,15 @@ export interface RoomVerdict {
    * the occupant line's word for it. A stranger the realm cannot place is
    * here with a null verdict rather than left out: an appraisal that quietly
    * dropped the one thing it could not weigh would read as complete.
+   *
+   * `peace` is the character's own row saying it does not attack first
+   * (`peaceOf`, todo 818), carried beside the realm's disposition so both
+   * cards show both rather than one quietly replacing the other.
+   *
+   * `alone` is its fight on its own, run for the character rested, out of the
+   * odds book (`OddsBook`, todo 03).
    */
-  monsters: Array<{ name: string; verdict: Verdict }>;
+  monsters: Array<{ name: string; verdict: Verdict; peace?: RowPeace; alone?: Odds }>;
   /**
    * Health clearing the room is expected to cost — the sum of every monster's
    * `cost`, and **null the moment one of them is unknown**, because a total
@@ -240,6 +254,12 @@ export interface RoomVerdict {
 }
 
 export const EMPTY_ROOM_VERDICT: RoomVerdict = { monsters: [], cost: null, survival: null };
+
+/** What the character's row claims about a monster in the appraised room, or null. */
+export function rowPeaceIn(appraisal: RoomVerdict, name: string): RowPeace | null {
+  const key = mobKey(name);
+  return appraisal.monsters.find((entry) => mobKey(entry.name) === key)?.peace ?? null;
+}
 
 /** Every occupant the room lists that is not a person — the ones a verdict is about. */
 export function appraiseRoom(
@@ -399,17 +419,23 @@ export function roomVerdictKey(appraisal: RoomVerdict): string {
     reckoning === null ? '-' : `${Math.round(reckoning.value)}${reckoning.from[0]}`;
   return [
     ...appraisal.monsters.map(
-      ({ name, verdict }) =>
+      ({ name, verdict, peace, alone }) =>
         `${name}:${verdict.menace === null ? '-' : Math.round(verdict.menace.perRound)}:${rounds(
           verdict.rounds
-        )}:${health(verdict.cost)}`
+        )}:${health(verdict.cost)}:${peace ?? '-'}:${
+          alone === undefined || alone.kind !== 'run'
+            ? (alone?.kind ?? '-')
+            : Math.round(alone.survival.survives * 100)
+        }`
     ),
     health(appraisal.cost),
     appraisal.survival === null
       ? '-'
       : `${Math.round(appraisal.survival.survives * 100)}:${appraisal.survival.level}:${Math.round(
           appraisal.survival.rounds.value
-        )}:${appraisal.survival.hpLeft ?? '-'}`
+        )}:${appraisal.survival.hpLeft ?? '-'}:${appraisal.survival.worstRound}:${appraisal.survival.horizons
+          .map((at) => `${Math.round(at.standing * 100)}/${Math.round(at.lost.mean)}`)
+          .join(',')}`
   ].join('|');
 }
 
@@ -475,7 +501,7 @@ export function rankByVerdict(verdicts: ReadonlyArray<Verdict>): number[] {
  * decides. That is the order the client used before any weighing existed, and
  * it is the one somebody reading their own list can predict — which is the
  * whole point of writing the list. `rankByVerdict` is not consulted here at
- * all; see `CombatConfig.monsters`, whose priorities `AutoCombat.bandsFor` hands in as these rows.
+ * all; see `CombatConfig.mobRules`.
  *
  * `names` and `verdicts` are parallel to the candidates the caller is choosing
  * between, and the returned indices point back into them. `verdicts` is taken
@@ -486,9 +512,9 @@ export function rankByVerdict(verdicts: ReadonlyArray<Verdict>): number[] {
  * has. Deciding that here keeps the caller from asking the same question
  * twice.
  *
- * A `never` row is not a rank and is skipped outright: such a monster was
- * declined long before this, so a row for it says nothing about the order of
- * what is left — and counting it as *listed* would take the whole room off
+ * A stance row (`never`, `friend`, `escape`, `hangup`) is not a rank and is
+ * skipped outright: such a monster was declined long before this, so a row
+ * for it says nothing about the order of what is left — and counting it as *listed* would take the whole room off
  * the realm's arithmetic on the strength of a monster nobody is fighting.
  */
 export function rankByPriority(
@@ -504,8 +530,7 @@ export function rankByPriority(
    */
   const bands = new Map<string, MobPriorityBand>();
   for (const row of rows) {
-    if (row.treat === 'never') continue;
-    bands.set(mobKey(row.mob), row.treat);
+    if (isBanded(row)) bands.set(mobKey(row.mob), row.treat);
   }
   const middle = MOB_PRIORITIES.indexOf(DEFAULT_MOB_PRIORITY);
   let listed = false;

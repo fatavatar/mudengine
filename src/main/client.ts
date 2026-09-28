@@ -22,32 +22,27 @@ import { InternalStore } from './config/InternalStore';
 import { setTuning, tuning } from './app/tuning';
 import { ProfileStore, type ProfileSnapshot } from './config/ProfileStore';
 import { ServerStore } from './config/ServerStore';
-import {
-  MESSAGE_TABLE,
-  MONSTER_TABLE,
-  RealmTableStore,
-  type RealmTable,
-  type TableKind
-} from './config/RealmTableStore';
 import { LoopStore } from './config/LoopStore';
 import { SettingsEditor, type SettingsEditorOptions } from './config/SettingsEditor';
 import { LoopCatalogue } from './config/LoopCatalogue';
 import { migrateHome } from './config/Migration';
 import { homeAt, homeRoot, type Home } from './app/home';
 import { WorldGraph, type Traveller } from './world/WorldGraph';
+import { wearerOf } from './world/wearer';
 import { RealmLibrary } from './world/RealmLibrary';
 import { REALM_EXTENSIONS } from './world/RealmSource';
 import { WorldMemory } from './world/WorldMemory';
 import { FindBook } from './world/FindBook';
 import { WorldBook } from './world/WorldBook';
 import { SplitMemory } from './world/SplitMemory';
-import { NO_REALM_TABLES, type RealmMemory, type RealmTables } from './session/SessionManager';
+import type { RealmMemory } from '../shared/memory';
 import { RealmLore, realmKey } from './world/RealmLore';
 import { PlayerBook, realmAddress } from './world/PlayerBook';
 import { cureGates, spellServes, spellTargeting } from '../shared/spellcraft';
 import { DestinationBook, type RealmDestinations } from './world/DestinationBook';
-import { bareName } from '../shared/items';
+import { bareName, wornOfWord } from '../shared/items';
 import { nameAnswersTo } from '../shared/world';
+import { rowPeaceFor, type RowPeace } from '../shared/mobRules';
 import {
   dropAllPlan,
   equip,
@@ -59,11 +54,12 @@ import {
   unequip,
   type GearAction,
   type GearPlan,
-  type Wearer
+  type Wearer,
+  UNKNOWN_WEARER
 } from '../shared/gear';
 import { Belongings, peekSpellbook } from './session/Belongings';
 import type { BelongingsSink } from '../shared/belongings';
-import { NO_LORE, type MobLore } from '../shared/lore';
+import { NO_LORE, type RealmLoreView } from '../shared/lore';
 import {
   SpellMessageBook,
   spellLoreOf,
@@ -71,20 +67,23 @@ import {
   type SpellLore,
   type SpellMessageRow
 } from '../shared/spell-messages';
-import { loadSpellMessageRows } from './world/SpellMessages';
+import { DESC_MESSAGE_ABILITY } from '../shared/abilities';
+import { loadSpellMessages } from './world/SpellMessages';
 import { loadShippedSentences } from './world/ShippedSentences';
 import type { ShippedSentences } from '../shared/sentences';
-import { NO_REALM_PLAYERS, type RealmPlayers } from '../shared/players';
+import { NO_PLAYERS, NO_REALM_PLAYERS, type RealmPlayers } from '../shared/players';
 import { NO_FIGHTS, type FightSink } from '../shared/fights';
 import { FightLog } from './session/FightLog';
 import { NO_TALK, TalkLog, type TalkSink } from './session/TalkLog';
 import type { MobLoreEntry } from '../shared/lore';
 import type { MovementStart, WalkStart } from '../shared/movement';
 import type { FightSummary } from '../shared/fights';
-import { localMap } from './world/localMap';
+import { localMap, type LairLevel } from './world/localMap';
 import { roomBrief } from './world/roomBrief';
+import { slotGear } from './world/slotGear';
 import type { HuntingAdvice } from '../shared/hunting';
-import { SessionHost } from './session/SessionHost';
+import { playPlaced } from './session/Play';
+import { SessionHost, type SessionSlot } from './session/SessionHost';
 import { WindowRegistry } from './windows/WindowRegistry';
 import { Workspace } from './windows/Workspace';
 import { quitGuard, type QuitAnswer } from './app/quit';
@@ -112,27 +111,15 @@ import {
 } from '../shared/config';
 import { DEFAULT_INTERNAL } from '../shared/internal';
 import { isRemoteName, REMOTE_NAMES, type RemoteGrant, type RemoteName } from '../shared/remotes';
-import type { Profile } from '../shared/profiles';
-import {
-  asMessageTriggers,
-  parseMegaMudMessages,
-  type MessageImport,
-  type MessageTable
-} from '../shared/messageTriggers';
-import {
-  asMonsterRules,
-  saysAnything,
-  type MonsterImport,
-  type MonsterTable
-} from '../shared/monsterRules';
+import { UNSTATED_REALM_WORDS, type Profile } from '../shared/profiles';
 import type { SessionSummary } from '../shared/ipc';
 import { EMPTY_CHARACTER } from '../shared/character';
 import { IDLE_WALK } from '../shared/walk';
 import { isLoopScope, mergeLoops, NO_LOOP } from '../shared/loops';
 import { EMPTY_AUTOMATION } from '../shared/automation';
 import { IDLE_QUEST_RUN } from '../shared/quests';
-import { EMPTY_ROOM_VERDICT } from '../shared/verdict';
-import { EMPTY_MAP } from '../shared/map';
+import { EMPTY_ROOM_VERDICT, prowessSheetOf } from '../shared/verdict';
+import { EMPTY_MAP, type LocalMap } from '../shared/map';
 import {
   asRoomIds,
   asRoomReference,
@@ -141,9 +128,12 @@ import {
   EMPTY_LOOP_DRAFT,
   roomId,
   type MobPlaces,
+  type RoomId,
+  type Route,
   type ShopPlace
 } from '../shared/world';
 import { LoopDraftCache } from './world/loopDraft';
+import { pagesOf, type RoutePages } from '../shared/routeLegs';
 import { errorMessage } from '../shared/values';
 import { formatDebugReport } from '../shared/debug';
 import { fileSlug } from '../shared/files';
@@ -158,6 +148,7 @@ import { fileSlug } from '../shared/files';
 import { version as APP_VERSION } from '../../package.json';
 import {
   asConnectionTarget,
+  asLostEnter,
   TERMINAL_ACTIONS,
   type ConnectionTarget,
   type TerminalActionName,
@@ -221,9 +212,6 @@ let profiles: ProfileStore | null = null;
 let servers: ServerStore | null = null;
 /** The loops on disk, at all three scopes. See `LoopStore`. */
 let loops: LoopStore | null = null;
-/** Each realm's imported tables: `servers/<id>/messages.yaml` and `monsters.yaml`. See `RealmTableStore`. */
-let realmMessages: RealmTableStore<MessageTable> | null = null;
-let realmMonsters: RealmTableStore<MonsterTable> | null = null;
 /**
  * Every realm the client has been asked for.
  *
@@ -244,8 +232,10 @@ let worldBook: WorldBook | null = null;
 let lore: RealmLore | null = null;
 /** The shipped spell message table, read once on first use. See `spellLoreFor`. */
 let spellMessages: SpellMessageRow[] | null = null;
-/** That table as each realm names its spells, built once per realm. See `spellLoreFor`. */
-const spellBooks = new Map<string, SpellMessageBook>();
+/** That table under each realm's own spell names too (todo 824), built once per realm. */
+const realmSpellMessages = new WeakMap<WorldGraph, SpellMessageBook>();
+/** The same table for a session with no realm. */
+let plainSpellMessages: SpellMessageBook | null = null;
 /** The shipped emote and death-sentence tables, read once on first use. See `sentences`. */
 let shippedSentences: ShippedSentences | null = null;
 /**
@@ -366,14 +356,14 @@ function worldFor(id: SessionId): WorldGraph | undefined {
 }
 
 /**
- * What is known about the monsters this character will meet.
+ * What is known about the monsters this character will meet, and its attack spells.
  *
  * Keyed on the realm rather than on the character: how much health a giant rat
  * has is a fact about the world, so four characters on one realm share what any
  * of them learns and none of them inherits another realm's monsters. See
  * `RealmLore`.
  */
-function loreFor(id: SessionId): MobLore {
+function loreFor(id: SessionId): RealmLoreView {
   const world = worldFor(id);
   // Before the store exists there is nothing to learn from and nowhere to
   // learn to, which is the honest answer rather than a reason to throw.
@@ -391,24 +381,29 @@ function loreFor(id: SessionId): MobLore {
  * and what is learned then goes nowhere, which is the honest answer.
  */
 function spellLoreFor(id: SessionId): SpellLore {
-  spellMessages ??= loadSpellMessageRows(
+  const world = worldFor(id);
+  const shipped = shippedSpellMessages(world);
+  return (
+    lore?.spellsFor(world?.info.source ?? 'none', shipped) ??
+    spellLoreOf(shipped, new SpellMessageBook())
+  );
+}
+
+/** The shipped table, with the realm's renamed spells joined by message record. */
+function shippedSpellMessages(world: WorldGraph | undefined): SpellMessageBook {
+  const rows = (spellMessages ??= loadSpellMessages(
     path.join(resourcesDir(), 'world', 'spell-messages.csv'),
     (message) => announce('world', message)
-  );
-  const world = worldFor(id);
-  const realm = world?.info.source ?? 'none';
-  /*
-   * Under the realm's own spell names as well as the file's, joined by the
-   * message record each row carries (`withRealmSpellNames`): a derivative
-   * realm renames spells and keeps their sentences.
-   */
-  let shipped = spellBooks.get(realm);
-  if (shipped === undefined) {
-    const rows = world ? withRealmSpellNames(spellMessages, world.allSpells()) : spellMessages;
-    shipped = SpellMessageBook.fromRows(rows);
-    spellBooks.set(realm, shipped);
+  ));
+  if (world === undefined) return (plainSpellMessages ??= SpellMessageBook.fromRows(rows));
+  let book = realmSpellMessages.get(world);
+  if (book === undefined) {
+    book = SpellMessageBook.fromRows(
+      withRealmSpellNames(rows, world.spellsByMessage(DESC_MESSAGE_ABILITY))
+    );
+    realmSpellMessages.set(world, book);
   }
-  return lore?.spellsFor(realm, shipped) ?? spellLoreOf(shipped, new SpellMessageBook());
+  return book;
 }
 
 /**
@@ -685,15 +680,7 @@ function wearableIn(session: SessionId, name: string): boolean {
  */
 function wearerIn(session: SessionId): Wearer {
   const state = host?.get(session)?.manager.character;
-  const world = worldFor(session);
-  return {
-    classId: world && state?.className ? world.classId(state.className) : null,
-    raceId: world && state?.race ? world.raceId(state.race) : null,
-    level: state?.progress.level ?? null,
-    strength: state?.progress.strength ?? null,
-    classNames: world?.namedClasses() ?? {},
-    raceNames: world?.namedRaces() ?? {}
-  };
+  return state ? wearerOf(state, worldFor(session) ?? null) : UNKNOWN_WEARER;
 }
 
 /** Where session logs go: the configured directory, or the per-user data dir. */
@@ -1198,56 +1185,6 @@ function createServers(): ServerStore {
   return store;
 }
 
-function createRealmTable<T extends RealmTable>(
-  kind: TableKind<T>,
-  channel: 'messages' | 'monsters'
-): RealmTableStore<T> {
-  const store = new RealmTableStore(home, kind, (message) => announce(channel, message));
-  // A table imported, edited on the settings page or by hand reaches the
-  // characters already playing that realm, the way a changed option does.
-  store.on('change', () => host?.reconfigure());
-  store.watch();
-  return store;
-}
-
-/**
- * The imported tables of the realm a character plays.
- *
- * By the character's own realm, named in its file, and never by where the
- * socket happens to point: a realm dialled ad hoc has no directory and so no
- * tables, which is the same answer its loops get.
- */
-function realmTablesFor(id: SessionId): RealmTables {
-  const profile = profileFor(id);
-  const serverId = profile === undefined ? undefined : servers?.idFor(profile.serverName);
-  if (serverId === undefined) return NO_REALM_TABLES;
-  return {
-    messages: realmMessages?.forServer(serverId).triggers ?? [],
-    monsters: realmMonsters?.forServer(serverId).monsters ?? []
-  };
-}
-
-/**
- * A realm's table, addressed by the realm's *name* — what the settings page
- * holds — and resolved here to its directory, the one place the two are
- * joined (`ServerStore.idFor`). Null for a realm with no directory.
- */
-function tableAt<T extends RealmTable>(
-  store: RealmTableStore<T> | null,
-  realm: unknown
-): { store: RealmTableStore<T>; serverId: string } | null {
-  const serverId = typeof realm === 'string' ? servers?.idFor(realm) : undefined;
-  return serverId === undefined || store === null ? null : { store, serverId };
-}
-
-/** Where an import says it came from: the file picked, or the name MegaMUD gives it. */
-function importedFrom(fileName: unknown, fallback: string): RealmTable['source'] {
-  return {
-    file: typeof fileName === 'string' && fileName.length > 0 ? fileName : fallback,
-    importedAt: new Date().toISOString()
-  };
-}
-
 function createLoops(): LoopStore {
   const store = new LoopStore(home, (message) => announce('loops', message));
   store.on('change', () => {
@@ -1372,7 +1309,9 @@ function createHost(): SessionHost {
     // profiles are watched, so a captured snapshot would pin every session to
     // the values it started with.
     configFor,
-    realmTablesFor,
+    // The realm's word for where am I, read through for `configFor`'s reason;
+    // a session whose file went keeps the unstated answer, as its config does.
+    wordsFor: (id) => profileFor(id) ?? UNSTATED_REALM_WORDS,
     /*
      * Whether a lost connection is dialled back, per character, read through
      * for the reason `configFor` is: profiles are watched, so switching it off
@@ -1503,6 +1442,11 @@ function registerIpc(): void {
 
   on(Send.resize, (_caller, session: SessionId, size: TerminalSize) => {
     host?.get(session)?.manager.resize(size);
+  });
+
+  on(Send.lostEnter, (_caller, session: SessionId, report: unknown) => {
+    const lost = asLostEnter(report);
+    if (lost !== null) host?.get(session)?.capture?.lostEnter(lost);
   });
 
   // Whether this window is showing the per-line diagnostics feed. Per window,
@@ -1640,6 +1584,13 @@ function registerIpc(): void {
    * the builder cannot happen. A character nobody has read the sheet of is
    * priced as one that can force nothing, which is `edgePenalty`'s own rule.
    */
+  /** A lair's level for the session's character, off its odds book (todo 03). */
+  const lairLevelOf =
+    (session: SessionId): LairLevel =>
+    (room) => {
+      const odds = host?.get(session)?.manager?.odds.lair(room);
+      return odds?.kind === 'run' ? odds.survival.level : null;
+    };
   const travellerOf = (session: SessionId, walking: 'route' | 'lap'): Traveller => {
     const manager = host?.get(session)?.manager;
     // The session's own statement of what its character costs to move — the
@@ -1658,28 +1609,34 @@ function registerIpc(): void {
   };
 
   /*
+   * The session, placed first where its realm can say (todo 812, `Locating`),
+   * then looked up afresh: the wait may outlive the tab. A room still unplaced
+   * is refused by the plan in its own words, as it was before.
+   */
+  const placedFirst = async (session: SessionId): Promise<SessionSlot | undefined> => {
+    await host?.get(session)?.manager.locating.placed();
+    return host?.get(session);
+  };
+
+  /*
    * One remembered set of drafts per session, so a pick costs its own leg
    * rather than a plan of the whole way from scratch on main's thread.
    */
   const drafts = new Map<SessionId, LoopDraftCache>();
 
+  /** A route refused before any search, in the reader's words. */
+  const unrouted = (reason: string): Route => ({ steps: [], cost: 0, blocked: true, reason });
+
   handle(Invoke.routeTo, async (_caller, session: SessionId, map: number, room: number) => {
-    const manager = host?.get(session)?.manager;
     // This character's realm, not the client's: routing against the wrong one
     // sends somebody to a room that does not exist.
     const world = worldFor(session);
-    if (!world || world.size === 0) {
-      return { steps: [], cost: 0, blocked: true, reason: t('app.route.noRealmData') };
-    }
-    // Ambiguous rather than merely unresolved: asked for, then read again --
-    // see `ensureLocated`. A room already known returns at once, and a realm
-    // with nothing to ask (`locate: none`, or one that has already refused
-    // the configured word) does too, so the ordinary case pays nothing here.
-    if (manager && manager.character.room.map === null) await manager.ensureLocated();
+    if (!world || world.size === 0) return unrouted(t('app.route.noRealmData'));
+    const manager = (await placedFirst(session))?.manager;
     const here = manager?.character.room;
     if (!here || here.map === null || here.number === null) {
       // Routing from an unknown position would be a guess dressed as a plan.
-      return { steps: [], cost: 0, blocked: true, reason: t('app.route.unknownRoom') };
+      return unrouted(t('app.route.unknownRoom'));
     }
     // With the alternatives a reader chooses between: this is the one route
     // planned to be read rather than walked.
@@ -1690,6 +1647,35 @@ function registerIpc(): void {
       { alternatives: true }
     );
   });
+
+  /*
+   * The Map card's preview between two rooms the reader named. Needs no
+   * session in the realm, so it answers while disconnected; priced as the
+   * route panel prices, without the alternatives, since nothing walks it.
+   */
+  handle(
+    Invoke.routeBetween,
+    (_caller, session: SessionId, from: unknown, to: unknown): RoutePages => {
+      const world = worldFor(session);
+      if (!world || world.size === 0) {
+        return { route: unrouted(t('app.route.noRealmData')), legs: [] };
+      }
+      const [start, goal] = asRoomIds([from, to], 2) ?? [];
+      if (start === undefined || goal === undefined) {
+        return { route: unrouted(t('app.route.invalidPayload')), legs: [] };
+      }
+      const route = world.route(start, goal, travellerOf(session, 'route'));
+      /* Paged by the widest map the card can fetch, so every page draws whole. */
+      const radius = tuning().view.mapRadiusMax;
+      const draw = (centre: RoomId): LocalMap =>
+        localMap(world, centre, radius, lairLevelOf(session));
+      const packing = {
+        stretches: tuning().world.routePageStretches,
+        steps: tuning().world.routePageSteps
+      };
+      return { route, legs: pagesOf(route, start, draw, packing) };
+    }
+  );
 
   /*
    * A loop being built by hand, planned. Parsed rather than trusted: every
@@ -1794,8 +1780,6 @@ function registerIpc(): void {
       loop: unknown,
       confirmed: unknown
     ): Promise<MovementStart> => {
-      const slot = host?.get(session);
-      if (!slot) return { refused: t('app.session.notConnected') };
       if (loop !== null && typeof loop !== 'string') return { refused: t('app.loop.invalidName') };
       /*
        * `confirmed` is the **figure** the window was shown and the player
@@ -1804,11 +1788,9 @@ function registerIpc(): void {
        * agreed to*, which is the safe reading of a malformed payload.
        */
       const agreed = typeof confirmed === 'number' && Number.isFinite(confirmed) ? confirmed : null;
-      // See `Invoke.routeTo` — the same wait, so a route resumed or a loop
-      // started from an ambiguous room gets one chance at the real answer
-      // before `planFromHere` refuses it.
-      if (slot.manager.character.room.map === null) await slot.manager.ensureLocated();
-      return slot.manager.startMoving(loop, agreed);
+      // Refused first where no room would change the answer, then placed (`Play`, todo 762).
+      const answer = await playPlaced(() => host?.get(session)?.manager, loop, agreed);
+      return answer ?? { refused: t('app.session.notConnected') };
     }
   );
   handle(Invoke.stopMoving, (_caller, session: SessionId) => {
@@ -1835,13 +1817,13 @@ function registerIpc(): void {
     (_caller, session: SessionId) => host?.get(session)?.manager.loopList ?? []
   );
   handle(Invoke.startLoop, async (_caller, session: SessionId, name: unknown) => {
-    const slot = host?.get(session);
-    if (!slot) return t('app.session.notConnected');
     if (typeof name !== 'string') return t('app.loop.invalidName');
-    const loop = slot.manager.loopNamed(name);
+    // Found before the wait: a name that is no loop is not worth an `rm`.
+    if (!host?.get(session)) return t('app.session.notConnected');
+    const loop = host.get(session)?.manager.loopNamed(name);
     if (!loop) return t('app.loop.notFound', { name });
-    // See `Invoke.routeTo` — the same wait, before the first leg is planned.
-    if (slot.manager.character.room.map === null) await slot.manager.ensureLocated();
+    const slot = await placedFirst(session);
+    if (!slot) return t('app.session.notConnected');
     // Through the manager: one movement at a time, so a lap starting takes the
     // character off whatever route it was walking, out loud.
     const answer = slot.manager.startLoop(loop);
@@ -1863,12 +1845,10 @@ function registerIpc(): void {
    * trusted: it crossed the wire.
    */
   handle(Invoke.runLoop, async (_caller, session: SessionId, loop: unknown) => {
-    const slot = host?.get(session);
-    if (!slot) return t('app.session.notConnected');
     const parsed = asLoop(loop);
     if (parsed === null) return t('app.loop.invalidLoop');
-    // See `Invoke.routeTo` — the same wait, before the first leg is planned.
-    if (slot.manager.character.room.map === null) await slot.manager.ensureLocated();
+    const slot = await placedFirst(session);
+    if (!slot) return t('app.session.notConnected');
     const answer = slot.manager.startLoop(parsed);
     return 'refused' in answer ? answer.refused : null;
   });
@@ -2049,11 +2029,12 @@ function registerIpc(): void {
       lines: manager?.lines ?? [],
       state: manager?.state ?? IDLE_STATE,
       character: manager?.character ?? EMPTY_CHARACTER,
+      players: manager?.players ?? NO_PLAYERS,
       walk: manager?.walker.progress ?? IDLE_WALK,
       loop: manager?.loops.progress ?? NO_LOOP,
       automation: manager?.automation ?? EMPTY_AUTOMATION,
-      verdict: manager?.verdict ?? EMPTY_ROOM_VERDICT,
-      asks: [...(manager?.asks ?? [])],
+      verdict: manager?.appraisal.verdict ?? EMPTY_ROOM_VERDICT,
+      asks: [...(manager?.appraisal.asks ?? [])],
       telnet: manager?.log ?? [],
       learned: manager?.learned ?? [],
       finds: manager?.foundHere ?? [],
@@ -2250,7 +2231,7 @@ function registerIpc(): void {
         typeof radius === 'number' && Number.isInteger(radius)
           ? Math.max(mapRadiusMin, Math.min(mapRadiusMax, radius))
           : undefined;
-      return localMap(world, roomId(map, room), asked);
+      return localMap(world, roomId(map, room), asked, lairLevelOf(session));
     }
   );
   handle(Invoke.huntingGrounds, async (_caller, session: SessionId, measure: unknown) => {
@@ -2262,7 +2243,7 @@ function registerIpc(): void {
         swept: 0,
         spots: [],
         unmeasured: [],
-        excluded: { dangerous: 0, beneath: 0 },
+        excluded: { dangerous: 0, beneath: 0, unsurvivable: 0, unsimulated: 0 },
         assumptions: {
           family: null,
           hpMax: null,
@@ -2307,7 +2288,8 @@ function registerIpc(): void {
       hp: world.itemsServing('hp').map((item) => item.name),
       poisoned: world.itemsServing('poisoned').map((item) => item.name),
       blind: world.itemsServing('blind').map((item) => item.name),
-      diseased: world.itemsServing('diseased').map((item) => item.name)
+      diseased: world.itemsServing('diseased').map((item) => item.name),
+      held: world.itemsServing('held').map((item) => item.name)
     };
   });
   /*
@@ -2358,6 +2340,25 @@ function registerIpc(): void {
    * printed — and null is *unknown*, which the equip check never refuses on.
    */
   handle(Invoke.wearer, (_caller, session: SessionId): Wearer => wearerIn(session));
+
+  /*
+   * A slot's quick view: the realm's items for the slot a clicked word names,
+   * checked against this character and ranked by how it swings. See `slotGear`.
+   */
+  handle(Invoke.slotGear, (_caller, session: SessionId, slot: unknown) => {
+    const world = worldFor(session);
+    const manager = host?.get(session)?.manager;
+    if (!world || !manager || typeof slot !== 'string') return null;
+    const worn = wornOfWord(slot);
+    if (worn === null) return null;
+    const { combat, magery, family } = manager.realmClass;
+    return slotGear(worn, world, {
+      wearer: wearerIn(session),
+      sheet: prowessSheetOf(manager.character, { combat, magery }),
+      family,
+      attack: configFor(session).automation.combat.attack
+    });
+  });
 
   /**
    * Everything the realm knows about a name — monster, item or spell.
@@ -2435,14 +2436,24 @@ function registerIpc(): void {
      * so the card reads exactly what auto-combat ranks on. A session with no
      * manager (a stale id) has no character to weigh against and gets none.
      */
-    const verdicts = host?.get(session)?.manager.appraise(found.mobs.map((mob) => mob.name)) ?? {};
+    const verdicts =
+      host?.get(session)?.manager.appraisal.appraise(found.mobs.map((mob) => mob.name)) ?? {};
+    // And the character's own row where it says one does not attack first,
+    // for the card to show beside the realm's temper (todo 818).
+    const rules = configFor(session).automation.combat.mobRules;
+    const rowPeace: Record<string, RowPeace> = {};
+    for (const mob of found.mobs) {
+      const peace = rowPeaceFor(rules, mob.name);
+      if (peace !== null) rowPeace[mob.name] = peace;
+    }
     return {
       ...found,
       ...(Object.keys(learned).length > 0 ? { learned } : {}),
       ...(Object.keys(fights).length > 0 ? { fights } : {}),
       ...(Object.keys(shopPlaces).length > 0 ? { shopPlaces } : {}),
       ...(Object.keys(mobPlaces).length > 0 ? { mobPlaces } : {}),
-      ...(Object.keys(verdicts).length > 0 ? { verdicts } : {})
+      ...(Object.keys(verdicts).length > 0 ? { verdicts } : {}),
+      ...(Object.keys(rowPeace).length > 0 ? { rowPeace } : {})
     };
   });
 
@@ -2462,15 +2473,13 @@ function registerIpc(): void {
   });
 
   /*
-   * *Where am I standing*, in whichever word the realm's own `locate` setting
-   * names. No argument crosses from the window — `ask`'s gate is a bare verb
-   * because that is what lets a window's own string reach the socket at all,
-   * and `sys status` would fail it outright; here main reads the setting and
-   * picks the word itself, exactly as the gear button decides its own.
+   * The Room card's locate (todo 811). Nothing crosses but the session: main
+   * chooses the realm's word, and a realm with none refuses out loud.
    */
-  handle(Invoke.locate, (_caller, session: SessionId) => {
-    return host?.get(session)?.manager.askWhereIAm() ?? false;
-  });
+  handle(
+    Invoke.locate,
+    (_caller, session: SessionId) => host?.get(session)?.manager.locating.ask() ?? false
+  );
 
   /*
    * A gear button: the kit back on, all of it on, all of it off, or one item.
@@ -2688,11 +2697,7 @@ function registerIpc(): void {
              * where the realm has no row: unknown offers everything, the
              * same rule `targeting` keeps one line up.
              */
-            ...(row === undefined || row === null
-              ? {}
-              : {
-                  serves: spellServes(row.abilities, (id) => world?.spellById(id)?.abilities)
-                })
+            ...(row === undefined || row === null ? {} : { serves: spellServes(row.abilities) })
           };
         }),
         // No realm to ask means no gates, never closed ones: unknown must
@@ -2744,88 +2749,6 @@ function registerIpc(): void {
       allFilesLabel: t('app.dialog.allFilesFilter')
     })
   );
-
-  /* A realm's message table, by the realm's name (`tableAt`). */
-  handle(Invoke.loadMessages, (_caller, realm: unknown) => {
-    const at = tableAt(realmMessages, realm);
-    return at === null ? MESSAGE_TABLE.empty : at.store.forServer(at.serverId);
-  });
-
-  handle(Invoke.importMessages, (_caller, realm: unknown, fileName: unknown, text: unknown) => {
-    const at = tableAt(realmMessages, realm);
-    if (at === null)
-      return { ok: false, error: t('app.servers.noSuchServer') } satisfies MessageImport;
-    if (typeof text !== 'string') {
-      return { ok: false, error: t('app.messages.unreadable') } satisfies MessageImport;
-    }
-    const read = parseMegaMudMessages(text);
-    /*
-     * A file that yields nothing is refused rather than written: replacing a
-     * realm's table with an empty one because somebody picked the wrong file
-     * is the one outcome of an import nobody wants, and it is silent.
-     */
-    if (read.triggers.length === 0) {
-      return { ok: false, error: t('app.messages.nothingRead') } satisfies MessageImport;
-    }
-    const result = at.store.write(at.serverId, {
-      source: importedFrom(fileName, 'Messages.md'),
-      triggers: read.triggers
-    });
-    if (!result.ok) return { ok: false, error: result.error } satisfies MessageImport;
-    return {
-      ok: true,
-      count: read.triggers.length,
-      chase: read.triggers.filter((trigger) => trigger.chase).length,
-      skipped: read.skipped
-    } satisfies MessageImport;
-  });
-
-  handle(Invoke.saveMessages, (_caller, realm: unknown, triggers: unknown) => {
-    const at = tableAt(realmMessages, realm);
-    if (at === null) return t('app.servers.noSuchServer');
-    // Parsed, not trusted: the rows crossed the wire like any other payload.
-    const result = at.store.write(at.serverId, {
-      source: at.store.forServer(at.serverId).source,
-      triggers: asMessageTriggers(triggers)
-    });
-    return result.ok ? null : result.error;
-  });
-
-  /*
-   * A realm's monster table, the same way. The window decodes `Monsters.md`
-   * and hands over rows, which are parsed here like any other payload.
-   */
-  handle(Invoke.loadMonsters, (_caller, realm: unknown) => {
-    const at = tableAt(realmMonsters, realm);
-    return at === null ? MONSTER_TABLE.empty : at.store.forServer(at.serverId);
-  });
-
-  handle(Invoke.importMonsters, (_caller, realm: unknown, fileName: unknown, rows: unknown) => {
-    const at = tableAt(realmMonsters, realm);
-    if (at === null)
-      return { ok: false, error: t('app.servers.noSuchServer') } satisfies MonsterImport;
-    const monsters = asMonsterRules(rows).filter(saysAnything);
-    // Refused rather than written, for `importMessages`' reason.
-    if (monsters.length === 0) {
-      return { ok: false, error: t('app.monsters.noRows') } satisfies MonsterImport;
-    }
-    const result = at.store.write(at.serverId, {
-      source: importedFrom(fileName, 'Monsters.md'),
-      monsters
-    });
-    if (!result.ok) return { ok: false, error: result.error } satisfies MonsterImport;
-    return { ok: true, count: monsters.length } satisfies MonsterImport;
-  });
-
-  handle(Invoke.saveMonsters, (_caller, realm: unknown, rows: unknown) => {
-    const at = tableAt(realmMonsters, realm);
-    if (at === null) return t('app.servers.noSuchServer');
-    const result = at.store.write(at.serverId, {
-      source: at.store.forServer(at.serverId).source,
-      monsters: asMonsterRules(rows)
-    });
-    return result.ok ? null : result.error;
-  });
 
   handle(Invoke.saveProfile, (_caller, rawId: unknown, rawDraft: unknown) => {
     const id = asProfileId(rawId);
@@ -3178,8 +3101,6 @@ function build(): void {
   seedServers();
   servers = createServers();
   loops = createLoops();
-  realmMessages = createRealmTable(MESSAGE_TABLE, 'messages');
-  realmMonsters = createRealmTable(MONSTER_TABLE, 'monsters');
   publishTree();
   internal = createInternal();
   lore = createLore();
@@ -3308,12 +3229,6 @@ function teardown(): void {
   settle('profiles', () => {
     profiles?.dispose();
     profiles = null;
-  });
-  settle('messages', () => {
-    realmMessages?.dispose();
-    realmMessages = null;
-    realmMonsters?.dispose();
-    realmMonsters = null;
   });
   settle('options', () => {
     config?.dispose();

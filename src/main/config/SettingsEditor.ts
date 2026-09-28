@@ -22,9 +22,12 @@ import { fileSlug } from '../../shared/files';
 import { loopFileName, type Loop, type LoopScope, type ScopedLoop } from '../../shared/loops';
 import type { Home } from '../app/home';
 import { t } from '../app/i18n';
+import { asLocateWord, DEFAULT_LOCATE } from '../../shared/locate';
 import {
+  ownFleeGotoCommand,
   ownHangPenalties,
-  ownMonsterRules,
+  ownLocate,
+  ownMobRules,
   PROFILE_ACCENTS,
   resolveProfile,
   type ProfileAccent
@@ -287,6 +290,11 @@ export class SettingsEditor {
           document.deleteIn(['login']);
         }
 
+        // Its own locate word, or null to follow the realm: cleared only when
+        // the form could have shown it, as the theme above is.
+        if (draft.locate !== null) document.setIn(['locate'], draft.locate);
+        else if (asLocateWord(document.get('locate')) !== null) document.deleteIn(['locate']);
+
         /*
          * The two escapes, written whenever the character has anything to say
          * about them — which now includes saying *no*.
@@ -313,6 +321,8 @@ export class SettingsEditor {
           });
         }
 
+        // The teleport on the retreat's rule; an empty command writes no key,
+        // which is what follows the realm (todo 813).
         if (
           creating ||
           draft.fleeGoto.enabled ||
@@ -321,7 +331,7 @@ export class SettingsEditor {
           document.setIn(['automation', 'safety', 'fleeGoto'], {
             enabled: draft.fleeGoto.enabled,
             belowHealth: draft.fleeGoto.belowHealth,
-            destination: draft.fleeGoto.destination
+            ...(draft.fleeGoto.command.length > 0 ? { command: draft.fleeGoto.command } : {})
           });
         }
 
@@ -748,15 +758,6 @@ export class SettingsEditor {
         }
 
         /*
-         * Which word this realm answers *where am I standing* with, written
-         * only when it is not the default `rm` — the same rule `database` and
-         * `mobPriority` follow, so a file nobody has touched stays exactly the
-         * two lines a fresh save writes.
-         */
-        if (draft.locate !== 'rm') document.setIn(['locate'], draft.locate);
-        else if (document.hasIn(['locate'])) document.deleteIn(['locate']);
-
-        /*
          * The realm's own map, written only when it names one — an empty
          * `database` is the world the client ships, which is what a realm with
          * no key already gets, and a key restating a default is noise in a file
@@ -765,16 +766,38 @@ export class SettingsEditor {
         if (draft.database.length > 0) document.setIn(['database'], draft.database);
         else if (document.hasIn(['database'])) document.deleteIn(['database']);
 
+        /*
+         * And the realm's own rules for its monsters, on the same rule: an
+         * empty list is what a realm with no key already has, so the key is
+         * removed rather than written as `[]`. Rows as the draft parsed them,
+         * which states only what each row says (`normalizeMobRules`).
+         */
+        if (draft.mobRules.length > 0) {
+          document.setIn(
+            ['mobRules'],
+            draft.mobRules.map((row) => ({ ...row }))
+          );
+        } else if (document.hasIn(['mobRules'])) {
+          document.deleteIn(['mobRules']);
+        }
+
         // And whether a hang-up here is charged: absent leaves it to the
         // options file, so null removes the key rather than writing one.
         if (draft.hangPenalties !== null) document.setIn(['hangPenalties'], draft.hangPenalties);
         else if (document.hasIn(['hangPenalties'])) document.deleteIn(['hangPenalties']);
 
-        // And what it calls its coins: only the ones it renames, and no key at
-        // all for a realm that renames none, as with `locate` above.
-        const coins = Object.entries(draft.coins).filter(([, name]) => name.length > 0);
-        if (coins.length > 0) document.setIn(['coins'], Object.fromEntries(coins));
+        // And how it is asked where you stand: `rm` is what no key gives, so
+        // it is removed, and only a word the form could have shown.
+        if (draft.locate !== DEFAULT_LOCATE) document.setIn(['locate'], draft.locate);
+        else if (asLocateWord(document.get('locate')) !== null) document.deleteIn(['locate']);
+
+        // And its renamed coins: none stated is the stock names, so no key.
+        if (Object.keys(draft.coins).length > 0) document.setIn(['coins'], draft.coins);
         else if (document.hasIn(['coins'])) document.deleteIn(['coins']);
+
+        // And its teleport, literally: empty states none, so no key.
+        if (draft.fleeGoto.length > 0) document.setIn(['fleeGoto'], draft.fleeGoto);
+        else if (document.hasIn(['fleeGoto'])) document.deleteIn(['fleeGoto']);
       },
       verify: (value) => {
         const server = asServer(value, id);
@@ -1196,13 +1219,15 @@ export class SettingsEditor {
               }))
               .filter((step) => step.when.length > 0)
           : [],
+        // Its own, read raw for `login`'s reason: the resolved one may be the realm's.
+        locate: ownLocate(record),
         /*
          * Falling back to the shipped defaults rather than to numbers written
          * out here. A default restated in a second place is a default that goes
          * stale the first time the first one changes, which is the rule the
          * options template already keeps: defaults live in exactly one place.
          */
-        // The character's own answer about penalties, read raw as `monsters`
+        // The character's own answer about penalties, read raw as `mobRules`
         // is below: the resolved one may be the realm's or the options file's.
         hangUp: {
           ...(effective?.automation.safety.hangUp ?? DEFAULT_CONFIG.automation.safety.hangUp),
@@ -1211,24 +1236,27 @@ export class SettingsEditor {
         retreat: retreatOf(
           effective?.automation.safety.retreat ?? DEFAULT_CONFIG.automation.safety.retreat
         ),
-        fleeGoto:
-          effective?.automation.safety.fleeGoto ?? DEFAULT_CONFIG.automation.safety.fleeGoto,
+        // Its own command, read raw: the resolved one may be the realm's.
+        fleeGoto: {
+          ...(effective?.automation.safety.fleeGoto ?? DEFAULT_CONFIG.automation.safety.fleeGoto),
+          command: ownFleeGotoCommand(record) ?? ''
+        },
         pvp: effective?.automation.safety.pvp ?? DEFAULT_CONFIG.automation.safety.pvp,
         /*
-         * The resolved combat block, except for the monster rows, which are
-         * the character's **own** from the file as written (todo 01).
+         * The resolved combat block, except for the monster list, which is
+         * the character's **own** rows from the file as written (todo 01).
          *
-         * `monsters` is the one list here merged across scopes rather than
-         * replaced, so the resolved one holds the options file's rows as well.
-         * Seeding the form with those and saving it back would write them into
-         * this character's own file — pinning down rows it was only
-         * inheriting, so that changing the global ones afterwards would
-         * silently not reach it. The same distinction `login.steps` above
-         * keeps, for the same reason.
+         * `mobRules` is the one list here merged across the three scopes
+         * rather than replaced, so the resolved one holds the realm's rows and
+         * the global file's as well. Seeding the form with those and saving it
+         * back would write them into this character's own file — pinning down
+         * rules it was only inheriting, so that changing the realm's list
+         * afterwards would silently not reach it. The same distinction
+         * `login.steps` above keeps, for the same reason.
          */
         combat: {
           ...(effective?.automation.combat ?? DEFAULT_CONFIG.automation.combat),
-          monsters: ownMonsterRules(record)
+          mobRules: ownMobRules(record)
         },
         party: effective?.automation.party ?? DEFAULT_CONFIG.automation.party,
         health: effective?.automation.health ?? DEFAULT_CONFIG.automation.health,
@@ -1397,6 +1425,7 @@ function blank(id: string): ProfileEditable {
     username: '',
     hasPassword: false,
     login: [],
+    locate: null,
     hangUp: { ...DEFAULT_CONFIG.automation.safety.hangUp, penalties: null },
     retreat: retreatOf(DEFAULT_CONFIG.automation.safety.retreat),
     fleeGoto: DEFAULT_CONFIG.automation.safety.fleeGoto,

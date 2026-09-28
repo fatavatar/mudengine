@@ -1,7 +1,7 @@
 /**
  * Everything the realm knows about one room, for a room nobody is standing in.
  *
- * `CharacterTracker` resolves the shop, the lair, the script and the spell onto
+ * `RoomTracker.attachRealm` resolves the shop, the lair, the script and the spell onto
  * the room the character *is* in, and every card reads them from the character
  * it was handed. A room on the map or on a route list gets none of that — a
  * `MapCell` carries a name, its exits and two booleans — so the lair glyph
@@ -15,7 +15,7 @@
  */
 import type { RealmFamily } from '../../shared/realm';
 import type { RoomBrief, RoomBriefExit, RoomId } from '../../shared/world';
-import { describeObstacle } from './obstacle';
+import { describeObstacle, leverOpening } from './obstacle';
 import type { WorldGraph } from './WorldGraph';
 
 /**
@@ -65,7 +65,7 @@ export function roomBrief(
             obstacle: describeObstacle(
               exit.requirement,
               graph,
-              graph.leversHere(id, exit.direction)
+              leverOpening(graph, id, exit.direction)
             )
           })
     };

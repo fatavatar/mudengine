@@ -96,16 +96,17 @@
  */
 import type { CommandQueue } from './CommandQueue';
 import { countThreats } from './RuleEngine';
-import { willNotOpen, type KnownMob, type MonsterRule } from '../../shared/monsterRules';
 import { t } from '../app/i18n';
-import type { CharacterState } from '../../shared/character';
+import { leaderOf, type CharacterState } from '../../shared/character';
 import {
-  DEFAULT_CONFIG,
-  resumeAtMana,
+  type AutomationConfig,
+  type CombatConfig,
   type HealthConfig,
   type PartyConfig
 } from '../../shared/config';
+import type { MobRule } from '../../shared/mobRules';
 import { tuning } from '../app/tuning';
+import type { SessionModule } from './Module';
 
 /**
  * Whether the fight the combat flag names is in *this* room.
@@ -148,12 +149,11 @@ import { tuning } from '../app/tuning';
  * **But an empty pair does not mean the fight is over**, and reading it that
  * way was wrong for three cases a review caught before this shipped:
  *
- * - **A fight opened with a spell, or with a bare `a`.** `noteCommand` binds a
- *   target only for `ATTACK_COMMANDS` *with an argument*, or a cast at a
- *   monster standing in the room — so a bare `a`, or a cast typed at a name
- *   the room listing has not placed, has the flag up for the whole opening
- *   round with no target and no attacker. That is this realm's mystics,
- *   which is to say the character the delay was reported from.
+ * - **A fight opened with a spell, or with a bare `a`.** `observeCommand` binds a
+ *   target only for `ATTACK_COMMANDS` *with an argument*, and `Cast` is in
+ *   neither set — so a caster's whole opening round has the flag up, no
+ *   target and no attacker. That is this realm's mystics, which is to say the
+ *   character the delay was reported from.
  * - **A kill in a room holding two.** `FightTracker.died` drops the dead
  *   name from both fields and no `*Combat Off*` comes while the survivor is
  *   still engaged.
@@ -181,7 +181,12 @@ export function fightIsHere(state: CharacterState): boolean {
   return state.room.occupants.length > 0;
 }
 
-export class Recovery {
+/** What a reload hands `Recovery`: its block, the master switch, the party, and the monster rows. */
+export type RecoverySettings = Pick<AutomationConfig, 'health' | 'enabled' | 'party'> & {
+  combat: Pick<CombatConfig, 'mobRules'>;
+};
+
+export class Recovery implements SessionModule {
   private state: CharacterState | null = null;
   /**
    * When a proposed `rest` stops being trusted to be in flight.
@@ -216,24 +221,19 @@ export class Recovery {
    * Armed by the **wire**, not by the proposal: whoever sat the character down
    * — this module, or the player typing `rest` — the sitting is what `restTo`
    * continues, and a rest the player started is one they want the benefit of.
-   * And by health crossing `restBelow` wherever it is crossed (`observe`).
-   * Cleared the moment health reaches the ceiling, and on `reset`.
+   * Armed too by health seen under `restBelow` (todo 825): a heal that stood
+   * the character up, or a fight in the room, used to leave it standing above
+   * the floor and short of the line. Cleared the moment health reaches the
+   * ceiling, and on `reset`.
    */
   private sitting = false;
-  /**
-   * The mana half of `sitting`: a stretch of meditating that carries on to
-   * `resumeAtMana`, the figure a walk held for mana walks on at. Without it a
-   * cast that broke the meditation above `meditateBelow` left the character
-   * standing for the rest of a hold that was waiting on the mana it was no
-   * longer regaining. Armed by the wire's `(Meditating)` and by mana crossing
-   * `meditateBelow` (`observe`), cleared at the figure.
-   */
+  /** The same for meditating: `meditateBelow` or the wire starts it, `meditateTo` ends it. */
   private meditatingOn = false;
   /**
    * A figure a walk is waiting on, in hit points, or null.
    *
    * The walker stands still before a trap until health covers it
-   * (`Walker.holdForTrap`, `automation.health.restBeforeTraps`), and that
+   * (`Holds.holdForTrap`, `automation.health.restBeforeTraps`), and that
    * figure is above `restBelow` by construction — so nothing here would sit
    * the character down to it. Handed in by the session on every state rather
    * than remembered across one: a guard on a state is not a memory of having
@@ -274,10 +274,8 @@ export class Recovery {
   private proposed: { command: string; until: number } | null = null;
 
   constructor(
-    private config: HealthConfig,
-    private enabled: boolean,
+    private settings: RecoverySettings,
     private readonly queue: CommandQueue,
-    private party: PartyConfig = DEFAULT_CONFIG.automation.party,
     private readonly events: {
       notice?(message: string): void;
       /**
@@ -291,26 +289,25 @@ export class Recovery {
     } = {}
   ) {}
 
-  configure(
-    config: HealthConfig,
-    enabled: boolean,
-    party?: PartyConfig,
-    monsters?: readonly MonsterRule[]
-  ): void {
-    this.config = config;
-    this.enabled = enabled;
-    if (party) this.party = party;
-    if (monsters) this.monsters = monsters;
+  configure(settings: RecoverySettings): void {
+    this.settings = settings;
   }
 
-  /** The monster table, for *who here will not open on me* (`willNotOpen`). */
-  private monsters: readonly MonsterRule[] = [];
-  /** The realm's monster names, so a row reaches through a modifier only (`ruleFor`). */
-  private known: KnownMob | undefined = undefined;
+  private get config(): HealthConfig {
+    return this.settings.health;
+  }
 
-  /** Where the realm's monster names are asked for. See `ruleFor`. */
-  useKnownMob(known: KnownMob): void {
-    this.known = known;
+  private get enabled(): boolean {
+    return this.settings.enabled;
+  }
+
+  private get party(): PartyConfig {
+    return this.settings.party;
+  }
+
+  /** The monster rows: a monster one says does not attack first is rested beside (`countThreats`). */
+  private get mobRules(): readonly MobRule[] {
+    return this.settings.combat.mobRules;
   }
 
   reset(): void {
@@ -375,24 +372,6 @@ export class Recovery {
    * a glance exactly what had to be true.
    */
   /**
-   * Starts a stretch where a floor is crossed, on every status line, whether
-   * or not sitting down is allowed there.
-   *
-   * The walker, the loop and a follower's `@wait` hold from the crossing to
-   * the ceiling (`healthHolding`, `manaHolding`); this module armed its
-   * stretch only once the character was seen sitting, and it is asked only
-   * where sitting is allowed. skinny went under `meditateBelow` in a fight,
-   * mana came back over it before the fight let him sit, and he told Fatty
-   * `@wait` for mana and then rested beside him instead of meditating
-   * (2026-09-25): the need was the party's and not this module's.
-   */
-  observe(state: CharacterState): void {
-    const { hp, hpMax, mana, manaMax } = state.vitals;
-    if (this.below(hp, hpMax, this.config.restBelow)) this.sitting = true;
-    if (this.below(mana, manaMax, this.config.meditateBelow)) this.meditatingOn = true;
-  }
-
-  /**
    * Whether this line would sit the character down, or keep it sitting —
    * read without deciding, for `RestAway`, which asks before the rest is
    * proposed whether the room it would be proposed in is one to rest in.
@@ -401,9 +380,6 @@ export class Recovery {
     if (!this.enabled || state.phase !== 'in-game') return false;
     if (fightIsHere(state) || this.refused.has('rest')) return false;
     const { hp, hpMax, resting } = state.vitals;
-    if (statedRest(state, 'rest-hp') !== null && hp !== null && hpMax !== null && hp < hpMax) {
-      return true;
-    }
     if (this.needed !== null && hp !== null && hp < this.needed) return true;
     if (this.below(hp, hpMax, this.config.restBelow)) return true;
     const { restTo } = this.config;
@@ -414,13 +390,15 @@ export class Recovery {
     this.state = state;
     if (!this.enabled) return;
     if (state.phase !== 'in-game') return;
+    const { hp, hpMax, mana, manaMax, resting, meditating } = state.vitals;
+    // A figure seen under its floor starts a stretch, fight or no fight (todo 825).
+    if (this.below(hp, hpMax, this.config.restBelow)) this.sitting = true;
+    if (this.below(mana, manaMax, this.config.meditateBelow)) this.meditatingOn = true;
     // A rest is broken by being attacked, so one sent while something is
     // actually swinging is a command spent to be told so — out of the same
     // budget the fight is being fought with. The flag alone is not that; see
     // `fightIsHere`.
     if (fightIsHere(state)) return;
-
-    const { hp, hpMax, mana, manaMax, resting, meditating } = state.vitals;
 
     /*
      * The poison sentence is said once per stretch of poison, so the memory of
@@ -462,36 +440,7 @@ export class Recovery {
      * road above the arena, where the monsters wander up — rest, attacked,
      * fight, rest, all evening. A rest about to be broken is a command spent.
      */
-    if (countThreats(state, (name) => willNotOpen(this.monsters, name, this.known)) > 0) return;
-
-    /*
-     * A row of the realm's message table said to rest until full — MegaMUD's
-     * *rest until full HP's* and *rest until full mana*. Held until the
-     * figure is full (`SessionManager.releaseRestsIfFull`), so this asks only
-     * while it is not. Mana is meditated for where the class can, rested for
-     * where it cannot. A poisoned rest is left to the branch below, which
-     * knows what to say about it.
-     */
-    const forHp = statedRest(state, 'rest-hp');
-    if (
-      forHp !== null &&
-      hp !== null &&
-      hpMax !== null &&
-      hp < hpMax &&
-      !this.refused.has('rest') &&
-      !this.restIsPoisoned(state)
-    ) {
-      this.propose('rest', t('automation.recovery.reasonMessage', { name: forHp }));
-      return;
-    }
-    const forMana = statedRest(state, 'rest-mana');
-    if (forMana !== null && mana !== null && manaMax !== null && mana < manaMax) {
-      const verb = this.refused.has('med') ? 'rest' : 'med';
-      if (!this.refused.has(verb) && !(verb === 'rest' && this.restIsPoisoned(state))) {
-        this.propose(verb, t('automation.recovery.reasonMessage', { name: forMana }));
-        return;
-      }
-    }
+    if (countThreats(state, this.mobRules) > 0) return;
 
     if (this.wantsRest(hp, hpMax) && !this.refused.has('rest')) {
       /*
@@ -529,7 +478,7 @@ export class Recovery {
      * that *has* a figure and is still refused — a mystic's Kai, measured
      * 2026-09-04 — is what `refused` is for.
      */
-    if (this.wantsMeditation(mana, manaMax) && !this.refused.has('med')) {
+    if (this.wantsMed(mana, manaMax) && !this.refused.has('med')) {
       this.propose('med', t('automation.recovery.reasonMana'));
       return;
     }
@@ -541,9 +490,7 @@ export class Recovery {
      * to meditate — a warrior's `med` is answered with a refusal in the room.
      */
     if (!this.party.restWithLeader || state.party.following === null) return;
-    const leader = state.party.members.find(
-      (member) => member.name.toLowerCase() === state.party.following?.toLowerCase()
-    );
+    const leader = leaderOf(state);
     if (leader?.activity?.state === 'resting') {
       if (this.refused.has('rest')) return;
       this.propose('rest', t('automation.party.reasonRestWithLeader', { leader: leader.name }));
@@ -618,12 +565,12 @@ export class Recovery {
     return false;
   }
 
-  /** `meditateBelow` starts a stretch; `resumeAtMana` is what carries it on. */
-  private wantsMeditation(mana: number | null, manaMax: number | null): boolean {
+  /** `wantsRest` for mana: `meditateBelow` starts a stretch and `meditateTo` carries it (todo 825). */
+  private wantsMed(mana: number | null, manaMax: number | null): boolean {
     if (this.below(mana, manaMax, this.config.meditateBelow)) return true;
-    if (!this.meditatingOn) return false;
-    const to = resumeAtMana(this.config, tuning().loop.resumeMarginWhenUncapped);
-    if (this.below(mana, manaMax, to)) return true;
+    const { meditateTo } = this.config;
+    if (meditateTo <= 0 || !this.meditatingOn) return false;
+    if (this.below(mana, manaMax, meditateTo)) return true;
     this.meditatingOn = false;
     return false;
   }
@@ -666,10 +613,4 @@ export class Recovery {
     // And a refusal inside that window is this verb's — see `proposed`.
     this.proposed = { command, until: this.askedUntil };
   }
-}
-
-/** The name of a held message row saying to rest to full, of this kind, or null. */
-function statedRest(state: CharacterState, action: 'rest-hp' | 'rest-mana'): string | null {
-  const row = state.heard.find((entry) => entry.action === action);
-  return row === undefined ? null : row.name || action;
 }

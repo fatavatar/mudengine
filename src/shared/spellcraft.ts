@@ -24,11 +24,12 @@
  * which is erased — see the module-cycle rule in `CLAUDE.md`: a type-only cycle
  * is harmless where a value cycle is not. `abilities.ts` is a value import and
  * safe for the other half of that rule: it imports nothing, so it cannot be
- * the far side of a cycle.
+ * the far side of a cycle. `config.ts` (`CURES`) is safe by the same test:
+ * it imports nothing from here, which `module-cycle.test.ts` holds.
  */
 
 import { HAZARD_ABILITY } from './abilities';
-import { commandOf } from './commands';
+import { CURES, type Cure, type SpellsConfig } from './config';
 import type { WorldSpell } from './world';
 
 /**
@@ -123,6 +124,51 @@ export function resolveSpell(
 }
 
 /**
+ * Every spelling a spell answers to here, lower-cased: as written, the word a
+ * cast sends, the book's name and short, and the realm's name.
+ */
+export function spellingsOf(
+  spell: string,
+  spellbook: ReadonlyArray<CastableSpell> | null | undefined,
+  realmSpell: (name: string) => WorldSpell | null = () => null
+): string[] {
+  const found = resolveSpell(spell, spellbook, realmSpell);
+  const word = found.word.trim().toLowerCase();
+  return word.length > 0 ? [...namesOf(found), word] : namesOf(found);
+}
+
+/** The names a resolved spell goes by, lower-cased, without the cast word. */
+function namesOf(spell: ResolvedSpell): string[] {
+  return [spell.configured, spell.known?.name, spell.known?.short, spell.realm?.name]
+    .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+    .map((name) => name.trim().toLowerCase());
+}
+
+/**
+ * Whether two spellings name one spell (todo 829): a configured `bles` and
+ * the `bless` the server prints, which, left unmatched, recast a blessing on
+ * the retry clock all evening. The character's own book decides where it lists
+ * both, the realm's row where it names both, and the names otherwise. A short
+ * word is never compared on its own: the realm gives `rcol` to both `resist
+ * cold` and `ice shield`. A shared prefix does not match (`bless`, `blessed
+ * light`).
+ */
+export function sameSpell(
+  a: string,
+  b: string,
+  spellbook: ReadonlyArray<CastableSpell> | null | undefined,
+  realmSpell: (name: string) => WorldSpell | null = () => null
+): boolean {
+  const one = resolveSpell(a, spellbook, realmSpell);
+  const other = resolveSpell(b, spellbook, realmSpell);
+  if (one.configured.toLowerCase() === other.configured.toLowerCase()) return true;
+  if (one.known !== null && other.known !== null) return one.known === other.known;
+  if (one.realm !== null && other.realm !== null) return one.realm.id === other.realm.id;
+  const theirs = namesOf(other);
+  return namesOf(one).some((name) => theirs.includes(name));
+}
+
+/**
  * The word a cast actually sends: the realm's short name.
  *
  * The `Cast` command reads **one word** as the spell, and that word is the
@@ -157,94 +203,6 @@ export function castWord(
   return realmShort(wanted) ?? wanted;
 }
 
-/**
- * A command read as a cast: the spell's word and whatever follows it, or null.
- *
- * Two spellings reach the wire. `c <short> [target]` is the `Cast` command,
- * and the short name typed bare is the other — what this client sends
- * (`castWord`), because a mystic's `swan` has no `c` form, and what the
- * server reads as a cast either way: healbot's `rsto stat` was answered `You
- * may not cast that spell on a user!` (2026-09-22). A bare word is a cast only
- * when it is no command of the table's and `isSpellWord` owns it — the
- * character's listing, the realm's shorts — so `look` is never read as one.
- */
-export function castOf(
-  command: string,
-  isSpellWord: (word: string) => boolean
-): { word: string; argument: string } | null {
-  const words = command.trim().split(/\s+/);
-  const first = words[0] ?? '';
-  if (first.length === 0) return null;
-  const named = commandOf(first);
-  if (named === 'Cast') {
-    const word = words[1];
-    return word === undefined ? null : { word, argument: words.slice(2).join(' ') };
-  }
-  if (named !== null || !isSpellWord(first)) return null;
-  return { word: first, argument: words.slice(1).join(' ') };
-}
-
-/** Whether a word is the short name of a spell in this book, case-insensitively. */
-export function isShortIn(
-  word: string,
-  spellbook: ReadonlyArray<CastableSpell> | null | undefined
-): boolean {
-  const needle = word.trim().toLowerCase();
-  return (
-    needle.length > 0 && (spellbook ?? []).some((spell) => spell.short?.toLowerCase() === needle)
-  );
-}
-
-/**
- * A command read as this character's cast (`castOf`): a bare word is a spell
- * when the listing, or the realm's table, has it as a short name — the realm
- * answering before the listing has been read.
- */
-export function castIn(
-  command: string,
-  spellbook: ReadonlyArray<CastableSpell> | null | undefined,
-  realmSpell: (name: string) => WorldSpell | null
-): { word: string; argument: string } | null {
-  return castOf(
-    command,
-    (word) =>
-      isShortIn(word, spellbook) || realmSpell(word)?.short?.toLowerCase() === word.toLowerCase()
-  );
-}
-
-/**
- * Whether two spellings name one spell — a configured name against the word
- * a command sent, or the whole name a confirmation printed.
- *
- * The realm accepts `bles` wherever it accepts `bless` and a MegaMUD-trained
- * player configures the abbreviation, while the server prints the whole name,
- * so equality alone held a configured `bles` against a recorded `bless` for
- * ever. The realm's row decides where it names both, by **id**; where it does
- * not, every spelling the listing or the realm knows for either is compared.
- * One answer for every module that asks (2026-09-24): `Blessings`,
- * `AutoInvoke` and `AutoCombat` each had their own.
- */
-export function sameSpell(
-  a: string,
-  b: string,
-  spellbook: ReadonlyArray<CastableSpell> | null | undefined,
-  realmSpell: (name: string) => WorldSpell | null
-): boolean {
-  const x = a.trim().toLowerCase();
-  const y = b.trim().toLowerCase();
-  if (x === y) return true;
-  const first = realmSpell(a)?.id;
-  const second = realmSpell(b)?.id;
-  if (first !== undefined && second !== undefined) return first === second;
-  const spellings = (name: string): string[] => {
-    const found = resolveSpell(name, spellbook, realmSpell);
-    return [found.word, found.known?.name, found.known?.short, found.realm?.name]
-      .filter((spelling): spelling is string => typeof spelling === 'string')
-      .map((spelling) => spelling.trim().toLowerCase());
-  };
-  return spellings(a).includes(y) || spellings(b).includes(x);
-}
-
 /** `Abil-n` ids, as `abilities.ts` names them. */
 const CURE_POISON = 20;
 const DISPELL_MAGIC = 73;
@@ -252,7 +210,13 @@ const POISON = 19;
 const BLIND_USER = 107;
 const REMOVES_SPELL = 122;
 const HEALS = 18;
-/** `Freedom`: ends whatever holds the character in place (`HoldPerson`). */
+/**
+ * `Freedom`: `Spell.cs` strips every active effect whose spell carries
+ * `HoldPerson` (74), the one test `CheckForHoldPerson` makes, and prints each
+ * one's wear-off line — so the cure is for exactly what `held` records, and
+ * its success is the hold's own ending. A presence claim: all eight rows that
+ * carry it state zero.
+ */
 const FREEDOM = 81;
 
 export type AbilityPairs = ReadonlyArray<readonly [number, number]>;
@@ -260,20 +224,14 @@ export type AbilityPairs = ReadonlyArray<readonly [number, number]>;
 /**
  * Whether a book of known spells can answer each cure the client automates.
  *
- * `poison` and `blindness` are positive claims from unambiguous marks;
+ * `poison`, `blindness` and `freedom` are positive claims from unambiguous marks;
  * `disease` is the negative gate described above — true means *might*, false
  * means *certainly not*. The caller passes one ability list per known spell,
  * with `undefined` standing for a spell the realm does not name (a derivative
  * realm, a spell learned from the level-up line): an unnameable spell keeps
  * every gate open, because "the realm cannot say" must never disable a cure.
  */
-export interface CureGates {
-  poison: boolean;
-  blindness: boolean;
-  disease: boolean;
-  /** A positive claim, like poison's: the realm's own `Freedom` mark (81). */
-  freedom: boolean;
-}
+export type CureGates = Record<Cure, boolean>;
 
 /**
  * What a single spell *serves*, for offering items that could be used on it
@@ -290,38 +248,19 @@ export interface CureGates {
  * realm states `RemovesSpell`, a generic dispel, so a row carrying it *might*
  * end a disease. Offered, and it is why the list for disease is long.
  *
- * `held` is the realm's own `Freedom` mark (81) — the `freedom` spell and the
- * items that cast it — which is MegaMUD's Freedom slot, cast when the
- * character cannot move.
- *
- * `drains` is a hit that heals the caster by it: `DrainLife` (8) on the row
- * (`vampiric assault`), or a hit whose `EndCast` is a heal — `necromantic
- * storm` hurts the room and ends in `suck the life force`, a heal on the
- * caster (the mudrev realm, 2026-09-28). The chain is followed only through
- * `linked`; without it, the row's own marks are all that is read.
+ * `held` is the `Freedom` mark, on a spell and on the items that cast one.
  */
-export function spellServes(
-  abilities: AbilityPairs | undefined,
-  linked?: (id: number) => AbilityPairs | undefined
-): {
+export interface SpellServes {
   hp: boolean;
   poisoned: boolean;
   blind: boolean;
   diseased: boolean;
   held: boolean;
-  drains: boolean;
-} {
-  const serves = {
-    hp: false,
-    poisoned: false,
-    blind: false,
-    diseased: false,
-    held: false,
-    drains: false
-  };
+}
+
+export function spellServes(abilities: AbilityPairs | undefined): SpellServes {
+  const serves = { hp: false, poisoned: false, blind: false, diseased: false, held: false };
   if (abilities === undefined) return serves;
-  let hits = false;
-  let endsIn: number | null = null;
   for (const [id, value] of abilities) {
     if (id === HEALS) serves.hp = true;
     if (id === CURE_POISON) serves.poisoned = true;
@@ -329,34 +268,32 @@ export function spellServes(
     if (id === DISPELL_MAGIC && value === BLIND_USER) serves.blind = true;
     if (id === REMOVES_SPELL) serves.diseased = true;
     if (id === FREEDOM) serves.held = true;
-    if (id === HAZARD_ABILITY.drain) serves.drains = true;
-    if (id === HAZARD_ABILITY.damage || id === HAZARD_ABILITY.damageWithMr) hits = true;
-    if (id === HAZARD_ABILITY.endCast) endsIn = value;
-  }
-  if (!serves.drains && hits && endsIn !== null && linked !== undefined) {
-    serves.drains = (linked(endsIn) ?? []).some(([id]) => id === HEALS);
   }
   return serves;
 }
 
+/**
+ * The condition each cure answers: the settings word (*poison*) to the wire's
+ * state and `spellServes`' flag (*poisoned*). One map, read by `Cures` and by
+ * the cure fields, so the two cannot disagree.
+ */
+export const CURE_CONDITION: Readonly<Record<Cure, Exclude<keyof SpellServes, 'hp'>>> = {
+  blindness: 'blind',
+  poison: 'poisoned',
+  disease: 'diseased',
+  freedom: 'held'
+};
+
+/** `spellServes` over the book, except that a spell the realm cannot name opens every gate. */
 export function cureGates(spells: ReadonlyArray<AbilityPairs | undefined>): CureGates {
-  let poison = false;
-  let blindness = false;
-  let disease = false;
-  let freedom = false;
+  const gates: CureGates = { blindness: false, poison: false, disease: false, freedom: false };
   for (const abilities of spells) {
-    if (abilities === undefined) {
-      return { poison: true, blindness: true, disease: true, freedom: true };
-    }
-    for (const [id, value] of abilities) {
-      if (id === CURE_POISON) poison = true;
-      if (id === DISPELL_MAGIC && value === POISON) poison = true;
-      if (id === DISPELL_MAGIC && value === BLIND_USER) blindness = true;
-      if (id === REMOVES_SPELL) disease = true;
-      if (id === FREEDOM) freedom = true;
-    }
+    if (abilities === undefined)
+      return { blindness: true, poison: true, disease: true, freedom: true };
+    const serves = spellServes(abilities);
+    for (const cure of CURES) if (serves[CURE_CONDITION[cure]]) gates[cure] = true;
   }
-  return { poison, blindness, disease, freedom };
+  return gates;
 }
 
 /**
@@ -509,3 +446,36 @@ export function castsOnOthers(targeting: SpellTargeting): boolean {
 export function castsBare(targeting: SpellTargeting): boolean {
   return targeting === 'self' || targeting === 'party';
 }
+
+/**
+ * The health share below which a heal is cast: a different floor in a fight,
+ * when one is set.
+ *
+ * MegaMUD's `HpHealAtt%`, and its own documentation says why: a heal cast at
+ * 80% mid-fight is a round spent not hitting anything, and the round is what
+ * the fight is made of. 0 means *use the ordinary floor for both*, which is
+ * what the heal did before the field existed, so the default changes nothing.
+ * Read by `AutoHeal` and by the fight the room appraisal runs, which must heal
+ * as the automation would.
+ */
+export function healFloor(
+  spells: Pick<SpellsConfig, 'healBelow' | 'healBelowInCombat'>,
+  inCombat: boolean
+): number {
+  return inCombat && spells.healBelowInCombat > 0 ? spells.healBelowInCombat : spells.healBelow;
+}
+
+/**
+ * The one heal, blessing or cure a round the server allows (todo 823), as the
+ * casters see it. `CastRound` keeps it; see `mudengine-automation` ›
+ * *One heal, blessing or cure a round*.
+ */
+export interface CastGate {
+  /** Whether a cast sent now would be this round's only one. Asked at the send. */
+  mayCast(spell: string): boolean;
+  /** A heal, blessing or cure went out. */
+  noteCast(): void;
+}
+
+/** A gate that never closes, for a caster built with none. */
+export const OPEN_CAST_GATE: CastGate = { mayCast: () => true, noteCast: () => {} };

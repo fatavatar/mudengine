@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RestAway, type RestAwayPlanner } from '../RestAway';
 import { CommandQueue } from '../CommandQueue';
+import { t } from '../../app/i18n';
 import { DEFAULT_CONFIG, type AutomationConfig, type HealthConfig } from '../../../shared/config';
 import { EMPTY_CHARACTER, type CharacterState, type RoomOccupant } from '../../../shared/character';
 import { classifyOccupant } from '../../../shared/mobs';
@@ -98,7 +99,7 @@ afterEach(() => {
 });
 
 const make = (config = health(), over: Partial<RestAwayPlanner> = {}, enabled = true): RestAway =>
-  new RestAway(config, enabled, queue, planner(over), {
+  new RestAway({ health: config, enabled, combat: { mobRules: [] } }, queue, planner(over), {
     notice: (m) => notices.push(m),
     decided: (d) => decisions.push(d)
   });
@@ -110,8 +111,9 @@ describe('resting in a lair with a short clock', () => {
     expect(auto.consider(hurtInTheLair(), true)).toBe('took-over');
     drain();
     expect(sent).toEqual(['l n']);
-    expect(notices[0]).toMatch(/makes monsters every 30s/);
-    expect(notices[0]).toMatch(/Ancient Stronghold, Yard/);
+    expect(notices[0]).toBe(
+      t('automation.restAway.refusingHere', { seconds: 30, name: 'Ancient Stronghold, Yard' })
+    );
   });
 
   it('steps into the peeked room only when nobody is standing in it, and rests there', () => {
@@ -133,7 +135,12 @@ describe('resting in a lair with a short clock', () => {
     auto.consider(hurtInTheLair(), true);
     drain();
     auto.consider(peeked(hurtInTheLair(), 'n', [mob('wererat'), mob('wererat')], Date.now()), true);
-    expect(notices.at(-1)).toMatch(/Not resting in Ancient Stronghold, Yard: wererat, wererat/);
+    expect(notices.at(-1)).toBe(
+      t('automation.restAway.notSafe', {
+        name: 'Ancient Stronghold, Yard',
+        who: 'wererat, wererat'
+      })
+    );
     auto.consider(hurtInTheLair(), true);
     drain();
     expect(sent).toEqual(['l n', 'l e']);
@@ -144,7 +151,7 @@ describe('resting in a lair with a short clock', () => {
     expect(auto.consider(hurtInTheLair(), true)).toBe('rest-here');
     expect(auto.consider(hurtInTheLair(), true)).toBe('rest-here');
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toMatch(/Resting here after all/);
+    expect(notices[0]).toBe(t('automation.restAway.noSafeRoom', { seconds: 30 }));
     expect(decisions[0]).toMatchObject({ action: 'rest away', acted: false });
     expect(sent).toEqual([]);
   });
@@ -155,7 +162,9 @@ describe('resting in a lair with a short clock', () => {
     drain();
     vi.advanceTimersByTime(5000);
     expect(auto.consider(hurtInTheLair(), true)).toBe('took-over');
-    expect(notices.at(-1)).toMatch(/Nothing described/);
+    expect(notices.at(-1)).toBe(
+      t('automation.restAway.peekUnanswered', { name: 'Ancient Stronghold, Yard' })
+    );
     auto.consider(hurtInTheLair(), true);
     drain();
     expect(sent).toEqual(['l n', 'l e']);
@@ -173,7 +182,7 @@ describe('resting in a lair with a short clock', () => {
     auto.consider(hurtInTheLair({ vitals: { ...hurtInTheLair().vitals, hp: 250 } }), false);
     drain();
     expect(sent).toEqual(['l n', 'n', 's']);
-    expect(notices.at(-1)).toMatch(/stepping s back/);
+    expect(notices.at(-1)).toBe(t('automation.restAway.steppingBack', { direction: 's' }));
   });
 
   it('leaves the walk to a lap that is running', () => {
@@ -201,16 +210,6 @@ describe('everywhere else', () => {
     );
     expect(make(health({ restNextDoor: false })).consider(hurtInTheLair(), true)).toBe('not-mine');
     expect(make().consider(hurtInTheLair(), false)).toBe('not-mine');
-    expect(sent).toEqual([]);
-  });
-
-  /* The leader chooses where the party stands; a follower rests beside it. */
-  it('leaves a follower to rest with the party, in the lair', () => {
-    const following = hurtInTheLair({
-      party: { ...EMPTY_CHARACTER.party, following: 'Fatty' }
-    });
-    expect(make().consider(following, true)).toBe('not-mine');
-    drain();
     expect(sent).toEqual([]);
   });
 

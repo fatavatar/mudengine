@@ -7,16 +7,15 @@ import {
   AUTOMATION_SWITCHES,
   CP437_FALLBACK_FONT,
   DEFAULT_CONFIG,
-  drainHolding,
   readAutomationSwitch,
   normalizeConfig,
-  resumeAtMana,
   resolveTerminalFonts,
   resolveUiFonts,
   targetFromConfig,
   toCssFontStack,
   type AppConfig
 } from '../config';
+import { mergeMobRules, mobRuleFor, normalizeMobRules, treated } from '../mobRules';
 import { DENOMINATIONS } from '../character';
 
 describe('normalizeRewrites', () => {
@@ -181,11 +180,16 @@ describe('normalizeConfig', () => {
         port: 4000,
         encoding: 'utf8',
         login: [],
-        // The default: this realm's own `locate:` key is absent.
-        locate: 'rm',
         database: '',
+        // Empty for the same reason the menus are: a realm ranks nothing until
+        // somebody playing it says so.
+        mobRules: [],
         hangPenalties: null,
-        coins: {}
+        // Asked with `rm` until it says it has no such word (todo 811).
+        locate: 'rm',
+        coins: {},
+        // No teleport until the realm's own is written (todo 813).
+        fleeGoto: ''
       }
     ]);
   });
@@ -262,17 +266,6 @@ describe('normalizeConfig', () => {
     });
     expect(config.servers).toHaveLength(1);
     expect(config.servers[0]?.host).toBe('first.test');
-  });
-
-  it("takes a server's own locate setting, and falls back to rm for anything else", () => {
-    const config = normalizeConfig({
-      servers: [
-        { name: 'A', host: 'a.test', locate: 'sys-status' },
-        { name: 'B', host: 'b.test', locate: 'none' },
-        { name: 'C', host: 'c.test', locate: 'nonsense' }
-      ]
-    });
-    expect(config.servers.map((server) => server.locate)).toEqual(['sys-status', 'none', 'rm']);
   });
 
   it('falls back to the built-in servers when the key is not a list', () => {
@@ -443,15 +436,15 @@ describe('automation.combat', () => {
   it('keys monster names the way the stream spells them', () => {
     expect(
       combat({
-        monsters: [
-          { mob: 'The Giant Rat', relationship: 'friend' },
-          { mob: 'giant rat', priority: 'first' },
-          { mob: '  A Kobold  Thief ', priority: 'last' }
+        mobRules: [
+          { mob: 'The Giant Rat', treat: 'never' },
+          { mob: 'giant rat', treat: 'first' },
+          { mob: '  A Kobold  Thief ', treat: 'last' }
         ]
-      }).monsters
+      }).mobRules
     ).toEqual([
-      { mob: 'giant rat', relationship: 'friend' },
-      { mob: 'kobold thief', priority: 'last' }
+      { mob: 'giant rat', treat: 'never' },
+      { mob: 'kobold thief', treat: 'last' }
     ]);
   });
 
@@ -498,6 +491,14 @@ describe('the resting pair', () => {
     });
   });
 
+  // Todo 825: the meditate pair on the same terms, 0 staying 0.
+  it('lifts a meditate line under its floor, and leaves 0 alone', () => {
+    expect(health({}).meditateTo).toBe(0);
+    expect(health({ meditateBelow: 0.4, meditateTo: 0.2 })).toMatchObject({ meditateTo: 0.4 });
+    expect(health({ meditateBelow: 0.4, meditateTo: 0.9 })).toMatchObject({ meditateTo: 0.9 });
+    expect(health({ meditateBelow: 0.4, meditateTo: 0 })).toMatchObject({ meditateTo: 0 });
+  });
+
   /*
    * 0 is the single sit-down, not a lower bound, so it is deliberately *not*
    * lifted to the floor the way any other under-figure is. This is the one
@@ -509,20 +510,6 @@ describe('the resting pair', () => {
       restBelow: 0.6,
       restTo: 0
     });
-  });
-
-  /* The mana half (2026-09-23): the same order, and the same 0. */
-  it('lifts a meditate ceiling under its floor, and leaves 0 alone', () => {
-    expect(health({ meditateBelow: 0.5, meditateTo: 0.3 }).meditateTo).toBe(0.5);
-    expect(health({ meditateBelow: 0.5, meditateTo: 80 }).meditateTo).toBe(0.8);
-    expect(health({ meditateBelow: 0.5 }).meditateTo).toBe(0);
-  });
-
-  it('resumes a walk held for mana at the ceiling, or a margin above the floor', () => {
-    const base = health({ meditateBelow: 0.5 });
-    expect(resumeAtMana(base, 0.1)).toBeCloseTo(0.6);
-    expect(resumeAtMana({ ...base, meditateTo: 0.9 }, 0.1)).toBe(0.9);
-    expect(resumeAtMana({ ...base, meditateBelow: 0 }, 0.1)).toBe(0);
   });
 
   it('lets 0 mean never', () => {
@@ -538,36 +525,6 @@ describe('the resting pair', () => {
  * keeps *after* the trap ahead has fired, on which the floor slides with the
  * trap's damage. 45% is the figure both of the player's own examples land on.
  */
-/* Drain when hurt (2026-09-28): the heal's hysteresis pair, for the round spell. */
-describe('the drain pair', () => {
-  const spells = (raw: Record<string, unknown>) =>
-    normalizeConfig({ automation: { spells: raw } }).automation.spells;
-
-  it('ships off', () => {
-    expect(spells({})).toMatchObject({ drain: '', areaDrain: '', drainBelow: 0, drainTo: 0 });
-  });
-
-  it('lifts a ceiling under the floor, and keeps 0 as no ceiling', () => {
-    expect(spells({ drainBelow: 0.5, drainTo: 0.3 }).drainTo).toBe(0.5);
-    expect(spells({ drainBelow: 0.5, drainTo: 0 }).drainTo).toBe(0);
-  });
-
-  it('starts under drainBelow and stops at drainTo', () => {
-    const pair = spells({ drainBelow: 0.5, drainTo: 0.7 });
-    expect(drainHolding(pair, 55, 100, false)).toBe(false);
-    expect(drainHolding(pair, 45, 100, false)).toBe(true);
-    expect(drainHolding(pair, 65, 100, true)).toBe(true);
-    expect(drainHolding(pair, 70, 100, true)).toBe(false);
-  });
-
-  it('holds only to drainBelow with no ceiling, and never on an unknown figure', () => {
-    const pair = spells({ drainBelow: 0.5 });
-    expect(drainHolding(pair, 55, 100, true)).toBe(false);
-    expect(drainHolding(pair, null, 100, true)).toBe(false);
-    expect(drainHolding(spells({}), 1, 100, false)).toBe(false);
-  });
-});
-
 describe('resting before a trap', () => {
   const health = (raw: Record<string, unknown>) =>
     normalizeConfig({ automation: { health: raw } }).automation.health;
@@ -647,6 +604,27 @@ describe('the way out of a fight', () => {
   });
 });
 
+/* The teleport below the retreat (todo 813): off, between the two floors, no command. */
+describe('the last-ditch teleport', () => {
+  const fleeGoto = (raw: unknown) =>
+    normalizeConfig({ automation: { safety: { fleeGoto: raw } } }).automation.safety.fleeGoto;
+
+  it('ships off, under the retreat’s floor and over the hang-up’s, stating no command', () => {
+    const shipped = fleeGoto(undefined);
+    expect(shipped).toEqual({ enabled: false, belowHealth: 0.2, command: '' });
+    const safety = normalizeConfig({}).automation.safety;
+    expect(shipped.belowHealth).toBeLessThan(safety.retreat.belowHealth);
+    expect(shipped.belowHealth).toBeGreaterThan(safety.hangUp.belowHealth);
+  });
+
+  it('keeps the command literally, trimmed, and clamps the floor', () => {
+    expect(fleeGoto({ command: '  sys goto silvermere ' }).command).toBe('sys goto silvermere');
+    // A figure over 1 is a percentage, as every threshold here reads one.
+    expect(fleeGoto({ belowHealth: 15 }).belowHealth).toBe(0.15);
+    expect(fleeGoto({ enabled: 'yes' }).enabled).toBe(false);
+  });
+});
+
 describe('cures and blessings', () => {
   const spells = (raw: Record<string, unknown>) =>
     normalizeConfig({ automation: { spells: raw } }).automation.spells;
@@ -658,11 +636,13 @@ describe('cures and blessings', () => {
   });
 
   it('trims a cure name and ignores one it does not know', () => {
-    expect(spells({ cures: { poison: ' cure poison ', paralysis: 'x' } }).cures).toEqual({
+    expect(
+      spells({ cures: { poison: ' cure poison ', freedom: ' free ', paralysis: 'x' } }).cures
+    ).toEqual({
       blindness: '',
       poison: 'cure poison',
       disease: '',
-      freedom: ''
+      freedom: 'free'
     });
   });
 
@@ -731,20 +711,23 @@ describe('following somebody', () => {
   const party = (raw: Record<string, unknown>) =>
     normalizeConfig({ automation: { party: raw } }).automation.party;
 
-  // Off, bar asking a joiner's @health, which MegaMUD ships on and this
-  // client already did.
-  it('ships entirely off, bar asking a joiner for their health', () => {
+  /*
+   * Nothing new sent unasked: every switch off and every figure 0, but for
+   * asking a joining member's @health, which the client always did, and a
+   * time limit on a wait nothing starts (todo 831).
+   */
+  it('ships sending nothing new', () => {
     expect(party({})).toEqual({
       assistLeader: false,
       defendParty: false,
       restWithLeader: false,
       askForHealBelow: 0,
-      waitForMembersBelow: 0,
-      waitNoLongerMinutes: 0,
-      ignoreWaitWhenLeading: false,
-      ignorePartyWhenFollowing: false,
-      requestPartyHealth: true,
-      parEverySeconds: 0,
+      waitBelow: 0,
+      waitMinutes: 2,
+      ignoreWait: false,
+      ignoreParty: false,
+      askHealth: true,
+      parSeconds: 0,
       parAfterRound: false
     });
   });
@@ -755,35 +738,40 @@ describe('following somebody', () => {
         assistLeader: true,
         defendParty: true,
         restWithLeader: true,
-        askForHealBelow: 0.4,
-        waitForMembersBelow: 0.5,
-        waitNoLongerMinutes: 5,
-        ignoreWaitWhenLeading: true,
-        ignorePartyWhenFollowing: true,
-        requestPartyHealth: false,
-        parEverySeconds: 15,
-        parAfterRound: true
+        askForHealBelow: 0.4
       })
     ).toEqual({
+      ...DEFAULT_CONFIG.automation.party,
       assistLeader: true,
       defendParty: true,
       restWithLeader: true,
-      askForHealBelow: 0.4,
-      waitForMembersBelow: 0.5,
-      waitNoLongerMinutes: 5,
-      ignoreWaitWhenLeading: true,
-      ignorePartyWhenFollowing: true,
-      requestPartyHealth: false,
-      parEverySeconds: 15,
-      parAfterRound: true
+      askForHealBelow: 0.4
     });
   });
 
-  // The server acknowledges a command a status line; a listing every second
-  // would be most of what this character says.
-  it('never asks for the listing more often than every 5 seconds', () => {
-    expect(party({ parEverySeconds: 1 }).parEverySeconds).toBe(5);
-    expect(party({ parEverySeconds: 0 }).parEverySeconds).toBe(0);
+  // Todo 831: MegaMUD's party settings, with its own units (`PartyWait%=50`, `PartyWaitMax=2`).
+  it('reads the leading and listing settings', () => {
+    expect(
+      party({
+        waitBelow: 50,
+        waitMinutes: 5,
+        ignoreWait: true,
+        ignoreParty: true,
+        askHealth: false,
+        parSeconds: 15,
+        parAfterRound: true
+      })
+    ).toMatchObject({
+      waitBelow: 0.5,
+      waitMinutes: 5,
+      ignoreWait: true,
+      ignoreParty: true,
+      askHealth: false,
+      parSeconds: 15,
+      parAfterRound: true
+    });
+    // Absent is what the client already did: nobody waited for, and @health asked.
+    expect(party({})).toMatchObject({ waitBelow: 0, askHealth: true, parSeconds: 0 });
   });
 
   // MegaMUD states it as a percentage (`PartyAskHeal%=50`), and so will people.
@@ -875,5 +863,140 @@ describe('the coins collected and the coins shed', () => {
     expect(after.coinKinds).toEqual(['gold']);
     expect(after.discardKinds).toEqual(['runic']);
     for (const list of [after.coinKinds, after.discardKinds]) expect(list).not.toContain('copper');
+  });
+});
+
+describe('the monster list, merged across scopes rather than replaced', () => {
+  it('keeps a monster only one scope names', () => {
+    const merged = mergeMobRules(
+      [{ mob: 'rat', treat: 'low' }],
+      [{ mob: 'sewer rat', treat: 'last' }],
+      [{ mob: 'dragon', treat: 'first' }]
+    );
+    expect(merged.map((row) => row.mob).sort()).toEqual(['dragon', 'rat', 'sewer rat']);
+  });
+
+  /*
+   * The whole reason this list is merged and every other one is replaced: a
+   * character that wants the realm's rules plus one row of its own must not
+   * have to restate the realm's.
+   */
+  it('lets the narrowest scope win for a monster two of them name', () => {
+    const merged = mergeMobRules(
+      [{ mob: 'rat', treat: 'low' }],
+      [{ mob: 'rat', treat: 'high' }],
+      [{ mob: 'rat', treat: 'first' }]
+    );
+    expect(merged).toEqual([{ mob: 'rat', treat: 'first' }]);
+  });
+
+  it('lets the realm win over the global list where the character is silent', () => {
+    const merged = mergeMobRules(
+      [{ mob: 'rat', treat: 'low' }],
+      [{ mob: 'rat', treat: 'last' }],
+      []
+    );
+    expect(merged).toEqual([{ mob: 'rat', treat: 'last' }]);
+  });
+
+  it('keys a row the way the wire spells a monster', () => {
+    const merged = mergeMobRules([{ mob: 'The Giant Rat', treat: 'low' }], [], []);
+    expect(merged).toEqual([{ mob: 'giant rat', treat: 'low' }]);
+  });
+
+  it('drops a row naming no monster, which could only ever match nothing', () => {
+    expect(normalizeMobRules([{ mob: '   ', treat: 'first' }])).toEqual([]);
+  });
+
+  /*
+   * The runtime half of a closed union. Dropped rather than defaulted to
+   * `default`: a typo that became a row reading as deliberate and doing
+   * nothing is worse than one that is visibly absent.
+   */
+  it('drops a row whose treatment the table does not know', () => {
+    expect(normalizeMobRules([{ mob: 'rat', treat: 'urgent' }])).toEqual([]);
+  });
+
+  /*
+   * `never` is the refusal the flat `avoid` list used to be, and it merges by
+   * the same rule as a band: a character that leaves the town guard alone
+   * where the realm ranks it `first` leaves it alone.
+   */
+  it('lets a character leave alone what a broader scope ranks', () => {
+    const merged = mergeMobRules(
+      [{ mob: 'town guard', treat: 'first' }],
+      [],
+      [{ mob: 'town guard', treat: 'never' }]
+    );
+    expect(merged).toEqual([{ mob: 'town guard', treat: 'never' }]);
+  });
+
+  it('keeps the first row for a monster and drops a later duplicate', () => {
+    expect(
+      normalizeMobRules([
+        { mob: 'rat', treat: 'first' },
+        { mob: 'the rat', treat: 'last' }
+      ])
+    ).toEqual([{ mob: 'rat', treat: 'first' }]);
+  });
+});
+
+/* Todo 816: how a banded row fights its monster, on the row rather than a second list. */
+describe('how a row says to fight its monster', () => {
+  it('reads the spell, its casts and no backstab off a banded row', () => {
+    expect(
+      normalizeMobRules([
+        {
+          mob: 'orc shaman',
+          treat: 'first',
+          cast: { spell: ' magic missile ', times: 2 },
+          noBackstab: true
+        }
+      ])
+    ).toEqual([
+      {
+        mob: 'orc shaman',
+        treat: 'first',
+        cast: { spell: 'magic missile', times: 2 },
+        noBackstab: true
+      }
+    ]);
+  });
+
+  it('writes nothing a row does not say', () => {
+    expect(normalizeMobRules([{ mob: 'rat', treat: 'low', noBackstab: 'yes' }])).toEqual([
+      { mob: 'rat', treat: 'low' }
+    ]);
+  });
+
+  /* A cast of nothing is not a cast; a count past MegaMUD's own 99 is 99. */
+  it('drops a cast naming no spell and clamps its count', () => {
+    expect(normalizeMobRules([{ mob: 'rat', treat: 'low', cast: { times: 3 } }])).toEqual([
+      { mob: 'rat', treat: 'low' }
+    ]);
+    expect(
+      normalizeMobRules([{ mob: 'rat', treat: 'low', cast: { spell: 'mmis', times: 500 } }])
+    ).toEqual([{ mob: 'rat', treat: 'low', cast: { spell: 'mmis', times: 99 } }]);
+  });
+
+  /* A monster left alone is fought with nothing. */
+  it('carries no way of fighting a monster it leaves alone', () => {
+    expect(
+      normalizeMobRules([{ mob: 'town guard', treat: 'never', cast: { spell: 'mmis', times: 1 } }])
+    ).toEqual([{ mob: 'town guard', treat: 'never' }]);
+    const row = { mob: 'rat', treat: 'low' as const, cast: { spell: 'mmis', times: 1 } };
+    expect(treated(row, 'never')).toEqual({ mob: 'rat', treat: 'never' });
+    expect(treated(row, 'first')).toEqual({ ...row, treat: 'first' });
+  });
+
+  it('keeps the narrowest scope’s row whole when merging', () => {
+    const own = { mob: 'rat', treat: 'high' as const, cast: { spell: 'mmis', times: 1 } };
+    expect(mergeMobRules([{ mob: 'rat', treat: 'low' }], [], [own])).toEqual([own]);
+  });
+
+  it('finds the row for a monster however the room spells it', () => {
+    const rows = normalizeMobRules([{ mob: 'giant rat', treat: 'last' }]);
+    expect(mobRuleFor(rows, 'The Giant Rat')?.treat).toBe('last');
+    expect(mobRuleFor(rows, 'rat')).toBeUndefined();
   });
 });

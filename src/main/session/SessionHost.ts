@@ -25,21 +25,15 @@ import { Backscroll } from './Backscroll';
 import { SessionCapture } from './SessionCapture';
 import { SessionLog } from './SessionLog';
 import { Reconnect } from './Reconnect';
-import {
-  BUSY_PHASES,
-  NO_REALM_TABLES,
-  SessionManager,
-  type RealmData,
-  type RealmFinds,
-  type RealmMemory,
-  type RealmTables
-} from './SessionManager';
+import { BUSY_PHASES, SessionManager } from './SessionManager';
 import type { InternalConfig } from '../../shared/internal';
 import type { WorldGraph } from '../world/WorldGraph';
-import type { MobLore } from '../../shared/lore';
-import { NO_SPELL_LORE, type SpellLore } from '../../shared/spell-messages';
-import { NO_SHIPPED_SENTENCES, type ShippedSentences } from '../../shared/sentences';
+import type { RealmLoreView } from '../../shared/lore';
+import type { SpellLore } from '../../shared/spell-messages';
+import type { ShippedSentences } from '../../shared/sentences';
 import type { FightSink } from '../../shared/fights';
+import type { RealmMemory } from '../../shared/memory';
+import type { RealmFinds } from '../../shared/finds';
 import {
   Push,
   type Addressed,
@@ -48,6 +42,7 @@ import {
   type SessionSummary
 } from '../../shared/ipc';
 import type { AppConfig, AutomationSwitch } from '../../shared/config';
+import type { RealmWords } from '../../shared/profiles';
 import type { ConnectionState, ConnectionTarget } from '../../shared/types';
 import type { RealmFamily as RealmWord } from '../../shared/character';
 import type { RealmPlayers } from '../../shared/players';
@@ -81,7 +76,7 @@ export interface SessionSlot {
    * it on for. See `SessionDebug`.
    *
    * **The exposure that comes with being unconditional, stated rather than
-   * inherited.** Outbound commands are masked by `SessionManager.reportable`,
+   * inherited.** Outbound commands are masked by `Publisher.reportable`,
    * armed three ways: on a prompt the *classifier typed* (`prompt-password` or
    * `prompt-new-password`), by `LoginAutomator` filling a `{password}` in — the
    * arm that covers a realm whose prompt this client does not recognise, since
@@ -114,13 +109,13 @@ export interface SessionHostOptions {
   /** Write one automation switch into a character's file; whether it was written. See `CombatLease`. */
   flipSwitch?(id: SessionId, name: AutomationSwitch, on: boolean): boolean;
   /**
-   * What is known about the monsters on *this character's* realm.
+   * What is known about the monsters and attack spells on *this character's* realm.
    *
    * Per session for the same reason the realm is: two characters on two realms
    * is the ordinary case, and a giant rat's health on one says nothing about a
    * giant rat's health on the other.
    */
-  loreFor(id: SessionId): MobLore;
+  loreFor(id: SessionId): RealmLoreView;
   /**
    * The realm's spell sentences for *this character's* realm — shipped and
    * learned — per session for the reason `loreFor` is. Optional: a host with
@@ -132,12 +127,6 @@ export interface SessionHostOptions {
    * Optional: a host without them leaves both to the frames and the lore.
    */
   sentences?(): ShippedSentences;
-  /**
-   * The tables imported for *this character's* realm (`servers/<id>/`), per
-   * session for the reason `loreFor` is. Optional: a host without them answers
-   * no sentences and leaves every monster to the character's own rows.
-   */
-  realmTablesFor?(id: SessionId): RealmTables;
   /**
    * Where what *this character* learns about the realm is kept.
    *
@@ -249,6 +238,13 @@ export interface SessionHostOptions {
    * edited profile — is never stale.
    */
   configFor: (id: SessionId) => AppConfig;
+  /**
+   * What *this character's* realm calls things: its locate word and its coins
+   * (`Profile.locate`, `.coins`).
+   * Read through, like `configFor`, so an edited realm or profile reaches a
+   * session already playing.
+   */
+  wordsFor: (id: SessionId) => RealmWords;
   /**
    * Whether *this character* wants a lost connection dialled back.
    *
@@ -427,6 +423,11 @@ export class SessionHost {
             this.options.publishRoster();
           }
         },
+        // Its own push (todo 730), recorded as the character is.
+        players: (registry) => {
+          debug.players(registry);
+          this.options.toAll(Push.players, { session: id, payload: registry });
+        },
         walk: (progress) => this.options.toAll(Push.walk, { session: id, payload: progress }),
         // Where a walk was headed. Nothing is pushed to a window: the palette
         // asks for the recent list when somebody types, so a record kept on
@@ -481,27 +482,28 @@ export class SessionHost {
         questRun: (progress) =>
           this.options.toAll(Push.questRun, { session: id, payload: progress }),
         command: (command, source) => {
-          // Already through `SessionManager.reportable`, which is the one place
+          // Already through `Publisher.reportable`, which is the one place
           // this client redacts a password. Both records take the same value.
           slot.capture?.out(command, source);
           debug.out(command, source);
         }
       },
-      this.options.worldFor(id),
-      config.automation,
-      config.connection.login,
-      this.options.loreFor(id),
-      this.options.memoryFor(id),
-      this.options.fightsFor(id),
-      this.options.playersFor(id),
-      this.options.spellLoreFor?.(id) ?? NO_SPELL_LORE,
-      this.options.findsFor?.(id),
-      this.options.sentences?.() ?? NO_SHIPPED_SENTENCES,
-      config.connection.locate
+      {
+        world: this.options.worldFor(id),
+        automation: config.automation,
+        login: config.connection.login,
+        lore: this.options.loreFor(id),
+        memory: this.options.memoryFor(id),
+        fights: this.options.fightsFor(id),
+        players: this.options.playersFor(id),
+        spellLore: this.options.spellLoreFor?.(id),
+        finds: this.options.findsFor?.(id),
+        sentences: this.options.sentences?.(),
+        words: () => this.options.wordsFor(id)
+      }
     );
 
     manager.configureInternal(this.options.internal());
-    manager.configureRealm(this.realmFor(id, config));
     const slot: SessionSlot = {
       id,
       manager,
@@ -613,25 +615,11 @@ export class SessionHost {
    * Each session asks for its own, because two characters can now disagree
    * about what a rule set or a vitals threshold should be.
    */
-  /** What a session is told about its realm: the imported tables and the coins' names. */
-  private realmFor(id: SessionId, config: AppConfig): RealmData {
-    return {
-      ...(this.options.realmTablesFor?.(id) ?? NO_REALM_TABLES),
-      coins: config.connection.coins
-    };
-  }
-
   reconfigure(): void {
     for (const slot of this.slots.values()) {
       const config = this.options.configFor(slot.id);
-      slot.manager.configure(
-        config.automation,
-        config.connection.login,
-        config.ui.rewrites,
-        config.connection.locate
-      );
+      slot.manager.configure(config.automation, config.connection.login, config.ui.rewrites);
       slot.manager.configureInternal(this.options.internal());
-      slot.manager.configureRealm(this.realmFor(slot.id, config));
       slot.backscroll.setLimit(config.terminal.scrollback);
     }
   }

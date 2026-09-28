@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EMPTY_CHARACTER,
-  joinedTheParty,
   membersBelow,
+  joinedTheParty,
   ratio,
   vitalLevel,
   type CharacterState,
@@ -112,12 +112,9 @@ describe('joinedTheParty', () => {
   });
 });
 
-/*
- * MegaMUD's Wait For Party Members (2026-09-24): who, of the party this
- * character leads, is under the line on the listing.
- */
+/* Todo 831: whom a leader waits for. */
 describe('membersBelow', () => {
-  const row = (name: string, health: number | null, invited = false): PartyMember => ({
+  const member = (name: string, health: number | null, invited = false) => ({
     name,
     className: null,
     health,
@@ -127,28 +124,33 @@ describe('membersBelow', () => {
     invited,
     vitals: null
   });
-  const leading = (following: string | null = null): CharacterState => ({
-    ...EMPTY_CHARACTER,
-    name: 'Skinny',
-    party: {
-      ...EMPTY_CHARACTER.party,
-      following,
-      members: [
-        row('Skinny', 0.1),
-        row('Healbot', 0.4),
-        row('Fatty', 0.2),
-        row('Jack', 0.1, true),
-        row('Quiet', null)
-      ]
-    }
-  });
+  const party = (members: ReturnType<typeof member>[], here: string[]): CharacterState => {
+    const state = structuredClone(EMPTY_CHARACTER);
+    return {
+      ...state,
+      name: 'Vaelor',
+      party: { ...state.party, members },
+      room: {
+        ...state.room,
+        occupants: here.map((name) => ({ ...state.room.occupants[0]!, name }))
+      }
+    } as CharacterState;
+  };
 
-  it('names real members under the line, lowest first', () => {
-    expect(membersBelow(leading(), 0.5).map((member) => member.name)).toEqual(['Fatty', 'Healbot']);
-  });
-
-  it('names nobody when following, or when the line is off', () => {
-    expect(membersBelow(leading('Fatty'), 0.5)).toEqual([]);
-    expect(membersBelow(leading(), 0)).toEqual([]);
+  it('names members here under the line, and nobody else', () => {
+    const state = party(
+      [
+        member('Vaelor', 0.1),
+        member('Soul', 0.3),
+        member('Yang', 0.9),
+        member('Festus', 0.2),
+        member('Rend', 0.1, true),
+        member('Death', null)
+      ],
+      ['Vaelor', 'Soul', 'Yang', 'Rend', 'Death']
+    );
+    // Festus walked out; Rend was only invited; Death's health is unstated.
+    expect(membersBelow(state, 0.5)).toEqual(['Soul']);
+    expect(membersBelow(state, 0)).toEqual([]);
   });
 });

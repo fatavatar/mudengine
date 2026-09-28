@@ -301,13 +301,15 @@ const TUNING_DEFAULTS = {
      */
     procWindowMs: 1000,
     /**
-     * How long an attack stays owed a `*Combat Engaged*`. The server answers
-     * in tens of milliseconds even behind a burst (2026-09-22: four commands
-     * and a heal, all answered inside 90ms), so this only bounds an attack
-     * nothing ever answered — which must not bind the engagement some later
-     * attack causes.
+     * How long an attack stays owed a `*Combat Engaged*` (`OwedAttacks`, todos
+     * 802 and 763): the backstop for a refused attack no later echo retires.
+     * **Measured** over 105,052 recorded engagements, scored by the first blow
+     * this character landed after each (94,904 have one): with the echo
+     * retiring, 28 bound wrongly from 1 s to 4 s and 29 from 5 s, while the
+     * unbound fell 79, 41, 33, 23, 20, 16 at 1, 1.5, 2, 3, 4, 5 s; without an
+     * end, 172 wrong. The longest before the wrong ones rise.
      */
-    engageBindMs: 3000,
+    engageBindMs: 4000,
     /** Remembered attackers in one fight. The names matter, not the count. */
     maxAttackers: 12,
     /** Monsters tracked in one fight. The oldest ledger is dropped. */
@@ -405,6 +407,16 @@ const TUNING_DEFAULTS = {
      */
     abandonedLineMs: 20_000,
     /**
+     * How long an `st` or `i` sent on entering the realm waits for its answer
+     * before it is asked again (todo 835), health staying unknown all session
+     * otherwise. The same wait as `abandonedLineMs`, the longest the queue
+     * itself holds a command for the player; once any answer has come back
+     * nothing is asked again.
+     */
+    unreadRetryMs: 20_000,
+    /** How many times it is asked again before the client gives up and says so. */
+    unreadRetries: 3,
+    /**
      * How long a command the server threw away waits before it is sent again.
      *
      * `You fumble in confusion!` is `ActionFigure.CheckConfusion` discarding
@@ -441,15 +453,6 @@ const TUNING_DEFAULTS = {
      */
     rosterAskMs: 60_000,
     /**
-     * How long a required fact the entry probe asked for may go unread before
-     * it is asked again (`REQUIRED` in `src/shared/staleness.ts`: the sheet
-     * and the pack). skinny entered the realm on the ground, the `st` never
-     * went out, and he walked a route at 17% with every health figure reading
-     * *unknown, so not low* (2026-09-25). Long enough for an answer on a busy
-     * realm; one `st` and one `i` a half minute is what an unread sheet costs.
-     */
-    unreadRetryMs: 30_000,
-    /**
      * The floor between two looks at other players.
      *
      * A room that fills up should not spend six commands at once on something
@@ -481,6 +484,13 @@ const TUNING_DEFAULTS = {
      */
     roundMs: 100,
     /**
+     * The quiet that separates two rounds' blows (`RoundBeat`). Measured
+     * 2026-09-26 over 120 recorded sessions: gaps inside one round are under
+     * 250 ms in 99% of cases and at most 1.5 s, and gaps between rounds are
+     * 2.5 s at the least and 5 s typically.
+     */
+    roundGapMs: 2000,
+    /**
      * The shortest gap between two attempts to open a fight on the same thing.
      * Not pacing — pacing comes from the prompt — but a floor on *asking*: an
      * attack refused for a reason this client cannot see leaves the room
@@ -488,24 +498,10 @@ const TUNING_DEFAULTS = {
      */
     engageCooldownMs: 4000,
     /**
-     * How long after a monster dies the room is read again (an Enter), so
-     * what it dropped is seen and a wanted item picked up (2026-09-23). A
-     * pause rather than at once: the death sentence and the experience line
-     * are two lines for one kill and collapse into one read, and the drop
-     * lines land before it.
+     * How long an arrival sentence stays pending its own state change. Short,
+     * because what it bounds is the case where the change never comes.
      */
-    lookAfterKillMs: 400,
-    /**
-     * How long a room re-read owed after a monster came, went or died holds
-     * walking and resting still, when its answer never comes.
-     */
-    roomOwedMs: 3000,
-    /**
-     * How long a room-spell fight waits, after the death that took it under
-     * `areaMinMobs`, before switching to the single-target spell: the rest of
-     * the burst's kills and the Enter's room listing are in by then.
-     */
-    areaSettleMs: 800,
+    arrivalWindowMs: 2000,
     /**
      * How long a typed `break` stands auto-combat down. The stand-down ends
      * early when the player attacks or the room changes; this is the backstop
@@ -569,16 +565,22 @@ const TUNING_DEFAULTS = {
      */
     deathOverRounds: 5,
     /**
-     * The room's fight, run (`simulateFight`): how many times, how long a
-     * fight may run before it is called, and the shares of fights survived
-     * that read as safe and as merely risky — under `riskyAbove` is deadly.
-     * Three hundred runs of a long fight are a millisecond or two on the
-     * socket's thread; the figures move by a point or two between seeds.
+     * The fight, run (`simulateFight`): how many times, how long a fight may
+     * run before it is called, and the shares of fights survived that must be
+     * exceeded to read as safe (green) and as merely risky (yellow); the rest
+     * is deadly (red). Todo 03 set them: over 60% is green, 25% or less is
+     * almost certainly not survivable. Three hundred runs are 3 to 6ms; the
+     * figures move a point or two between seeds.
      */
     survivalTrials: 300,
     survivalRoundCap: 120,
-    survivalSafeAbove: 0.95,
-    survivalRiskyAbove: 0.6
+    survivalSafeAbove: 0.6,
+    survivalRiskyAbove: 0.25,
+    /**
+     * How long the odds book (`OddsBook`) runs fights for before it hands the
+     * socket's thread back. One fight is 3 to 6ms, so a slice holds one or two.
+     */
+    survivalSliceMs: 8
   },
   /** Casting on the character's behalf — `AutoHeal`, `Cures`, `Blessings`. */
   spells: {
@@ -599,6 +601,18 @@ const TUNING_DEFAULTS = {
      * client asks again if it is still low.
      */
     healRequestMs: 10_000,
+    /**
+     * How steeply a low bar outweighs a high one when a party-wide heal is
+     * weighed against a single heal (`planHeal`, todo 05): a point mended is
+     * worth `(1 - share) ^ healUrgency`. At 2, a point mended at 35% is worth
+     * about ten mended at 80%.
+     */
+    healUrgency: 2,
+    /**
+     * A heal whose weighted worth is within this share of the best is as
+     * good, and the cheapest of those is cast.
+     */
+    healNearEnough: 0.05,
     /** How long a cure proposal stays worth sending. */
     cureExpiresMs: 3000,
     /** How often the blessing maintainer looks at what has lapsed. */
@@ -638,33 +652,6 @@ const TUNING_DEFAULTS = {
      * or a potion prints much later.
      */
     onsetWindowMs: 3000,
-    /**
-     * How long a cast the server did not confirm by name keeps its burst open.
-     * Only the command named the spell (`c undd`), and the burst may print the
-     * cast's own chatter before the effect's sentence (`The undead skin builds
-     * on your body…`, then `You are covered in a layer of undead skin.`), so
-     * the last unread line of it is the onset: learned once a line arrives
-     * this long after it.
-     */
-    onsetSettleMs: 500,
-    /**
-     * The quiet that separates two rounds' blows. The server prints a round
-     * as one burst on its tick, five seconds apart on Paramud; the first blow
-     * after this long is a new round, which reopens the one heal, blessing or
-     * cure a round allows (`CastRound`).
-     */
-    roundGapMs: 1500,
-    /**
-     * How long a round's cast holds the gate when no round is seen to begin
-     * — a fight whose rounds print nothing — before the next may go anyway.
-     */
-    castRoundMs: 6000,
-    /**
-     * How soon after a heal, blessing or cure went out a `You have already
-     * cast a spell this round!` is taken as its answer — and the cast as
-     * failed, to go again next round.
-     */
-    refusedWindowMs: 2000,
     /**
      * How long an unread sentence is kept as a possible ending for the buffs
      * whose ending the client does not know, waiting for an `st` sheet to say
@@ -706,7 +693,13 @@ const TUNING_DEFAULTS = {
      * effect, and the confirmed verdict is what *clears* a condition — the
      * reassuring direction, which wants the higher bar.
      */
-    effectCauseMs: 5000
+    effectCauseMs: 5000,
+    /**
+     * How long past a round (`hunting.roundSeconds`) a cast holds the next
+     * one when no blow says a round began: out of a fight, where the room's
+     * tick prints nothing.
+     */
+    castSlackMs: 1000
   },
   /** Drinking on the character's behalf — `Potions`. */
   potions: {
@@ -1053,30 +1046,6 @@ const TUNING_DEFAULTS = {
     /** How long a proposal stays worth sending. A timed command is not urgent. */
     expiresMs: 10_000
   },
-  /** A realm's message table acted on — `MessageTriggers` and the session's actions. */
-  messages: {
-    /**
-     * The least time between two responses from one row. MegaMUD has none;
-     * this is for the row a player writes that the realm answers with its own
-     * sentence, where a response to the answer would be a command a second.
-     */
-    responseGapMs: 1_000,
-    /**
-     * How long an effect is held with no ending heard — a wear-off missed
-     * while the character was elsewhere, an ending typed wrong. MegaMUD holds
-     * one for ever; ten minutes is its own ceiling for a blessing it has not
-     * seen again, and no condition in its shipped table lasts that long.
-     */
-    effectCeilingMs: 600_000,
-    /**
-     * How many times running one refused command is put back for a message's
-     * *last action failed*. A fear that lasts a minute would otherwise be a
-     * resend a second for that minute.
-     */
-    retries: 3,
-    /** How long a message's *don't rest, run* keeps a room from being rested in. */
-    noRestMs: 60_000
-  },
   /** Walking a planned route — `Walker`. */
   walk: {
     /** How long one hold lasts before the walk tries the step again. */
@@ -1202,10 +1171,23 @@ const TUNING_DEFAULTS = {
      * How long the item errand waits after saying the phrase that summons a
      * monster which drops the item (todo 806) — `touch statue`, and the statue
      * has to die. A summons is a fight before it is an item, so minutes; past
-     * it the errand says nothing came of it and walks nowhere. A handover is
-     * bounded by its pack listing instead (`PackAfter`).
+     * it the errand says nothing came of it and walks nowhere. A handover's
+     * own wait is `handoverDelayMs`.
      */
     errandAskMs: 180_000,
+    /**
+     * How late a script's `giveitem` can land after its phrase, which bounds
+     * how long a handover's own listing is asked again for (todo 765): the
+     * longest `adddelay` before a `giveitem` in GreaterMUD's official
+     * Textblocks, `mine` (block 2622), of 1,684 `giveitem` lines with their
+     * `text` chains followed; five wait two seconds and the rest none. The
+     * server holds a listing asked meanwhile behind the delay
+     * (`ProcessCommandQueue` waits on the current command), so on GreaterMUD
+     * the first answer is already the pack after it: this is the margin for
+     * a server whose order is unmeasured. Past it, the item may be a quest
+     * flag (todo 814).
+     */
+    handoverDelayMs: 10_000,
     /**
      * How long a walk stands still for a condition before spending one step
      * to find out whether it is over.
@@ -1373,7 +1355,7 @@ const TUNING_DEFAULTS = {
      * room, rather than only after a search that succeeded.
      *
      * A found exit joins the room's own `Obvious exits:` line, and that line is
-     * what `Walker.mustSearchFirst` reads to decide the exit is there — but the
+     * what `Barriers.mustSearchFirst` reads to decide the exit is there — but the
      * server prints `You found an exit to the south!` and **does not reprint
      * the room**. So the walk went on searching a room whose exit it had
      * already found, reported off the wire as todo 03: eleven `search s`, seven
@@ -1388,7 +1370,7 @@ const TUNING_DEFAULTS = {
     searchRecheckEvery: 3,
     /**
      * How many rounds of levers one action-gated exit is worth — format 23's
-     * other kind of hidden exit (`Walker.pullLevers`).
+     * other kind of hidden exit (`Levers.pullLevers`).
      *
      * Counted where a search is paced, and the difference is what the data
      * says: the realm names the exact phrase that opens this one, so a couple
@@ -1613,6 +1595,21 @@ const TUNING_DEFAULTS = {
      */
     rewriteHoldMs: 2000,
     /**
+     * How long a Goto or a Loop pressed in an unplaced room waits for the
+     * locate word's answer before it plans anyway, and is refused as it always
+     * was (todo 812, `Locating`). Derived, not measured for `rm` itself: the
+     * probe can queue behind the three commands the pacing window lets out,
+     * and one movement round measured 1,239ms, so three rounds and a margin.
+     */
+    locateResolveMs: 4000,
+    /**
+     * How long the locate ask (`Claims.askWhereIAm`) is worth sending while it
+     * waits in the queue, for whichever of its askers raised it — a lost lap,
+     * a scattered walk, a Goto, the Room card (todo 762). Past it the question
+     * is stale: a room has arrived or the asker has stopped waiting.
+     */
+    locateExpiresMs: 10_000,
+    /**
      * Records the debug window keeps, and therefore how far back a bug report
      * reaches.
      *
@@ -1639,24 +1636,6 @@ const TUNING_DEFAULTS = {
     retreatPatienceMs: 20_000,
     /** How long a `safe-haven` retreat waits for the escape move to land. */
     retreatSettleMs: 5_000,
-    /**
-     * How long picking a Goto destination or pressing play on a Loop waits
-     * for an ambiguous room to resolve before planning from it anyway.
-     *
-     * A room the client cannot place cannot be routed from — `planFromHere`
-     * already refuses outright rather than guess — and until now that refusal
-     * was the whole of it: the player had to notice the ambiguous badge, press
-     * the Room card's own locate button, and pick the destination again. This
-     * is that button, pressed on the player's behalf the moment a plan needs
-     * the room it does not have, so the ordinary case is a plan that goes out
-     * a beat later rather than a refusal that sends the player back to fix it
-     * by hand. Long enough for a round trip on a slow board; short enough that
-     * a realm with nothing to ask (`locate: none`, or a connection that has
-     * already learned the configured word does not work) is not a wait for
-     * nothing — `SessionManager.ensureLocated` returns immediately in both of
-     * those cases rather than counting down this figure at all.
-     */
-    locateResolveMs: 4_000,
     /**
      * Minimum gap between decision-trace publishes. The queue changes several
      * times a second in combat and every change interests a diagnostics card
@@ -1814,6 +1793,15 @@ const TUNING_DEFAULTS = {
     /** Ceiling on placed rooms, so a dense area cannot produce a vast grid. */
     mapCells: 200,
     /**
+     * How the Map card's route preview gathers stretches onto one page: up to
+     * `routePageStretches` of them, while they walk `routePageSteps` flat
+     * steps or fewer between them. A way down five times, or a few rooms
+     * either side of a manhole, then reads as one page, drawn floor above
+     * floor. A stretch longer than the budget has a page to itself.
+     */
+    routePageStretches: 6,
+    routePageSteps: 12,
+    /**
      * What a barrier the character cannot force costs to route through.
      *
      * Priced as a wall that can still be walked through when there is no other
@@ -1947,20 +1935,20 @@ const TUNING_DEFAULTS = {
      */
     anotherWayLonger: 0.5,
     /**
-     * The most the walk to a lever in another room may cost each way, for
-     * the router to plan it (`WorldGraph.leverErrand`). The Grand Stair's
-     * lever is two rooms and a searched wall from its door, 28 each way; a
-     * plain room is 1 and a search 26. Past this the lever is left to the
-     * walker, which fetches it when the door refuses.
-     */
-    leverDetourCost: 60,
-    /**
      * How many times the walk to the nearest place a key is had is counted
      * when a way through its door is weighed against the way round
      * (`Route.unlocks`): there and back. A drop is a fight and a chance on
      * top, so the figure is a floor under the errand, not its cost.
      */
     keyFetchTrips: 2,
+    /**
+     * The most a walk to a door's lever in another room and back may cost
+     * before the door is priced as the wall it was (todo 837). The Grand
+     * Stair door's detour to 7/152 prices at about 57, with a hidden exit and
+     * a lair on the way; this allows one several times that and bars a walk
+     * across the realm to open one door.
+     */
+    leverDetourCost: 500,
     /**
      * How many of a consumable a quest's plan buys against a room spell on
      * the way, where the realm says using one stops the spell.
@@ -2048,7 +2036,7 @@ const TUNING_DEFAULTS = {
     errandPlaces: 3,
     /**
      * How many rooms one of the errand solver's sweeps may settle before it
-     * gives that origin up (`WorldGraph.sweepTo`).
+     * gives that origin up (`Router.sweepTo`).
      *
      * `scatterSweepRooms`' bound, one solve across, and for its reason: the
      * sweep stops on its own the moment every room it was asked about is
@@ -2060,7 +2048,7 @@ const TUNING_DEFAULTS = {
     errandSweepRooms: 60_000,
     /**
      * How many rooms one backward sweep of the scatter solve may settle before
-     * it gives that figure up (`WorldGraph.sweepBack`).
+     * it gives that figure up (`Router.sweepBack`).
      *
      * The sweep stops on its own the moment every room it was asked about is
      * settled, and a scatter's landings sit inside the maze the scatter
@@ -2088,7 +2076,7 @@ const TUNING_DEFAULTS = {
     scatterTolerance: 0.0001,
     /**
      * How many destinations' *move* figures are kept before the lot is thrown
-     * away (`WorldGraph.scatterMoves`).
+     * away (`Router.scatterMoves`).
      *
      * The figure a reader is shown depends on the destination alone, never on
      * the character, so it is worth keeping across a session — and a
@@ -2548,7 +2536,7 @@ export interface InternalConfig {
 
 export const DEFAULT_INTERNAL: InternalConfig = {
   terminal: {
-    quiet: { enabled: true, commands: ['rm', 'sys', 'look', 'pro', 'set'] },
+    quiet: { enabled: true, commands: ['rm', 'look', 'pro', 'set'] },
     enrich: true
   },
   palette: {

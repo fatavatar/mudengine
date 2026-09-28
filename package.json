@@ -1,6 +1,6 @@
 {
   "name": "mudengine",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "description": "Modern cross-platform client, terminal and reactive automation engine for MajorMUD / GreaterMUD / Paradigm",
   "author": "Raymond Bennett <raymond.bennett@gmail.com>",
   "license": "MIT",
@@ -50,11 +50,11 @@
     "dist:linux": "npm run check:secrets && npm run build && electron-builder --linux && npm run check:secrets",
     "dist:win": "npm run check:secrets && npm run build && electron-builder --win && npm run check:secrets",
     "dist:mac": "npm run check:secrets && npm run build && electron-builder --mac && npm run check:secrets",
-    "smoke": "npm run build && node scripts/smoke.mjs",
+    "smoke": "npm run build && node --import ./scripts/lib/register.mjs scripts/smoke.mjs",
     "check:live": "npm run build && node --import ./scripts/lib/register.mjs scripts/live-check.mjs",
     "check:secrets": "node --import ./scripts/lib/register.mjs scripts/check-secrets.mjs",
-    "check:first-run": "npm run build && node scripts/first-run.mjs",
-    "profile:ui": "electron-vite build --sourcemap && node scripts/profile-ui.mjs",
+    "check:first-run": "npm run build && node --import ./scripts/lib/register.mjs scripts/first-run.mjs",
+    "profile:ui": "electron-vite build --sourcemap && node --import ./scripts/lib/register.mjs scripts/profile-ui.mjs",
     "soak": "node --import ./scripts/lib/register.mjs scripts/soak.mjs",
     "soak:report": "node scripts/soak-report.mjs",
     "probe:naws": "node --import ./scripts/lib/register.mjs scripts/naws-probe.mjs",
@@ -77,6 +77,7 @@
     "probe:megamud": "node --import ./scripts/lib/register.mjs scripts/megamud-probe.mjs",
     "probe:spellbook": "node --import ./scripts/lib/register.mjs scripts/spellbook-probe.mjs",
     "probe:statall": "node --import ./scripts/lib/register.mjs scripts/statall-probe.mjs",
+    "probe:goto": "node --import ./scripts/lib/register.mjs scripts/goto-probe.mjs",
     "probe:signal": "node scripts/signal-probe.mjs"
   },
   "build": {

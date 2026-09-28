@@ -37,6 +37,17 @@ import { tuning } from '../app/tuning';
 
 export { PRIORITY, type Priority, type QueueSnapshot };
 
+/**
+ * Why `offer` took nothing, gate by gate in the order it asks: a screen that
+ * is not a command prompt, no socket, automation switched off, a deadline
+ * already past, a word the realm does not have. A proposer that must say why
+ * nothing went out reads this rather than guessing (todo 767).
+ */
+export type QueueRefusal = 'held' | 'offline' | 'switched-off' | 'expired' | 'unavailable';
+
+/** What became of an intent offered: queued, folded into the same intent already waiting, or refused. */
+export type Offered = 'queued' | 'joined' | QueueRefusal;
+
 export interface Intent {
   command: string;
   priority: Priority;
@@ -75,16 +86,6 @@ export interface Intent {
   /** Free-text note, for the decision trace. */
   reason?: string;
   /**
-   * The earliest this may go out.
-   *
-   * For a resend after the server threw a command away (`resendLast`), and
-   * for a message response that says to wait (`~` in MegaMUD's syntax). The
-   * queue already skips an intent that is not due and wakes for it, so a
-   * pause is a time on the intent rather than a timer somewhere else that
-   * would have to be cancelled when the session is.
-   */
-  notBefore?: number;
-  /**
    * This command carries a credential and must never be written down.
    *
    * On the intent rather than on a session latch because the latch is armed
@@ -95,7 +96,7 @@ export interface Intent {
    * and the password went down verbatim behind it. A flag on the intent
    * travels with the command it is about, so nothing can come between them.
    *
-   * `SessionManager.reportable` is still the one choke point; this only tells
+   * `Publisher.reportable` is still the one choke point; this only tells
    * it the answer without asking it to guess.
    */
   secret?: boolean;
@@ -140,12 +141,16 @@ export interface Intent {
 interface Queued extends Intent {
   seq: number;
   enqueuedAt: number;
-  /*
-   * `notBefore` is on `Intent`. `drain` **skips** an intent that is not due
-   * rather than waiting on it: an escape must never queue behind a walk step
-   * that is serving out a confusion delay, and blocking the whole queue on
-   * the head is exactly how that would happen.
+  /**
+   * The earliest this may go out, for an intent put back after the server
+   * threw it away (`resendLast`). Absent on everything else.
+   *
+   * `drain` **skips** an intent that is not due rather than waiting on it: an
+   * escape must never queue behind a walk step that is serving out a
+   * confusion delay, and blocking the whole queue on the head is exactly how
+   * that would happen.
    */
+  notBefore?: number;
 }
 
 export interface QueueEvents {
@@ -319,18 +324,24 @@ export class CommandQueue {
 
   /**
    * Offers an intent. Returns false when it was dropped — disabled, a
-   * duplicate of something already queued, or past its expiry.
+   * duplicate of something already queued, or past its expiry. `offer` says
+   * which.
    */
   enqueue(intent: Intent): boolean {
+    return this.offer(intent) === 'queued';
+  }
+
+  /** Offers an intent, and says what became of it. See `Offered`. */
+  offer(intent: Intent): Offered {
     // Ahead of the `user` exemption every other gate here makes: a person's
     // toolbar press is a command for the realm too, and the realm is not what
     // is listening.
-    if (this.held !== null) return false;
-    if (this.events.connected?.() === false) return false;
+    if (this.held !== null) return 'held';
+    if (this.events.connected?.() === false) return 'offline';
     if (!this.config.enabled && intent.priority !== 'user' && intent.keepsLink !== true) {
-      return false;
+      return 'switched-off';
     }
-    if (intent.expiresAt !== undefined && intent.expiresAt <= Date.now()) return false;
+    if (intent.expiresAt !== undefined && intent.expiresAt <= Date.now()) return 'expired';
     /*
      * A word this realm does not have. Refused rather than sent, and said out
      * loud by whoever answered — a safety feature that silently declines is
@@ -338,7 +349,7 @@ export class CommandQueue {
      * broadcasting a command into a room full of people*.
      */
     if (intent.priority !== 'user' && this.events.unavailable?.(intent.command) === true) {
-      return false;
+      return 'unavailable';
     }
 
     if (intent.coalesceKey !== undefined) {
@@ -359,24 +370,23 @@ export class CommandQueue {
           else existing.expiresAt = Math.max(existing.expiresAt, intent.expiresAt);
         }
         /*
-         * And every asker hears it go. One request is one command, but two
-         * modules may be waiting on it — a room read the session holds a
-         * walk for, folded into the one auto-combat asked for a round ago —
-         * and a memory counted in `onSent` is only true if `onSent` runs.
+         * And the proposer is told when it goes (todo 833): the latest
+         * proposal speaks for the intent, as it does for the expiry, so its
+         * `onSent` replaces the waiting one and runs once for one send. Only
+         * for the same command: a joiner whose own command is not the one
+         * waiting is told nothing, since that command is not what goes out.
          */
-        const also = intent.onSent;
-        if (also !== undefined) {
-          const first = existing.onSent;
-          existing.onSent = first === undefined ? also : () => (first(), also());
+        if (intent.onSent !== undefined && intent.command === existing.command) {
+          existing.onSent = intent.onSent;
         }
-        return false;
+        return 'joined';
       }
     }
 
     this.seq += 1;
     this.pending.push({ ...intent, seq: this.seq, enqueuedAt: Date.now() });
     this.pump();
-    return true;
+    return 'queued';
   }
 
   /**
@@ -604,9 +614,8 @@ export class CommandQueue {
     this.pending.sort((a, b) => PRIORITY[b.priority] - PRIORITY[a.priority] || a.seq - b.seq);
 
     /*
-     * The first intent that is *due*. A resend after a fumble (`resendLast`)
-     * and a message response's `~` pause are the intents that can be not
-     * due, and they are skipped rather than waited on: the server
+     * The first intent that is *due*. Only a resend after a fumble is ever not
+     * due (`resendLast`), and it is skipped rather than waited on: the server
      * holds the character for a second after throwing a command away, and an
      * escape queued behind that second would be an escape that arrives after
      * the fight. A wake is scheduled for the soonest one held back so nothing

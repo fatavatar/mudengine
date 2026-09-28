@@ -13,9 +13,9 @@
  * to reset two fields by hand are one `discard()` now, and the shape a
  * completed room takes is built in one place.
  *
- * Resolving the completed room against the realm data stays with the tracker:
- * that asks the realm graph, the expectation queue and the previous room,
- * which are the tracker's to hold.
+ * Resolving the completed room against the realm data is `RoomTracker`'s
+ * (`room.ts`), which owns this draft: that asks the realm graph, the
+ * expectation queue and the previous room, which are its to be handed.
  */
 import { emptyRoom, type Room, type RoomOccupant } from '../../shared/character';
 import type { CurrencyEntity, ExitEntity, ItemEntity } from '../../shared/entities';
@@ -24,16 +24,6 @@ import { tuning } from '../app/tuning';
 export class RoomDraft {
   private draft: Room = emptyRoom();
   private description: string[] = [];
-  private drafting = false;
-
-  /**
-   * Between a room's name and its exits: a line read now is the room's own
-   * prose, whatever frame it happens to fit — `A narrow path leads off to
-   * the east.` is a description, not a monster walking out.
-   */
-  get open(): boolean {
-    return this.drafting;
-  }
 
   /**
    * A name starts a new draft. Anything half-collected belongs to a room we
@@ -42,12 +32,11 @@ export class RoomDraft {
   begin(name: string | null): void {
     this.draft = { ...emptyRoom(), name };
     this.description = [];
-    this.drafting = true;
   }
 
   /**
    * `You notice … here.` — already hydrated, because resolving a name against
-   * the realm asks the world graph, which is the tracker's to hold.
+   * the realm asks the world graph, which is `RoomTracker`'s to hold.
    */
   items(items: ItemEntity[]): void {
     this.draft.items = items;
@@ -89,7 +78,6 @@ export class RoomDraft {
    * resolver refuses is still the room on screen.
    */
   complete(exits: ExitEntity[]): Room {
-    this.drafting = false;
     return {
       ...this.draft,
       description: this.description.length > 0 ? this.description.join(' ') : null,
@@ -105,7 +93,6 @@ export class RoomDraft {
 
   /** The room is done with — completed, superseded, or left behind. */
   discard(): void {
-    this.drafting = false;
     this.draft = emptyRoom();
     this.description = [];
   }

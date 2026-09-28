@@ -48,10 +48,10 @@
  * somebody why their gang was being refused.
  */
 import type { LoopProgress } from '../../shared/loops';
-import { stillFor, type StillReason, type WalkProgress } from '../../shared/walk';
+import type { WalkProgress } from '../../shared/walk';
 import type { Block } from '../../shared/blocks';
-import { gangOnRoster, joinedTheParty, ownGang, type CharacterState } from '../../shared/character';
-import type { AutomationConfig, RemotesConfig } from '../../shared/config';
+import { inAParty, leaderOf, partyMembers, type CharacterState } from '../../shared/character';
+import { stillFor, type AutomationConfig, type RemotesConfig } from '../../shared/config';
 import {
   EXTENDED_REMOTES,
   REMOTES,
@@ -81,16 +81,18 @@ import {
   type RemoteCall,
   type RemoteName,
   type RemoteRefusal,
-  type RemoteEvidence,
   type RemoteReply,
   type RemoteVerdict
 } from '../../shared/remotes';
 import { t } from '../app/i18n';
 import { CLIENT_NAME, CLIENT_VERSION } from '../app/version';
 import { bareName, countedLabel } from '../../shared/items';
-import { playerKey } from '../../shared/players';
+import { playerKey, type PlayerRecord } from '../../shared/players';
 import type { CommandQueue } from './CommandQueue';
 import { tuning } from '../app/tuning';
+import type { SessionModule } from './Module';
+import { AutoJoin, joinIntent } from './AutoJoin';
+import { evidenceAbout, unresolvedClauseOf } from './RemoteEvidence';
 
 /**
  * The standing refusals, spoken to the sender and shown to the player.
@@ -224,6 +226,12 @@ export interface RemoteEvents {
    */
   progress?(): { walk: WalkProgress; loop: LoopProgress };
   /**
+   * What the registry holds about somebody, for the wording of a question
+   * (`ask`). Asked at the moment, as `progress` is: the registry is the
+   * tracker's and is not on the state. Absent or null is nothing known.
+   */
+  peer?(who: string): PlayerRecord | null;
+  /**
    * A party member this character blessed says the spell wore off —
    * `@bless-expired <spell>`, mudengine's own peer extension. Reported to
    * `Blessings`, which recasts on the event instead of waiting out its clock;
@@ -277,9 +285,17 @@ interface Outstanding {
   at: number;
 }
 
-export class Remotes {
-  /** Why the leader has been told `@wait`, until it is told `@ok`. See `onCharacter`. */
-  private waitingFor: StillReason | null = null;
+/** Whether the leader this character follows is resting or meditating, by the party listing. */
+function leaderResting(state: CharacterState): boolean {
+  const doing = leaderOf(state)?.activity?.state;
+  return doing === 'resting' || doing === 'meditating';
+}
+
+export class Remotes implements SessionModule {
+  /** Whether this character was resting at the last state change. See `onCharacter`. */
+  private resting = false;
+  /** Whether this character's own walk stood still for each vital at the last state (`stillFor`). */
+  private readonly still = { health: false, mana: false };
 
   /** Questions sent and not yet answered, by player. See {@link Outstanding}. */
   private readonly asked = new Map<string, Outstanding>();
@@ -290,6 +306,8 @@ export class Remotes {
   private wantsHeal = false;
   /** Whether the character is known to be seen, so a say costs no stealth. */
   private seen = false;
+  /** Answering an invitation as though `@join` had followed it. See `AutoJoin`. */
+  private readonly autoJoin: AutoJoin;
 
   constructor(
     private config: AutomationConfig,
@@ -304,10 +322,13 @@ export class Remotes {
      * both sides of it cannot test it.
      */
     private readonly client: string = CLIENT_NAME
-  ) {}
+  ) {
+    this.autoJoin = new AutoJoin(config, queue, { notice: (message) => events.notice?.(message) });
+  }
 
   configure(config: AutomationConfig): void {
     this.config = config;
+    this.autoJoin.configure(config);
   }
 
   /**
@@ -318,8 +339,8 @@ export class Remotes {
    * is one round out of date in exactly the situation somebody asks.
    */
   onBlock(block: Block, state: CharacterState): void {
-    this.noteRound(block, state);
     if (!this.config.enabled || !this.config.remotes.enabled) return;
+    this.autoJoin.onBlock(block, state);
     const channel = CHANNELS.get(block.type);
     if (channel === undefined) return;
 
@@ -451,8 +472,7 @@ export class Remotes {
      * question: an upgrade is offered only on evidence.
      */
     const better = EXTENDED_REMOTES[name];
-    const upgraded =
-      better !== undefined && state.players[playerKey(who)]?.extendedRemotes === 'yes';
+    const upgraded = better !== undefined && this.events.peer?.(who)?.extendedRemotes === 'yes';
     const wanted = upgraded ? better! : name;
 
     let carried = argument;
@@ -480,9 +500,9 @@ export class Remotes {
    *
    * The fallback path's door, and it has to be a different one from `ask`:
    * what `ask` reads to decide the wording is the registry, and the registry
-   * is written by the very event the fallback raises — from outside this
-   * module, a state push later. Re-entering `ask` there would upgrade the
-   * question again off the state it was refused on, for ever.
+   * is written by the very event the fallback raises — outside this module,
+   * by whoever holds it (`peer`). Re-entering `ask` there would upgrade the
+   * question again for ever on a holder that had not yet written it.
    */
   private send(who: string, name: RemoteName, argument?: string): boolean {
     const body = argument === undefined ? `@${name}` : `@${name} ${argument}`;
@@ -519,15 +539,15 @@ export class Remotes {
     for (const member of state.party.members) {
       if (member.invited) continue;
       if (me !== null && member.name.toLowerCase() === me) continue;
-      // MegaMUD's *Request Party Health*, on unless turned off.
-      if (this.config.party.requestPartyHealth) this.ask(member.name, 'health', state);
+      // MegaMUD's *Request Party Health* (`party.askHealth`, todo 831).
+      if (this.config.party.askHealth) this.ask(member.name, 'health', state);
       /*
        * And which client they run, once, because it decides the wording of
        * every question after this one. Only while nothing has said: the answer
        * is a fact about the player and is kept realm-wide, so a party that
        * re-forms all evening asks nobody twice.
        */
-      if (state.players[playerKey(member.name)]?.client == null) {
+      if (this.events.peer?.(member.name)?.client == null) {
         this.ask(member.name, 'version', state);
       }
     }
@@ -536,19 +556,11 @@ export class Remotes {
   /**
    * Tells the party leader this character has stopped, and when it is ready.
    *
-   * `@wait` and `@ok` are the pacing pair: a follower that has to stop asks
-   * the leader to, and says so again when it can move. Sent on the
+   * `@wait` and `@ok` are the pacing pair: a follower that has to sit down asks
+   * the leader to stop, and says so again when it can move. Sent on the
    * **crossing** rather than on every status line, for the same reason a vitals
-   * alert is: a character recovering for a minute is one message, not one every
+   * alert is: a character resting for a minute is one message, not one every
    * few hundred milliseconds.
-   *
-   * For exactly what would stand this character's own walk still, and until
-   * it would walk on (`stillFor`): held, blind or poisoned as the movement
-   * settings say, a condition the realm stated, health or mana under the
-   * figures the walker and the loop stop at. Never for sitting down
-   * (2026-09-25): a rest kept with a resting leader is the leader's, and skinny
-   * said `@wait` on the step out of one, still reading `(Resting)` after Fatty
-   * had walked off, which sat Fatty — MegaMUD, waiting on it — down again.
    *
    * Only as a *follower*. A party leader that told itself to wait would be
    * talking to nobody, and `party.following` is the field that says which this
@@ -557,66 +569,33 @@ export class Remotes {
   onCharacter(state: CharacterState): void {
     if (this.config.enabled && this.config.remotes.enabled) this.sweep(Date.now());
     this.askForHeal(state);
-    this.askForListing(state);
+    const margin = tuning().loop.resumeMarginWhenUncapped;
+    for (const vital of ['health', 'mana'] as const) {
+      this.still[vital] = stillFor(
+        vital,
+        state.vitals,
+        this.config.health,
+        this.still[vital],
+        margin
+      );
+    }
+    /*
+     * Sitting down, or under the floors a walk of its own stands still at
+     * (`stillFor`, todo 831), in a fight or out of one: the leader waits for a
+     * follower that is hurt, whatever a particular walk would do. Not while the
+     * leader is resting itself: that rest is its own, and `restWithLeader`
+     * keeps the party with it.
+     */
+    const resting =
+      !leaderResting(state) &&
+      (state.vitals.resting || state.vitals.meditating || this.still.health || this.still.mana);
+    const was = this.resting;
+    this.resting = resting;
+    if (was === resting) return;
     if (!this.config.enabled || !this.config.remotes.enabled) return;
     const leader = state.party.following;
-    if (leader === null) {
-      this.waitingFor = null;
-      return;
-    }
-    const margin = tuning().loop.resumeMarginWhenUncapped;
-    const reason = stillFor(state, this.config, this.waitingFor, margin);
-    if (reason === null) {
-      if (this.waitingFor !== null && this.ask(leader, 'ok', state)) this.waitingFor = null;
-    } else if (this.waitingFor !== null) {
-      this.waitingFor = reason;
-    } else if (this.ask(leader, 'wait', state)) {
-      this.waitingFor = reason;
-    }
-  }
-
-  /** When this client last sent the party listing on its own account. */
-  private listedAt = 0;
-
-  /**
-   * MegaMUD's *Par Frequency*: the party listing every `party.parEverySeconds`
-   * in a fight and twice that out of one, while in a party. The listing is
-   * the only place another member's health shows, and `holdForParty` and the
-   * party heals read nothing fresher than the last one. Off at 0, which
-   * leaves the listing to `onPartyChange`. Its own setting, not
-   * `remotes.enabled`: it asks the server, not a player.
-   */
-  private askForListing(state: CharacterState): void {
-    const every = this.config.party.parEverySeconds;
-    if (!this.config.enabled || every <= 0) return;
-    if (state.phase !== 'in-game' || !inAParty(state)) return;
-    const interval = (state.inCombat ? every : every * 2) * 1000;
-    if (Date.now() - this.listedAt < interval) return;
-    this.sendListing(t('automation.remotes.reasonParEvery', { seconds: every }));
-  }
-
-  /**
-   * MegaMUD's *Send PAR after combat round*: a blow in a fight, while in a
-   * party, asks for the listing — once a round, since a round's blows arrive
-   * together and the next round is `spells.castRoundMs` away.
-   */
-  private noteRound(block: Block, state: CharacterState): void {
-    if (!this.config.enabled || !this.config.party.parAfterRound) return;
-    if (!ROUND_BLOWS.has(block.type) || !state.inCombat || !inAParty(state)) return;
-    if (Date.now() - this.listedAt < tuning().spells.castRoundMs / 2) return;
-    this.sendListing(t('automation.remotes.reasonParRound'));
-  }
-
-  private sendListing(reason: string): void {
-    this.queue.enqueue({
-      command: 'party',
-      priority: 'probe',
-      coalesceKey: 'remote:par',
-      onSent: () => {
-        this.listedAt = Date.now();
-      },
-      reason
-    });
+    if (leader === null) return;
+    this.ask(leader, resting ? 'wait' : 'ok', state);
   }
 
   /**
@@ -766,11 +745,14 @@ export class Remotes {
 
   /** Forgotten with the connection: a fresh session has said nothing to anybody. */
   reset(): void {
-    this.waitingFor = null;
+    this.resting = false;
+    this.still.health = false;
+    this.still.mana = false;
     this.asked.clear();
     this.askedForHealAt = null;
     this.wantsHeal = false;
     this.seen = false;
+    this.autoJoin.reset();
   }
 
   /**
@@ -802,26 +784,7 @@ export class Remotes {
       this.events.notice?.(t('automation.remotes.refusedDenied', { from, raw: command.raw }));
       return;
     }
-    /*
-     * A gang grant that could not be evaluated is named, because the two
-     * reasons somebody sees nothing happen are opposite: nothing grants this
-     * command to anybody, or the gang grants it and this client cannot yet
-     * tell whether the asker is in the gang. Saying "not granted" for the
-     * second is how a feature gets reported as broken.
-     */
-    /*
-     * And the party clause beside it, for the same reason in the other
-     * direction: the party grants this command and the asker is not on the
-     * listing. That is a fact one `party` away — somebody who left, somebody
-     * who was only ever invited, or a roster this session never read — and
-     * "not granted" would send the player looking through permissions that
-     * are already right.
-     */
-    const unresolvedClause = verdict.gangUnresolved
-      ? t('automation.remotes.unresolvedGang')
-      : verdict.notInParty
-        ? t('automation.remotes.notInParty')
-        : '';
+    const unresolvedClause = unresolvedClauseOf(verdict);
     this.events.notice?.(
       t('automation.remotes.refusedNotGranted', { from, raw: command.raw, unresolvedClause })
     );
@@ -1135,12 +1098,9 @@ export class Remotes {
         // The leader telling every follower to do something — the same as
         // `@do`, minus the acknowledgement, which no capture shows for it.
         if (command.argument === null) return;
-        // MegaMUD's *Ignore @party If Following*: a leader trusted to help but
-        // not to type. Said, so the refusal is not a silence.
-        if (this.config.party.ignorePartyWhenFollowing && state.party.following !== null) {
-          this.events.notice?.(
-            t('automation.remotes.ignoredParty', { from, command: command.argument })
-          );
+        // MegaMUD's *Ignore @party If Following* (todo 831).
+        if (this.config.party.ignoreParty) {
+          this.events.notice?.(t('automation.remotes.ignoredParty', { from }));
           return;
         }
         this.queue.enqueue({
@@ -1153,12 +1113,9 @@ export class Remotes {
       }
 
       case 'join': {
-        this.queue.enqueue({
-          command: `join ${from}`,
-          priority: 'user',
-          coalesceKey: `remote:join:${from.toLowerCase()}`,
-          reason: t('automation.remotes.reasonJoin', { from })
-        });
+        // The invitation's own `join` is queued or still unanswered.
+        if (this.autoJoin.joining(from)) return;
+        this.queue.enqueue(joinIntent(from, t('automation.remotes.reasonJoin', { from })));
         return;
       }
 
@@ -1313,6 +1270,11 @@ export class Remotes {
          * a request: a follower saying it cannot keep up, and the same follower
          * saying it can again. Reported to whoever is walking; nothing is sent.
          */
+        // MegaMUD's *Ignore @wait If Leading* (todo 831); a hurt member still stops the lap.
+        if (command.name === 'wait' && this.config.party.ignoreWait) {
+          this.events.notice?.(t('automation.remotes.ignoredWait', { from }));
+          return;
+        }
         this.events.pace?.(from, command.name === 'ok');
         this.events.notice?.(
           command.name === 'ok'
@@ -1357,79 +1319,4 @@ export class Remotes {
     }
     this.reply(from, body, prefix);
   }
-}
-
-/** Everybody besides this character who has joined its party, by name. */
-function partyMembers(state: CharacterState): string[] {
-  const me = state.name?.toLowerCase() ?? null;
-  return state.party.members
-    .filter((member) => !member.invited && member.name.toLowerCase() !== me)
-    .map((member) => member.name);
-}
-
-/** A round's blows, either way, which is what `noteRound` reads a round from. */
-const ROUND_BLOWS: ReadonlySet<string> = new Set([
-  'user-hits',
-  'user-misses',
-  'mob-hits',
-  'mob-misses'
-]);
-
-/**
- * In a party: somebody has joined, or this character follows somebody. The
- * second on its own is what a follower knows before any listing — `join`
- * says whom it follows and nothing about who else is there — and a follower
- * that waited for a listing to count itself in a party never asked for one.
- */
-function inAParty(state: CharacterState): boolean {
-  return state.party.following !== null || partyMembers(state).length > 0;
-}
-
-/**
- * What the state can say about the asker, for `judgeRemote`.
- *
- * Two facts: the gang, and the party.
- *
- * The party used to be here as a **ground** — a reason somebody was allowed
- * every remote — and that is what was wrong with it: a party is a group anybody
- * can invite anybody into, so it was a permission anybody could grant
- * themselves by sending an invitation. It is back as a *list* of named commands
- * (2026-09-02), which is a different object; the note on `judgeRemote` has the
- * argument in full. What is read here is the half that keeps it honest:
- * **membership, never an invitation**. `invited` marks an offer nobody has
- * accepted, and a row carrying it is not a member — otherwise `invite` would be
- * the gesture that hands somebody the list.
- *
- * There is no *nobody has said* here, unlike the gang. The party roster is this
- * client's own maintained listing — `party` establishes it, and the `joins` and
- * `leaves` sentences the server volunteers keep it true — so a name that is not
- * on it is a name that is not in the party. A refusal on this ground says so in
- * those words (`notInParty`) rather than calling the asker a stranger, because
- * `party` is one command away from settling it.
- *
- * The gang is read off the **realm roster**, which is the one place the wire
- * states membership: a `who` row
- * names a gang behind its title, and a `look <player>` names it in
- * parentheses — this character's own row included, which is what makes a
- * comparison possible at all. The gangpath itself is deliberately not
- * evidence: this character's own `bg` comes back as a third-person line naming
- * itself, and an admin can ghost one.
- *
- * `null` is *nobody has said*, and it is kept apart from *no gang*: a row a
- * listing wrote in full and left without a gang has none, and a comparison
- * against it is a real `false`; a provisional row, or a name the roster has
- * not listed, is unknown, and `judgeRemote` reports the ground as unresolved
- * rather than refusing in silence. Case-insensitive on both names and the
- * gang, because the server is inconsistent about the first and a gang name is
- * typed by whoever founded it.
- */
-export function evidenceAbout(from: string, state: CharacterState): RemoteEvidence {
-  const own = ownGang(state);
-  const theirs = gangOnRoster(state, from);
-  const inGang =
-    own === undefined || theirs === undefined
-      ? null
-      : own !== null && theirs !== null && own.toLowerCase() === theirs.toLowerCase();
-
-  return { inGang, inParty: joinedTheParty(state, from) };
 }

@@ -14,17 +14,18 @@
  * App-level calls — the options file, the realm data, the log directory — take
  * no session, because they belong to the client rather than to a character.
  */
-import type { MessageImport, MessageTable, MessageTrigger } from './messageTriggers';
-import type { MonsterImport, MonsterRule, MonsterTable } from './monsterRules';
 import type { AutomationSnapshot } from './automation';
 import type { Block } from './blocks';
 import type { LocalMap } from './map';
+import type { RoutePages } from './routeLegs';
 import type { Discovery } from './memory';
 import type { Find } from './finds';
 import type { CharacterIdentity, ResetSignal } from './reset';
 import type { CharacterState } from './character';
+import type { PlayerRegistry } from './players';
 import type { DebugRecord } from './debug';
 import type { GearAction, Wearer } from './gear';
+import type { SlotGear } from './slotGear';
 import type {
   Quest,
   QuestErrand,
@@ -66,9 +67,10 @@ import type {
 } from './config';
 import type { GlobalDraft, LoginStepDraft, ProfileDraft, ServerDraft } from './drafts';
 import type { RemoteGrant, RemoteName } from './remotes';
-import type { CureGates, SpellTargeting } from './spellcraft';
+import type { CureGates, SpellServes, SpellTargeting } from './spellcraft';
 import type { ThemePreference } from './themes';
 import type { ProfileAccent } from './profiles';
+import type { LocateWord } from './locate';
 import type { InternalConfig } from './internal';
 import type { Loop, LoopProgress, LoopScope, ScopedLoop } from './loops';
 import type { WalkProgress } from './walk';
@@ -90,6 +92,7 @@ import type { Visited } from './destinations';
 import type {
   ConnectionState,
   ConnectionTarget,
+  LostEnter,
   StreamChunk,
   StreamLine,
   TelnetEvent,
@@ -213,6 +216,8 @@ export interface AttachSnapshot {
   lines: StreamLine[];
   state: ConnectionState;
   character: CharacterState;
+  /** The registry when the window attached; `Push.players` carries every change after. */
+  players: PlayerRegistry;
   walk: WalkProgress;
   loop: LoopProgress;
   automation: AutomationSnapshot;
@@ -354,21 +359,13 @@ export interface SpellOption {
    * ability rows, carried so a picker can offer only the spells that answer
    * the question it is asking (todo 00).
    *
-   * The three cure fields all drew the whole spellbook before this, so *Cure
+   * The cure fields all drew the whole spellbook before this, so *Cure
    * Poison* offered every spell the character knows and the blindness field
    * only looked filtered because its **gate** happened to close more often.
    * Absent for a realm this build cannot read the columns of, which every
    * reader treats as *offer it anyway*: unknown must never empty a picker.
    */
-  serves?: {
-    hp: boolean;
-    poisoned: boolean;
-    blind: boolean;
-    diseased: boolean;
-    held: boolean;
-    /** A hit that heals the caster: the drain fields offer these. */
-    drains: boolean;
-  };
+  serves?: SpellServes;
 }
 
 export interface ProfileEditable {
@@ -401,6 +398,8 @@ export interface ProfileEditable {
    * vocabulary. See `LoginConfig.steps`.
    */
   login: LoginStepDraft[];
+  /** This character's own locate word, from the file as written; null where it follows its realm. */
+  locate: LocateWord | null;
   /** Resolved, so inherited values show; `penalties` alone is this character's own, null where it inherits. */
   hangUp: {
     enabled: boolean;
@@ -417,8 +416,8 @@ export interface ProfileEditable {
     strategy: RetreatStrategy;
     safeHavenRoom: string;
   };
-  /** Fleeing outright — see `FleeGotoConfig`. Resolved, like the two above. */
-  fleeGoto: { enabled: boolean; belowHealth: number; destination: string };
+  /** Resolved; `command` alone is this character's own, empty where it follows the realm. */
+  fleeGoto: { enabled: boolean; belowHealth: number; command: string };
   /** What to do when a player opens on this character. Resolved, like the two above. */
   pvp: { notifyGang: boolean; action: PvpAction };
   /**
@@ -580,6 +579,8 @@ export const Send = {
   dropMacro: 'session:macro:drop',
   /** Terminal geometry changed; drives Telnet NAWS. */
   resize: 'session:resize',
+  /** A plain Enter this console never sent, written into the capture (todo 00). */
+  lostEnter: 'session:lost-enter',
   /**
    * Whether this window is showing the diagnostics line feed.
    *
@@ -628,6 +629,12 @@ export const Invoke = {
   getCharacter: 'session:get-character',
   /** A* route from where the character is to a chosen room. */
   routeTo: 'world:route',
+  /**
+   * A* route between two rooms named by the reader, neither of them where the
+   * character stands. The Map card's preview: read, never walked, so it asks
+   * for no alternatives.
+   */
+  routeBetween: 'world:route-between',
   /** Walk a planned route. Returns why it could not start, or null. */
   walkRoute: 'walk:start',
   /**
@@ -862,33 +869,6 @@ export const Invoke = {
    * path, or null if the dialog was dismissed.
    */
   chooseRealm: 'settings:choose-realm',
-  /**
-   * One realm's message table, for its settings page. Asked for when the page
-   * shows the realm rather than with the snapshot: six hundred rows per realm
-   * is not what a visit to change a password needs.
-   */
-  loadMessages: 'settings:messages',
-  /**
-   * Replaces one realm's message table with what a MegaMUD `Messages.md`
-   * holds. The **contents** cross, not a path: the file is on the player's
-   * own machine, which in a browser tab is not the machine the client runs
-   * on — the one import here that the viewer's own picker is right for.
-   */
-  importMessages: 'settings:import-messages',
-  /** Writes one realm's whole message table, after an edit on its page. */
-  saveMessages: 'settings:save-messages',
-  /** One realm's monster table (`servers/<id>/monsters.yaml`), by the realm's name. */
-  loadMonsters: 'settings:monsters',
-  /**
-   * Replaces one realm's monster table with what a MegaMUD `Monsters.md`
-   * says. The window decodes the file (`shared/megamudDb.ts`) and the rows
-   * cross, not the bytes: the file is on the player's own machine, for
-   * `importMessages`' reason, and at 700 KB of binary it is most of the web
-   * socket's message cap where the rows it yields are a few dozen kilobytes.
-   */
-  importMonsters: 'settings:import-monsters',
-  /** Writes one realm's whole monster table, after an edit on its page. */
-  saveMonsters: 'settings:save-monsters',
   /** Where to hunt from here: the lairs within reach, priced for this character. */
   huntingGrounds: 'world:hunt',
   trainers: 'world:trainers',
@@ -919,6 +899,8 @@ export const Invoke = {
   localMap: 'world:map',
   /** Everything the realm knows about one room, for a room nobody is in. */
   roomBrief: 'world:room',
+  /** Every item one slot takes that this character can use, best first. */
+  slotGear: 'world:slot',
   wearer: 'world:wearer',
   /**
    * Everything the realm knows about a name — monster, item or spell — for
@@ -942,7 +924,11 @@ export const Invoke = {
   names: 'world:names',
   /** A probe command asked for from a card, sent through the arbiter. */
   ask: 'session:ask',
-  /** *Where am I standing*, in whichever word this realm's own setting names. */
+  /**
+   * The Room card's locate button (todo 811). Its own channel rather than
+   * `ask('rm')`, so main chooses the realm's word (`locate:`, `none` refused
+   * out loud) and it shares the one locate ask's coalesce key.
+   */
   locate: 'session:locate',
   /**
    * A gear button: put the kit back on, put it all on, take it all off, or one
@@ -1017,6 +1003,12 @@ export const Push = {
   block: 'session:block',
   /** Character and room state, on change. */
   character: 'session:character',
+  /**
+   * What is known about the other players, whole, when it changed — never
+   * with the character: the registry grows with the realm (1,200 players cost
+   * 6.75ms to clone, each side, per status line) and moves far less often.
+   */
+  players: 'session:players',
   /** Route-walk progress, on change. */
   walk: 'walk:progress',
   loop: 'loop:progress',
@@ -1105,6 +1097,8 @@ export interface IpcApi {
   /** Drop what is still waiting of the talk box's lines. */
   dropMacro(session: SessionId): void;
   resize(session: SessionId, size: TerminalSize): void;
+  /** A plain Enter this console never sent, for the capture (todo 00). */
+  lostEnter(session: SessionId, report: LostEnter): void;
   /** This window started or stopped showing the diagnostics line feed. */
   diagnostics(on: boolean): void;
   /** This window started or stopped showing the debug view. */
@@ -1128,6 +1122,11 @@ export interface IpcApi {
   saveDebug(session: SessionId): Promise<{ path: string } | { error: string }>;
   getCharacter(session: SessionId): Promise<CharacterState>;
   routeTo(session: SessionId, map: number, room: number): Promise<Route>;
+  /**
+   * A preview route between two rooms, priced for this character, with the
+   * pages the Map card shows it in. See `Invoke.routeBetween`.
+   */
+  routeBetween(session: SessionId, from: RoomId, to: RoomId): Promise<RoutePages>;
   /**
    * Walks the plan the panel is showing.
    *
@@ -1300,18 +1299,6 @@ export interface IpcApi {
   addLoop(scope: LoopScope, owner: string | null, loop: Loop): Promise<string | null>;
   settingsSnapshot(): Promise<SettingsSnapshot>;
   chooseRealm(): Promise<string | null>;
-  /** One realm's message table, by the realm's name. Empty when it has none. */
-  loadMessages(realm: string): Promise<MessageTable>;
-  /** Replaces a realm's table with a `Messages.md`'s, and says what it read. */
-  importMessages(realm: string, fileName: string, text: string): Promise<MessageImport>;
-  /** Resolves to why it refused, or null. */
-  saveMessages(realm: string, triggers: MessageTrigger[]): Promise<string | null>;
-  /** One realm's monster table, by the realm's name. Empty when it has none. */
-  loadMonsters(realm: string): Promise<MonsterTable>;
-  /** Replaces a realm's table with the rows a `Monsters.md` decoded to. */
-  importMonsters(realm: string, fileName: string, monsters: MonsterRule[]): Promise<MonsterImport>;
-  /** Resolves to why it refused, or null. */
-  saveMonsters(realm: string, monsters: MonsterRule[]): Promise<string | null>;
   /*
    * Addressed, like every push: with a realm per character, an unaddressed
    * query would answer from whichever realm happened to be the client's — and a
@@ -1377,6 +1364,12 @@ export interface IpcApi {
    * fifty-seven thousand of them. Null for a room the realm does not hold.
    */
   roomBrief(session: SessionId, map: number, room: number): Promise<RoomBrief | null>;
+  /**
+   * The slot a printed word names (`Head`, `Weapon Hand`), with every item the
+   * realm puts there that this character can use, best first. Null for a word
+   * that names no slot, or a realm with nothing loaded.
+   */
+  slotGear(session: SessionId, slot: string): Promise<SlotGear | null>;
   /**
    * Where this character should hunt: every lair the exits reach from where
    * it stands, priced by the realm's own respawn clock and the same
@@ -1467,19 +1460,7 @@ export interface IpcApi {
   names(session: SessionId): Promise<WorldNames>;
   /** Whether the arbiter took it. */
   ask(session: SessionId, command: string): Promise<boolean>;
-  /**
-   * *Where am I standing*, asked in whichever word this realm's own `locate`
-   * setting names — `rm`, `sys status`, or nothing at all.
-   *
-   * Its own channel rather than `ask`, which is gated to a bare verb of at
-   * most eight lowercase letters: `sys status` has a space in it and is
-   * eleven characters, so that gate would refuse it outright, and the answer
-   * is the same one the gear button found — main decides which word this is,
-   * not the window. Resolves to whether anything was actually asked: a realm
-   * configured for `'none'`, or one whose configured word the wire has
-   * already refused this connection, asks nothing and says so by returning
-   * `false`.
-   */
+  /** Asks the realm where the character stands, in its own word. False is a refusal already said. */
   locate(session: SessionId): Promise<boolean>;
   /** A gear button. Resolves to how many commands were queued. See the channel. */
   gear(session: SessionId, action: GearAction, item?: string): Promise<number>;
@@ -1499,6 +1480,7 @@ export interface IpcApi {
   onDebug(handler: (message: Addressed<DebugRecord>) => void): () => void;
   onBlock(handler: (message: Addressed<Block>) => void): () => void;
   onCharacter(handler: (message: Addressed<CharacterState>) => void): () => void;
+  onPlayers(handler: (message: Addressed<PlayerRegistry>) => void): () => void;
   onWalk(handler: (message: Addressed<WalkProgress>) => void): () => void;
   onLoop(handler: (progress: Addressed<LoopProgress>) => void): () => void;
   onAutomation(handler: (message: Addressed<AutomationSnapshot>) => void): () => void;

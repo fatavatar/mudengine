@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { sourceFiles as sources } from './sources';
+
 /**
  * A pattern built at runtime is compiled at runtime — every time the line
  * that builds it runs.
@@ -17,25 +19,19 @@ import { describe, expect, it } from 'vitest';
  */
 const BUILT_ONCE: Record<string, { count: number; because: string }> = {
   'src/main/parse/patterns.ts': {
-    count: 1,
+    count: 6,
     because:
       'the room-light alternation is built from `ROOM_LIGHTS` so the union the tracker ' +
-      'branches on and the pattern that produces it cannot drift; module-level, in `RULES`'
+      'branches on and the pattern that produces it cannot drift, and the five presence and ' +
+      'tracking rules share `COMPASS`, built from `DIRECTION_NAME` (todo 826, 2026-09-26); ' +
+      'module-level, in `RULES`'
   },
   'src/shared/statline.ts': {
     count: 1,
     because:
       'the exact status-line matcher is generated from the template `pro` reports, which ' +
       'is only known at runtime; built once per report in `statlineMatcher`, held by ' +
-      '`CharacterTracker`, and never called in a per-line path'
-  },
-  'src/shared/coins.ts': {
-    count: 1,
-    because:
-      "a realm's name for a coin is its own data (`server.yaml` `coins:`, Krabby Patties for " +
-      'the runic coin on Skinny Inc), so each renamed one is compiled once when the realm is ' +
-      'configured (`coinReader`, from `SessionManager.configureRealm`) and held; a realm that ' +
-      'renames nothing compiles nothing and the per-line `stock` is a no-op'
+      '`StatusLine` (`parse/sheet.ts`), and never called in a per-line path'
   },
   'src/shared/messages.ts': {
     count: 1,
@@ -44,13 +40,18 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
       'so each is compiled once when the shipped table is read (`MessageBook.add`) and held; ' +
       'the per-line path runs only the compiled ones a word index selects (todo 109)'
   },
-  'src/shared/messageTriggers.ts': {
+  'src/shared/coins.ts': {
     count: 1,
     because:
-      "a realm's message table is the player's own data — MegaMUD's Messages.md, six hundred " +
-      'sentences with `{target}`/`{dmg}` tokens — so each is compiled once when the table is ' +
-      'loaded (`MessageTriggers.load`) and held; the per-line path tests a literal with ' +
-      '`includes` before any compiled one runs'
+      "a realm's renamed coins are configuration (`coins:`, todo 830, 2026-09-26), so the " +
+      'one pattern that reads them back is built from the words when `coinReader` is made, ' +
+      'once per realm, and held by `Vocabulary`'
+  },
+  'src/main/app/copyMatch.ts': {
+    count: 1,
+    because:
+      'the UI copy as a pattern, for tests and harnesses only: nothing the app ships imports ' +
+      'it, and each pattern is built from a dictionary string known only when it is read'
   },
   'src/shared/template.ts': {
     count: 2,
@@ -60,19 +61,6 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
       'and cached by string in `compileRegex`'
   }
 };
-
-function sources(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name !== '__tests__' && entry.name !== 'node_modules') out.push(...sources(full));
-    } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-      out.push(full);
-    }
-  }
-  return out;
-}
 
 describe('runtime-built regular expressions', () => {
   it('are built once, at module load, and each is listed with its reason', () => {

@@ -18,6 +18,7 @@
  */
 import type { BlockType } from '../../shared/blocks';
 import { ROOM_LIGHTS, type Afflictions } from '../../shared/character';
+import { DIRECTION_NAME } from '../../shared/world';
 
 export interface Rule {
   type: BlockType;
@@ -29,6 +30,13 @@ export interface Rule {
    * `attacker`, the only mode there used to be.
    */
   resolve?: 'attacker' | 'target' | 'both';
+  /**
+   * Never read inside a room's description: a frame that room prose can end
+   * the same way (`smooth tunnel leads out to the east.`, captures/005:293).
+   * The server writes a listing in one send, so nothing walks in or out
+   * inside one (todo 826).
+   */
+  outsideDescription?: true;
   /**
    * Whether the leading capitalised word may stand in as the attacker when
    * neither the room nor the realm can name one. Only for lines whose grammar
@@ -200,6 +208,15 @@ function onsetRule(condition: keyof Afflictions): Rule {
   return { type: found.type, pattern: found.pattern };
 }
 
+/**
+ * The eight compass words, off the one direction table; up and down are worded
+ * apart (`upwards`, `from below`), and a monster's exit name for them is
+ * `above` / `below` (`Exit.GetExitName`).
+ */
+const COMPASS = Object.values(DIRECTION_NAME)
+  .filter((name) => name !== 'up' && name !== 'down')
+  .join('|');
+
 export const RULES: Rule[] = [
   /* ---------------------------------------------------------- session */
   { type: 'prompt-username', pattern: /^Please enter your username or "new":/ },
@@ -282,22 +299,6 @@ export const RULES: Rule[] = [
   {
     type: 'user-profile',
     pattern: /^(?:Recent Deaths:|Location:\s+(?<map>\d{1,3}),(?<room>\d{1,6}))/
-  },
-  /*
-   * `sys status`'s first line — the MajorMUD-lineage locate for a realm with
-   * no `rm` (`bbs.thelucks.org`, captured live 2026-09-21). Everything after
-   * it (spawn counts, controlling room, item ids) is that command's own
-   * business and unread here; only the coordinates are the fact this client
-   * wants, and they are printed room-then-map, reversed from `pro`'s
-   * `Location: <map>,<room>`.
-   *
-   * Matched on its own line regardless of what surrounds it: the reply can
-   * land mixed in with other room chatter, so nothing here assumes it is the
-   * first or only thing in the block.
-   */
-  {
-    type: 'user-location',
-    pattern: /^Room\s+(?<room>\d{1,6})\s+Map:\s+(?<map>\d{1,4})/
   },
   /*
    * `pro`'s own statement of the prompt — `Statusline:          full`, read
@@ -666,13 +667,7 @@ export const RULES: Rule[] = [
     type: 'mob-misses',
     pattern: /^The (?<line>[^"]*?\byou), but your armou?r deflects the blow!$/
   },
-  // Not a monster following this character in (`The %s charges after you!`),
-  // which is an arrival — see `mob-arrives-room`.
-  {
-    type: 'mob-misses',
-    pattern:
-      /^The (?!.*\b(?:after you|you into the room|you in from)\b)(?<line>[^"]*?\byou\b[\w' ]{0,32})[.!]$/
-  },
+  { type: 'mob-misses', pattern: /^The (?<line>[^"]*?\byou\b[\w' ]{0,32})[.!]$/ },
   /*
    * The same swing at this character from something with no article — a
    * player (`Rend swings at you!`, 40 lines) or a monster with a proper name
@@ -799,7 +794,7 @@ export const RULES: Rule[] = [
   {
     type: 'spell-ineffective',
     pattern:
-      /^Your spell has no effect (?:on (?<target>.+?)\.|against this monster!|(?<room>in this room)!)$/
+      /^Your spell has no effect (?:on (?<target>.+?)\.|against this monster!|in this room!)$/
   },
   /*
    * Spells, seen in the corpus rather than read out of the server.
@@ -872,15 +867,9 @@ export const RULES: Rule[] = [
      * `You` as self. Below the `on` frame so a targeted cast matches that
      * first, and the `duration` gate in the tracker keeps an offensive
      * `You cast X, and it explodes!` off the buff list.
-     *
-     * The flavour need not open with `and`: Paramud's `You cast aura of
-     * undeath, surrounding everyone in the room with a black glow!` (captured
-     * 2026-09-23) fell through to the message table's `You cast %s!`, which
-     * took the whole tail for the spell's name. A spell's name holds no comma,
-     * so the first one ends it whatever follows.
      */
     type: 'spell-cast',
-    pattern: /^(?<caster>You) cast (?<spell>[\w' -]+?), .+[.!]$/
+    pattern: /^(?<caster>You) cast (?<spell>[\w' -]+?), and .+[.!]$/
   },
   /*
    * A kai power's confirmation does not say `cast` at all. `You invoke the
@@ -1038,6 +1027,18 @@ export const RULES: Rule[] = [
     pattern: /^(?<attacker>[A-Z][\w'-]*) moves to attack (?<target>.+?)[.!]$/
   },
   /*
+   * A guard stepping in front of the monster this character attacked, sent
+   * only to the attacker (`AttackCommand.cs:342`, `Player.cs:6138`): both are
+   * the realm's names, bare, and no full stop ends it. Paradigm's wire (four
+   * sessions, 2026-09-12..19) and sixteen lines in seven captures. Above the
+   * talk rules, so neither name may carry a colon or a quote and no stop may
+   * end it: a player's gossip of the phrase is talk, not a guard (763, review).
+   */
+  {
+    type: 'mob-protects',
+    pattern: /^(?<guard>[^\s:"][^:"]*?) moves to protect (?<ward>[^:".!?]*[^\s:".!?])$/
+  },
+  /*
    * A swing between two other parties that did not land. The verb is the
    * weapon's, the weapon suffix is an item name, and both are realm data; the
    * frame is `<who> <verb> at <whom>[ with <its> <weapon>]!`. `You ... at` is
@@ -1045,19 +1046,16 @@ export const RULES: Rule[] = [
    * is left is a player at a monster or a monster at a player — the sixth of
    * the corpus that was unread (docs/capture-analysis.md §4).
    *
-   * **Who swung is the room's to say**, as it is for a blow (`resolve`). The
-   * verb is not always one word: `The red wyvern swoops down at Fatty!` read
-   * as `red wyvern swoops` doing `down`, which joined the room as another
-   * wyvern 125 times in one evening, and a room spell set for four went off
-   * on three (skinny, 2026-09-25). The room and then the realm's table name
-   * the swinger; where neither can, the frame's own guess stands (`first`,
-   * everything before a one-word verb), which is how a monster nothing has
-   * listed still joins the room.
+   * The attacker is found in the words before `at` from the room and the
+   * realm, as a monster's blow on this character is (`mob-misses`), because
+   * a verb can be two words: `The red wyvern swoops down at Fatty!` read with
+   * a one-word verb made a monster called `red wyvern swoops` (todo 834).
+   * A player's capitalised name is one by grammar; an article never is.
    */
   {
     type: 'player-misses',
     pattern:
-      /^\s*(?<line>(?<first>(?!You\b)(?:The )?[\w'-]+(?: [\w'-]+)*?) \w+) at (?<target>(?!you\b)[\w' -]+?)(?: with (?:his|her|its|their) (?<weapon>[\w' -]+?))?!$/,
+      /^\s*(?<line>(?!You\b)(?:(?<first>[A-Z][\w'-]*)|[a-z][\w'-]*)(?: [\w'-]+)+?) at (?<target>(?!you\b)[\w' -]+?)(?: with (?:his|her|its|their) (?<weapon>[\w' -]+?))?!$/,
     resolve: 'attacker',
     nameFallback: true
   },
@@ -1184,20 +1182,54 @@ export const RULES: Rule[] = [
    * A different fact from entering the realm, and the more urgent one: the
    * realm is large and this room is where a fight happens. Captured verbatim
    * from `npm run probe:party` — two characters, one walking to the other.
-   * Up and down are worded apart, `from above` and `just left upwards`, and
-   * the directions are named as the monster rules below name them; read as a
-   * monster until 2026-09-25, so a leader who climbed out of a rest was still
-   * resting as far as its follower knew.
+   */
+  /*
+   * A player's name is capitalised; a lowercase word is a monster
+   * (`shade walks into the room from the north.`, captures/002:548), which
+   * the monster rules below read. Up and down are worded apart:
+   * `FourQueTwo just left upwards.` (captures/006:40), `Alathar walks into
+   * the room from below.` (captures/113:5) (todo 826).
    */
   {
     type: 'player-arrives-room',
-    pattern:
-      /^(?<player>\w+) walks into the room from (?:the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|above|below)\.$/
+    pattern: new RegExp(
+      `^(?<player>[A-Z]\\w*) +walks into the room from (?:the (?<direction>${COMPASS})|(?<vertical>above|below))\\.$`
+    )
   },
   {
     type: 'player-leaves-room',
-    pattern:
-      /^(?<player>\w+) just left (?:to the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:wards)?\.$/
+    pattern: new RegExp(
+      `^(?<player>[A-Z]\\w*) +just left (?:to the (?<direction>${COMPASS})|(?<vertical>up|down)wards)\\.$`
+    )
+  },
+  /*
+   * A monster leaving (todo 826): the server's own `<mob> just left to the
+   * <dir>.` (`big elite guardsman just left to the west.`, the wire,
+   * 2026-09-21 soul log; captures/005:833), and the realm's departure verbs,
+   * which are per-monster data like the arrival's (`A giant crab scurries off
+   * to the north.`, `The large wild dog lopes out to the west!`, festus logs).
+   * A room's own prose can end the same way (`smooth tunnel leads out to the
+   * east.`, captures/005:293), so `Classifier` never reads either frame inside
+   * a description.
+   */
+  {
+    type: 'mob-leaves-room',
+    pattern: new RegExp(
+      `^(?:(?:A|An|The) )?(?<mob>.+?) just left to (?:the )?(?<direction>${COMPASS}|above|below)[.!]$`
+    ),
+    outsideDescription: true
+  },
+  /*
+   * And the realm's own verb (`MoveMessage.Line2`) or the server's default
+   * where a monster has none, `<mob> exits the room to the <exit>.`
+   * (`Mob.GetMobExitMessage`, source only).
+   */
+  {
+    type: 'mob-leaves-room',
+    pattern: new RegExp(
+      `^(?!You )(?:(?:A|An|The) )?(?<line>.+?)(?: (?:out|off|away)(?: of the room)?| the room) to (?:the )?(?<direction>${COMPASS}|above|below)[.!]$`
+    ),
+    outsideDescription: true
   },
   {
     type: 'player-looks',
@@ -1226,71 +1258,12 @@ export const RULES: Rule[] = [
    * article is optional for the same reason: `angry carrion beast moves into
    * the room from the east.` arrived without one (live, 2026-08-27), and the
    * article is part of the sentence the realm's operator typed, not the frame.
-   *
-   * **MegaMUD reads the same thing by phrase, and so does this** (checked in
-   * its executable, 2026-09-23): no table of monster messages, just
-   * `ParseInOut`'s list — ` in the room `, ` into the room `, ` into the
-   * area`, ` enters the room`, ` room from `, ` in from `, ` enters from `,
-   * ` arrives from `, ` appears from `, ` appears out of `, ` appears in a `,
-   * ` down from above`, ` beside you!`, ` next to you!`, ` through the
-   * wall!` in, and ` just left `, ` sneaking out` out. The server's own table
-   * (every monster move record in resources/world/messages.csv) adds its
-   * departures — `<verb> out|off|away to`, `out of the room to`, `exits to`
-   * — and the monster that follows this character in (`The %s charges after
-   * you!`). Paramud's `A giant war dog enters the room from the south.` was
-   * none of what this read before, so fifteen dogs walked in unread.
-   *
-   * Two shapes of name: where the anchor follows the monster's own verb
-   * (`stomps in from`) the verb is the name's last word and is trimmed off
-   * (`line`); where the anchor *is* the verb (`enters from`, `arrives from`)
-   * the whole of it is the name (`mob`). A name is name characters only — no
-   * comma — which keeps a room's prose (`street, and dark, narrow alleyways
-   * lead off to the east and west.`) out, and a line inside a room listing
-   * is the listing's either way (`RoomDraft.open`). Never a line about this
-   * character: `You summon a powerful tempest into the room!` is a spell.
    */
   {
     type: 'mob-arrives-room',
     pattern:
-      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+?)(?: in| into the room)? after you\b.*[.!]$/
-  },
-  {
-    type: 'mob-arrives-room',
-    pattern:
-      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+? (?:follows|chases|pursues)) you (?:into the room|in from\b.*)[.!]$/
-  },
-  {
-    type: 'mob-arrives-room',
-    pattern:
-      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+?) (?:(?:in(?:to)? )?the room from|in from|down from above|into the (?:room|area)(?= *[.!])|in the room(?= *[.!]))(?: (?:the )?(?<direction>[\w ]+?))?(?:,[^,]*)?[.!]$/
-  },
-  {
-    type: 'mob-arrives-room',
-    pattern:
-      /^(?!You )(?:(?:A|An|The) )?(?<mob>[\w' -]+?) (?:enters from|arrives from|peeks in from|appears (?:from|out of|in a)|enters the room(?= *[.!])|appears (?:right )?beside you|appears in front of you|is next to you)(?: (?:the )?(?<direction>[\w ]+?))?(?:,[^,]*)?[.!]$/
-  },
-  /*
-   * A monster walking out — the other half of the arrival, on the same two
-   * shapes of name. ` just left ` and ` exits to` carry no verb of the
-   * monster's; `<verb> out|off|away to` and `out of the room to` do. A
-   * player's one-word `just left to` is `player-leaves-room`'s, above.
-   */
-  {
-    type: 'mob-leaves-room',
-    pattern:
-      /^(?!You )(?:(?:A|An|The) )?(?<mob>[\w' -]+?) (?:just left|leaves(?: the room)?|is sneaking out) (?:to )?(?:the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down|upwards|downwards|above|below)[.!]$/
-  },
-  // `exits to` only after an article: `There are no exits to the south!` is not
-  // somebody leaving.
-  {
-    type: 'mob-leaves-room',
-    pattern:
-      /^(?:A|An|The) (?<mob>[\w' -]+?) exits(?: the room)? to (?:the )?(?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down|upwards|downwards|above|below)[.!]$/
-  },
-  {
-    type: 'mob-leaves-room',
-    pattern:
-      /^(?!You )(?:(?:A|An|The) )?(?<line>[\w' -]+?) (?:out of the room|out|off|away) to (?:the )?(?<direction>[\w ]+?)[.!]$/
+      /^(?:(?:A|An|The) )?(?<line>.+?) (?:in(?:to)? the room from|in from) (?:the )?(?<direction>[\w ]+)[.!]$/,
+    outsideDescription: true
   },
   /*
    * The one death sentence the server composes itself. `Mob.cs:1235` prints
@@ -1368,20 +1341,14 @@ export const RULES: Rule[] = [
    * statement of the state.
    */
   { type: 'party-following', pattern: /^You are (?:already )?following (?<leader>\w+)\.$/ },
-  /*
-   * The join and the parting, each with its full stop optional: Skinny Inc
-   * prints `You are now following Fatty` bare (2026-09-24), and read as
-   * nothing the follower never knew it was following — no `@wait`, no par,
-   * no assist — until a `party` listing happened to say so.
-   */
   {
     type: 'party-joined',
-    pattern: /^(?:(?<player>\w+) started to follow you|You are now following (?<leader>\w+))\.?$/
+    pattern: /^(?:(?<player>\w+) started to follow you|You are now following (?<leader>\w+))\.$/
   },
   {
     type: 'party-left',
     pattern:
-      /^(?:(?<player>\w+) is no longer following you|You are no longer following (?<leader>\w+))\.?$/
+      /^(?:(?<player>\w+) is no longer following you|You are no longer following (?<leader>\w+))\.$/
   },
   /*
    * `uninvite <name>`, captured live (2026-08-28). The offer is withdrawn before
@@ -1531,15 +1498,6 @@ export const RULES: Rule[] = [
     pattern: /^The (?<barrier>door|gate|portcullis) is closed!/
   },
   /*
-   * The same refusal in bbs.thelucks.org's words (2026-09-23). Unread, the
-   * walk never learned its step was refused: it stood at a door it held the
-   * key for, nudging and resending the direction, and never opened it.
-   */
-  {
-    type: 'direction-failed',
-    pattern: /^There is a closed (?<barrier>door|gate|portcullis) in that direction!/
-  },
-  /*
    * `You may not go through this exit!` — a gate on alignment or level, not a
    * wall and not a door. It consumes the pending move like the other two, and
    * carries no barrier because nothing the client can send opens it.
@@ -1628,7 +1586,7 @@ export const RULES: Rule[] = [
    * `door`, `gate` and `portcullis` for one frame. Anchoring on the word
    * `door` was harmless while the step went out behind every `open` anyway —
    * the direction's own refusal took the next rung — and stopped being so when
-   * `Walker.sendOpen` started waiting for this sentence, because a *gate*'s
+   * `Barriers.sendOpen` started waiting for this sentence, because a *gate*'s
    * success would then have matched nothing. The player's own transcript is
    * the wire's word on the substitution (`The gate is closed!`, `The gate is
    * locked.`, `You bashed the gate open.`, live 2026-09-05); only `door` has
@@ -1701,7 +1659,7 @@ export const RULES: Rule[] = [
   },
   /*
    * `Your torch has been returned to its proper place` — an item carrying
-   * `Remove@Maint` taken out of the pack by the cleanup (`GMUDServer.cs:445`),
+   * `Remove@Maint` taken out of the pack by the cleanup (`GMUDServer.cs:449`),
    * no full stop, from the source: the two dozen items that carry the flag
    * are quest props nobody on the test realm has held through a cleanup. An
    * item with its own `DestructMessage` prints that row instead, which the
@@ -1730,8 +1688,9 @@ export const RULES: Rule[] = [
    */
   {
     type: 'user-tracks',
-    pattern:
-      /^(?<player>[A-Z][\w'-]*) went (?<direction>north|south|east|west|northeast|northwest|southeast|southwest|up|down) from here\.$/
+    pattern: new RegExp(
+      `^(?<player>[A-Z][\\w'-]*) went (?<direction>${COMPASS}|up|down) from here\\.$`
+    )
   },
   { type: 'user-tracks-failed', pattern: /^Your tracking skills fail you this time\.$/ },
   {
@@ -1741,6 +1700,19 @@ export const RULES: Rule[] = [
 
   /* ---------------------------------------------------------- failure */
   { type: 'command-no-effect', pattern: /^Your command had no effect\./ },
+  /*
+   * A `sys` command's refusals, `sys go`'s three (`SysCommand.cs`
+   * `GotoCommand`; the last two shared by other subcommands): a room that does
+   * not exist, a malformed one, and a mudop on a live realm
+   * (`ProductionNotAllowed`). All three on orohost's wire:
+   * `logs/2026-08-30_20-57-36_main.log:757`, `2026-08-27_23-45-31_main.log:429`,
+   * `2026-09-19_00-44-05_vaelor2.log:591`. Anchored at both ends: `Incorrect
+   * syntax or player not found` (`sys move`'s, source only) is not claimed (766).
+   */
+  {
+    type: 'sys-refused',
+    pattern: /^(?:Map and\/or Room not found|Incorrect syntax|Command not allowed in live realm\.)$/
+  },
   /*
    * The command was thrown away before the server even looked at it.
    *
@@ -1842,22 +1814,23 @@ export const RULES: Rule[] = [
    * the item out of the pack and puts it nowhere `You notice` will list it.
    */
   { type: 'user-hides', pattern: /^You hid (?:(?<count>\d+) )?(?<item>.+)\./ },
-  /*
-   * `18 gold drop to the ground.` — the kill's coins landing on the floor.
-   * The noun is optional: a realm that renames a coin prints its whole name
-   * here (`1 Krabby Patties drop to the ground.`, Skinny Inc), which reaches
-   * this pattern as the stock `1 runic coins` (`CoinReader.stock`).
-   */
+  /* `18 gold drop to the ground.` — the kill's coins landing on the floor. */
   {
     type: 'room-coins',
-    pattern:
-      /^(?<count>\d+) (?<coin>copper|silver|gold|platinum|runic)(?: [a-z]+)? drops? to the ground\.$/
+    pattern: /^(?<count>\d+) (?<coin>copper|silver|gold|platinum|runic) drops? to the ground\.$/
   },
   {
     type: 'user-gets-coins',
     pattern:
       /^You picked up (?<count>\d+) (?<coin>copper farthings?|silver nobles?|gold crowns?|platinum pieces?|runic coins?)\.?$/
   },
+  /*
+   * Somebody else's coins name no count and, on GreaterMUD, end without a full
+   * stop (`GetCommand.cs:106`: `" picks up some ", PluralCoinName`; orohost wire,
+   * `logs/2026-09-07_21-49-00_festus:7463`). MajorMUD's has one
+   * (`captures/019`:185). Before the item rule, which wants the stop (todo 757).
+   */
+  { type: 'player-gets', pattern: /^(?<player>\w+) picks up (?<item>some \w+(?: \w+)?)\.?$/ },
   { type: 'player-gets', pattern: /^(?<player>\w+) picks up (?<item>.+)\./ },
   { type: 'player-gets', pattern: /^You took (?:(?<count>\d+) )?(?<item>.+)\./ },
   { type: 'player-drops', pattern: /^(?<player>\w+) drops (?<item>.+)\./ },
@@ -1905,16 +1878,11 @@ export const RULES: Rule[] = [
     type: 'user-buys',
     // `for nothing` is the free purchase's own spelling, captured live beside
     // `for 0 copper farthings` (2026-09-01, a scroll of minor healing): both
-    // are on the wire and the second was read while the first was not.
-    //
-    // And any other price as `cost`, unconverted: a realm can quote a purchase
-    // in several denominations and a currency of its own — `for 6 Krabby
-    // Patties, 44 platinum pieces, 80 gold crowns.` (live, 2026-09-23). That
-    // line matched nothing, so the amber talisman bought for a route never
-    // read as carried and the route was never walked. The purse is left for
-    // the next listing to restate.
+    // are on the wire and the second was read while the first was not. The
+    // coin is any on the ladder: MajorMUD quotes `30 gold crowns` and `1
+    // platinum piece` (bearfather, `2026-09-17_16-16-56_soul:1027,1213`; 815).
     pattern:
-      /^You just bought (?:(?<quantity>\d+) )?(?<item>[\w ]+) for (?:(?<price>\d+) copper farthings|nothing|(?<cost>.+?))\.$/
+      /^You just bought (?:(?<quantity>\d+) )?(?<item>[\w ]+) for (?:(?<price>\d+) (?<coin>[a-z]+(?: [a-z]+)?)|nothing)\.$/
   },
   /*
    * Selling, captured beside the buying line it mirrors:
@@ -2943,12 +2911,9 @@ export const BATCH_RULES: BatchRule[] = [
        * against `Mana:` is the sheet saying which listing this character owns
        * (`pow` against `sp`), the same fact the status line's `KAI=`/`MA=`
        * states — and the sheet says it even on a realm whose prompt omits it.
-       *
-       * The figures may follow a `*`: `Mana: * 321/321   Spellcasting: 222`,
-       * on healbot's sheet from 2026-09-23 07:21 onwards, where the day before
-       * read `Mana:   306/306`. Without it the whole line failed, the maximum
-       * stayed unknown, and every heal behind a mana floor stood down for the
-       * rest of the day — unknown is not enough to cast on.
+       * The star is `HasManaAdder`, an item or effect raising the maximum
+       * (GreaterMUD `Player.cs:3700`, `:7088`; `captures/214`:10), printed on
+       * either word; nothing reads it yet, so it is passed over (todo 801).
        */
       /^(?:(?<resourceWord>Mana|Kai):\s+(?:\*\s*)?(?<mana>\d+)\/(?<manaMax>\d+))?\s*(?:Spellcasting:\s+(?<spellcasting>\d+)\s+)?Traps:\s+(?<traps>\d+)/,
       /^\s*Picklocks:\s+(?<picklocks>\d+)/,

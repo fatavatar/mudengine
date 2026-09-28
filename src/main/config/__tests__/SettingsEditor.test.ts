@@ -44,6 +44,7 @@ const draft = (over: Partial<ProfileDraft> = {}): ProfileDraft => ({
   accent: 'cyan',
   theme: '',
   login: [],
+  locate: null,
   hangUp: { enabled: false, belowHealth: 0.15, penalties: null, onPlayerInRoom: false },
   retreat: {
     enabled: false,
@@ -53,7 +54,7 @@ const draft = (over: Partial<ProfileDraft> = {}): ProfileDraft => ({
     strategy: 'step-back',
     safeHavenRoom: ''
   },
-  fleeGoto: { enabled: false, belowHealth: 0.2, destination: '' },
+  fleeGoto: { enabled: false, belowHealth: 0.2, command: '' },
   pvp: { notifyGang: false, action: 'none' },
   // The shipped defaults, so a draft that says nothing about combat writes no
   // `combat:` block at all -- which is the behaviour the tests below assert.
@@ -314,25 +315,6 @@ ui:
   });
 });
 
-/*
- * A character's own monster rows (roadmap step 3): saved with the combat
- * block and read back as the rows they were, so the realm's table is laid
- * under exactly what the character stated.
- */
-describe('a character’s monster rows', () => {
-  it('saves them in the combat block and reads them back', () => {
-    const monsters = [
-      { mob: 'gigantic black ooze', attack: { spell: 'mmis', max: 2 } },
-      { mob: 'shopkeeper', relationship: 'enemy' as const }
-    ];
-    const combat = { ...DEFAULT_CONFIG.automation.combat, monsters };
-    expect(editor.saveProfile('vaelor', draft({ combat }))).toEqual({ ok: true });
-    const result = resolveProfile('vaelor', read('vaelor'), parse(OPTIONS));
-    if (result.error !== undefined) throw new Error(result.error);
-    expect(result.profile.config.automation.combat.monsters).toEqual(monsters);
-  });
-});
-
 describe('removing a character', () => {
   it('removes the file and keeps a copy of it', () => {
     editor.saveProfile('vaelor', draft());
@@ -355,11 +337,13 @@ describe('servers, one directory each', () => {
     port: 23,
     encoding: 'cp437',
     login: [],
-    locate: 'rm',
     loops: [],
     database: '',
+    mobRules: [],
     hangPenalties: null,
+    locate: 'rm',
     coins: {},
+    fleeGoto: '',
     ...draft
   });
 
@@ -388,13 +372,57 @@ describe('servers, one directory each', () => {
     expect(fs.readFileSync(home.server('bearfather').file, 'utf8')).not.toContain('hangPenalties');
   });
 
-  /* What the realm calls its coins: only the ones it renames, and no key for none. */
-  it('writes the realm’s coin names only where it renames one', () => {
-    editor.saveServer(null, server({ coins: { runic: 'Krabby Patties', gold: '' } }));
-    expect(new ServerStore(home).all[0]!.server.coins).toEqual({ runic: 'Krabby Patties' });
-    editor.saveServer('Bearfather', server({ coins: {} }));
-    expect(new ServerStore(home).all[0]!.server.coins).toEqual({});
-    expect(fs.readFileSync(home.server('bearfather').file, 'utf8')).not.toContain('coins');
+  /* A row says how its monster is fought (todo 816), and the realm's file keeps all of it. */
+  it('writes a monster row whole, and nothing a row does not say', () => {
+    const file = home.server('bearfather').file;
+    editor.saveServer(
+      null,
+      server({
+        mobRules: [
+          {
+            mob: 'orc shaman',
+            treat: 'first',
+            cast: { spell: 'harm', times: 2 },
+            noBackstab: true
+          },
+          { mob: 'town guard', treat: 'never' }
+        ]
+      })
+    );
+    expect(new ServerStore(home).all[0]!.server.mobRules).toEqual([
+      { mob: 'orc shaman', treat: 'first', cast: { spell: 'harm', times: 2 }, noBackstab: true },
+      { mob: 'town guard', treat: 'never' }
+    ]);
+    expect(parse(fs.readFileSync(file, 'utf8'))['mobRules']).toEqual([
+      { mob: 'orc shaman', treat: 'first', cast: { spell: 'harm', times: 2 }, noBackstab: true },
+      { mob: 'town guard', treat: 'never' }
+    ]);
+  });
+
+  /* How the realm is asked where you stand (todo 811): `rm` is the unstated answer, so no key. */
+  it('writes the realm\u2019s locate word only when it is not `rm`', () => {
+    const file = home.server('bearfather').file;
+    editor.saveServer(null, server({ locate: 'none' }));
+    expect(new ServerStore(home).all[0]!.server.locate).toBe('none');
+    expect(parse(fs.readFileSync(file, 'utf8'))['locate']).toBe('none');
+    editor.saveServer('Bearfather', server({ locate: 'rm' }));
+    expect(new ServerStore(home).all[0]!.server.locate).toBe('rm');
+    expect(fs.readFileSync(file, 'utf8')).not.toContain('locate');
+    // A word this client does not know was never on the form, so saving leaves it.
+    fs.appendFileSync(file, 'locate: sys-status\n', 'utf8');
+    editor.saveServer('Bearfather', server({ locate: 'rm' }));
+    expect(parse(fs.readFileSync(file, 'utf8'))['locate']).toBe('sys-status');
+  });
+
+  /* The realm's teleport, literally (todo 813): stated when typed, no key when empty. */
+  it('writes the realm\u2019s teleport command only when it states one', () => {
+    const file = home.server('bearfather').file;
+    editor.saveServer(null, server({ fleeGoto: 'sys go 1 297' }));
+    expect(new ServerStore(home).all[0]!.server.fleeGoto).toBe('sys go 1 297');
+    expect(parse(fs.readFileSync(file, 'utf8'))['fleeGoto']).toBe('sys go 1 297');
+    editor.saveServer('Bearfather', server({ fleeGoto: '' }));
+    expect(new ServerStore(home).all[0]!.server.fleeGoto).toBe('');
+    expect(fs.readFileSync(file, 'utf8')).not.toContain('fleeGoto');
   });
 
   it('updates one in place rather than adding a second', () => {
@@ -485,11 +513,13 @@ describe('servers, one directory each', () => {
       port: 2427,
       encoding: 'cp437',
       login: [],
-      locate: 'rm',
       loops: [],
       database: '',
+      mobRules: [],
       hangPenalties: null,
-      coins: {}
+      locate: 'rm',
+      coins: {},
+      fleeGoto: ''
     });
     expect(servers()).toEqual([
       { id: 'greatermud-local', name: 'GreaterMUD (local)', host: '127.0.0.1' }
@@ -560,11 +590,13 @@ describe('credentials in the messages', () => {
       port: 2500,
       encoding: 'cp437',
       login: [],
-      locate: 'rm',
       loops: [],
       database: '',
+      mobRules: [],
       hangPenalties: null,
-      coins: {}
+      locate: 'rm',
+      coins: {},
+      fleeGoto: ''
     });
     for (const file of fs.readdirSync(dir)) {
       if (!fs.statSync(path.join(dir, file)).isFile()) continue;
@@ -590,12 +622,22 @@ describe('what a character plays against, and what keeps it alive', () => {
   it('writes a character’s own answer to `@` commands', () => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
     expect(automation['remotes']).toEqual({
       enabled: true,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       party: [],
       players: {}
@@ -653,6 +695,7 @@ describe('what a character plays against, and what keeps it alive', () => {
     expect(automation['remotes']).toEqual({
       enabled: false,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       // Copied from Global, which is where the shipped party list lives. The
       // switch is off, so it grants nobody anything until somebody turns
@@ -671,16 +714,35 @@ describe('what a character plays against, and what keeps it alive', () => {
   it('keeps the key when it is turned back off', () => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: false, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: false,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
     expect(automation['remotes']).toEqual({
       enabled: false,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       party: [],
       players: {}
@@ -970,11 +1032,13 @@ describe('the loops a character owns', () => {
       port: 2427,
       encoding: 'cp437',
       login: [],
-      locate: 'rm',
       loops: [arena],
       database: '',
+      mobRules: [],
       hangPenalties: null,
-      coins: {}
+      locate: 'rm',
+      coins: {},
+      fleeGoto: ''
     });
     editor.saveProfile('vaelor', draft());
 
@@ -1052,11 +1116,13 @@ describe('filing one loop from the Loops modal', () => {
       port: 2427,
       encoding: 'cp437',
       login: [],
-      locate: 'rm',
       loops: [],
       database: '',
+      mobRules: [],
       hangPenalties: null,
-      coins: {}
+      locate: 'rm',
+      coins: {},
+      fleeGoto: ''
     });
     expect(editor.addLoop('server', 'GreaterMUD (local)', sewers)).toEqual({ ok: true });
     const store = new LoopStore(home);
@@ -1112,6 +1178,57 @@ describe('a character theme', () => {
     fs.writeFileSync(file, `server: GreaterMUD (local)\nui:\n  theme: slate\n`, 'utf8');
     expect(editor.saveProfile('vaelor', draft({ theme: '' }))).toEqual({ ok: true });
     expect((read('vaelor')['ui'] as Record<string, unknown>)['theme']).toBe('slate');
+  });
+});
+
+/* A character's own locate word over its realm's (todo 811), seeded and saved as its own. */
+describe('a character\u2019s own locate word', () => {
+  it('writes `locate`, clears one the form showed, and leaves one it could not', () => {
+    const file = home.profile('vaelor').file;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `server: GreaterMUD (local)\n`, 'utf8');
+    const own = () => editor.snapshot().characters.find((entry) => entry.id === 'vaelor')?.locate;
+    expect(own()).toBeNull();
+    expect(editor.saveProfile('vaelor', draft({ locate: 'none' }))).toEqual({ ok: true });
+    expect(read('vaelor')['locate']).toBe('none');
+    expect(own()).toBe('none');
+    expect(editor.saveProfile('vaelor', draft({ locate: null }))).toEqual({ ok: true });
+    expect(read('vaelor')).not.toHaveProperty('locate');
+    fs.writeFileSync(file, `server: GreaterMUD (local)\nlocate: sys-status\n`, 'utf8');
+    expect(editor.saveProfile('vaelor', draft({ locate: null }))).toEqual({ ok: true });
+    expect(read('vaelor')['locate']).toBe('sys-status');
+  });
+});
+
+/* A character's own teleport over its realm's (todo 813), seeded and saved as its own. */
+describe('a character\u2019s own teleport command', () => {
+  it('writes `command` only when stated, and never seeds the realm\u2019s as its own', () => {
+    const realm = home.server('greatermud-local').file;
+    fs.mkdirSync(path.dirname(realm), { recursive: true });
+    fs.writeFileSync(
+      realm,
+      'name: GreaterMUD (local)\nhost: gmud-tgs\nport: 2427\nfleeGoto: sys go 1 297\n',
+      'utf8'
+    );
+    const file = home.profile('vaelor').file;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `server: GreaterMUD (local)\n`, 'utf8');
+    const own = () => editor.snapshot().characters.find((entry) => entry.id === 'vaelor')?.fleeGoto;
+    // The realm states one, and the form's field is still this character's own: empty.
+    expect(own()?.command).toBe('');
+    const safety = () =>
+      (read('vaelor')['automation'] as Record<string, Record<string, unknown>>)['safety'];
+
+    const stated = { enabled: true, belowHealth: 0.1, command: 'sys goto silvermere' };
+    expect(editor.saveProfile('vaelor', draft({ fleeGoto: stated }))).toEqual({ ok: true });
+    expect(safety()?.['fleeGoto']).toEqual(stated);
+    expect(own()?.command).toBe('sys goto silvermere');
+
+    expect(editor.saveProfile('vaelor', draft({ fleeGoto: { ...stated, command: '' } }))).toEqual({
+      ok: true
+    });
+    expect(safety()?.['fleeGoto']).toEqual({ enabled: true, belowHealth: 0.1 });
+    expect(own()?.command).toBe('');
   });
 });
 
@@ -1180,28 +1297,28 @@ connection:
    * assertion alone.
    */
   /*
-   * The monster rows are the one `automation:` list merged across scopes
+   * The monster list is the one `automation:` list merged across scopes
    * rather than replaced, so the resolved one holds the global file's rows as
-   * well. Seeding the form with those and saving it back would write them
-   * into this character's own file -- pinning down rows it was only
-   * inheriting, so a later change to the global rows would silently not reach
-   * it (todo 01).
+   * well as the realm's. Seeding the form with those and saving it back would
+   * write them into this character's own file -- pinning down rules it was
+   * only inheriting, so a later change to the global list would silently not
+   * reach it (todo 01).
    */
-  it('shows a character only its own monster rows, not the ones it inherits', () => {
+  it('shows a character only its own monster rules, not the ones it inherits', () => {
     const wide = global();
-    wide.automation.combat.monsters = [{ mob: 'red dragon', priority: 'low' }];
+    wide.automation.combat.mobRules = [{ mob: 'red dragon', treat: 'low' }];
     expect(editor.saveGlobal(wide)).toEqual({ ok: true });
     expect(editor.saveProfile('thorn', draft())).toEqual({ ok: true });
 
     const thorn = editor.snapshot().characters.find((entry) => entry.id === 'thorn');
     // Its own file states none, so its form shows none -- and a save cannot
     // write the global row into it.
-    expect(thorn?.combat.monsters).toEqual([]);
+    expect(thorn?.combat.mobRules).toEqual([]);
     expect(
       (
         parse(fs.readFileSync(home.profile('thorn').file, 'utf8'))['automation'] as
           Record<string, Record<string, unknown>> | undefined
-      )?.['combat']?.['monsters']
+      )?.['combat']?.['mobRules']
     ).toEqual([]);
   });
 
@@ -1274,7 +1391,16 @@ describe('one player’s @ command permissions', () => {
   beforeEach(() => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
   });
 
@@ -1404,7 +1530,16 @@ describe('the gang list and the gangpath switch', () => {
   beforeEach(() => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
   });
 

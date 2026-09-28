@@ -132,30 +132,70 @@ describe('coalescing', () => {
     vi.advanceTimersByTime(200);
     expect(sent[1]).toBe('look');
   });
+});
 
-  /*
-   * One command, two askers: each hears it went (2026-09-24). A room read the
-   * session holds a walk for, folded into one auto-combat asked for, would
-   * otherwise never learn it was sent.
-   */
-  it('tells every asker of a coalesced intent that it went', () => {
+/* Todo 833: a proposal folded into one already waiting is told when it goes. */
+describe('a joined proposal', () => {
+  it('tells the latest proposal of the same command, once, for one send', () => {
     const heard: string[] = [];
-    queue.enqueue({ command: 'x', priority: 'probe' });
-    queue.enqueue({
-      command: '',
-      priority: 'probe',
-      coalesceKey: 'read',
-      onSent: () => heard.push('a')
-    });
-    queue.enqueue({
-      command: '',
-      priority: 'probe',
-      coalesceKey: 'read',
-      onSent: () => heard.push('b')
-    });
+    queue.noteTyping(true);
+    for (const n of [1, 2, 3]) {
+      queue.offer({
+        command: 'search',
+        priority: 'probe',
+        coalesceKey: 'search',
+        onSent: () => heard.push(`proposal ${n}`)
+      });
+    }
+    queue.noteTyping(false);
     vi.advanceTimersByTime(500);
-    expect(sent.filter((c) => c === '')).toHaveLength(1);
-    expect(heard).toEqual(['a', 'b']);
+    expect(sent).toEqual(['search']);
+    // One send, one callback: a budget counted in onSent is spent once.
+    expect(heard).toEqual(['proposal 3']);
+  });
+
+  it('tells a joiner nothing when its command is not the one that went', () => {
+    const heard: string[] = [];
+    queue.noteTyping(true);
+    queue.enqueue({
+      command: 'c blast orc',
+      priority: 'combat',
+      coalesceKey: 'round-attack',
+      onSent: () => heard.push('cast')
+    });
+    queue.offer({
+      command: 'aa orc',
+      priority: 'combat',
+      coalesceKey: 'round-attack',
+      onSent: () => heard.push('melee')
+    });
+    queue.noteTyping(false);
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['c blast orc']);
+    expect(heard).toEqual(['cast']);
+  });
+
+  it('does not join, nor hear the send, when it had already expired', () => {
+    const heard: string[] = [];
+    queue.noteTyping(true);
+    queue.enqueue({
+      command: 'st',
+      priority: 'probe',
+      coalesceKey: 'probe:st',
+      onSent: () => heard.push('first')
+    });
+    expect(
+      queue.offer({
+        command: 'st',
+        priority: 'probe',
+        coalesceKey: 'probe:st',
+        expiresAt: Date.now() - 1,
+        onSent: () => heard.push('late')
+      })
+    ).toBe('expired');
+    queue.noteTyping(false);
+    vi.advanceTimersByTime(500);
+    expect(heard).toEqual(['first']);
   });
 });
 

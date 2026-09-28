@@ -45,12 +45,7 @@ import { credentialsNamed } from '../../shared/login';
 import { asLoops, loopCategory, type Loop } from '../../shared/loops';
 import { t } from '../app/i18n';
 import { ACTIONABLE_REMOTES } from '../../shared/remotes';
-import {
-  DEFAULT_CONFIG,
-  normalizeBands,
-  normalizeMobRules,
-  type MobRule
-} from '../../shared/config';
+import { DEFAULT_CONFIG, normalizeBands } from '../../shared/config';
 import {
   DEFAULT_ALERT_DEBOUNCE_SECONDS,
   NOTICE_CHANNELS,
@@ -61,10 +56,10 @@ import { DEFAULT_INTERNAL } from '../../shared/internal';
 import { DENOMINATIONS } from '../../shared/character';
 import { SERVER_FILE, type Home } from '../app/home';
 import { directoryNames } from './dirs';
-import { MONSTER_TABLE } from './RealmTableStore';
 import { discoveryKey, type Discovery } from '../../shared/memory';
 import { realmKey } from '../world/RealmLore';
 import type { ShippedWorld } from '../../shared/worlds';
+import { CONDITION_WAIT_KEYS } from '../../shared/walk';
 
 export interface MigrationOptions {
   home: Home;
@@ -202,7 +197,7 @@ function migrateAll(options: MigrationOptions): void {
   theLoopSettlesAfterAnEscape(home, note, options.internalTemplate);
   statedAutoReconnect(home, note);
   statedTheLightAndSupplies(home, note);
-  statedTheConditionWaits(home, note);
+  statedTheConditionWaits(home, note, options.template);
   statedTheKeyPickup(home, note);
   theTuningBlockGainedKeys(home, note, options.internalTemplate);
   theGmudRealmLeft(home, note);
@@ -244,78 +239,15 @@ function migrateAll(options: MigrationOptions): void {
   theActionsBecameAFamily(home, note);
   statedTheLightWait(home, note);
   pinTheBlessSwitch(home, note);
-  /*
-   * **Before `theAccountJoinedTheScript`**, which reads `{{username}}` as a
-   * row already naming the account (its `{username}` is inside) and so writes
-   * nothing: the file would keep a token the filler turns into `{vaelor}`.
-   */
-  theAccountTokensLostABrace(home, note);
   theAccountJoinedTheScript(home, note);
   thePagerRepeats(home, note);
   theHangPenaltyIsTheRealms(home, note);
-  quietedTheLocateProbe(home, note);
-  statedTheConfusionWait(home, note);
+  statedTheTeleport(home, note, options.template);
   statedTheFreedomCure(home, note);
-  /*
-   * **After `statedTheNewAutomation`**, which writes `keepOutOf` with both
-   * words, so a switch turned on has a word to take off.
-   */
-  theRegionsBecameKeepOut(home, note);
-  statedTheMonsterRows(home, note);
-  /*
-   * **After `statedTheMonsterRows`**, which writes `monsters: []` beside the
-   * `mobRules` this takes away, so the rows land in the list the paragraph
-   * already explains.
-   */
-  theMobRulesBecameMonsterRows(home, note);
-  statedTheMeditateTarget(home, note, options.template);
-  statedTheFleeGoto(home, note, options.template);
-  statedTheDrain(home, note, options.template);
-}
-
-/**
- * `{{username}}` / `{{password}}` become `{username}` / `{password}`
- * (2026-09-24).
- *
- * This fork filled a login step's doubled tokens before the account joined
- * the script upstream (`theAccountJoinedTheScript`), which settled on single
- * braces (`shared/login.ts`). Its pattern finds `{username}` inside the
- * doubled form and fills it, leaving the outer pair: `{{username}}` went out
- * as `{vaelor}`, and the realm refused the account. Only the two doubled
- * credential tokens are touched; every other character of a `send` stays.
- */
-function theAccountTokensLostABrace(home: Home, note: (message: string) => void): void {
-  const targets: Array<{ file: string; at: string[] }> = [
-    { file: home.options, at: ['connection', 'login', 'steps'] },
-    ...directories(home.serversDir).map((id) => ({ file: home.server(id).file, at: ['login'] })),
-    ...directories(home.profilesDir).map((id) => ({
-      file: home.profile(id).file,
-      at: ['login', 'steps']
-    }))
-  ];
-
-  const stated: string[] = [];
-  for (const { file, at } of targets) {
-    edit(file, (document) => {
-      const steps = document.getIn(at, true);
-      if (!isSeq(steps)) return false;
-      let changed = false;
-      for (const item of steps.items) {
-        if (!isMap(item)) continue;
-        const send = item.get('send');
-        if (typeof send !== 'string') continue;
-        const single = send.replace(/\{\{(username|password)\}\}/gi, '{$1}');
-        if (single === send) continue;
-        item.set('send', single);
-        changed = true;
-      }
-      if (changed) stated.push(file);
-      return changed;
-    });
-  }
-
-  if (stated.length === 0) return;
-  note(t('notices.migration.accountTokensLostABrace', { fileList: stated.join(', ') }));
+  statedTheMeditateCeiling(home, note, options.template);
+  statedThePartyPacing(home, note, options.template);
+  statedTheHealChoice(home, note, options.template);
+  statedTheAutoJoin(home, note);
 }
 
 /**
@@ -1493,10 +1425,7 @@ function statedTheMobRules(home: Home, note: (message: string) => void): void {
   for (const file of files) {
     edit(file, (document) => {
       const combat = document.getIn(['automation', 'combat'], true);
-      // Nor where the monster rows are stated: the two lists became one
-      // (`theMobRulesBecameMonsterRows`), and an empty `mobRules` written back
-      // would be taken away again on every start.
-      if (!isMap(combat) || combat.has('mobRules') || combat.has('monsters')) return false;
+      if (!isMap(combat) || combat.has('mobRules')) return false;
 
       const pair = document.createPair('mobRules', []) as Pair;
       if (isScalar(pair.key)) pair.key.commentBefore = MOB_RULES_COMMENT;
@@ -1935,35 +1864,6 @@ function quietedTheStatusLineAsks(home: Home, note: (message: string) => void): 
 
   if (!added) return;
   note(t('notices.migration.statusLineAsksQuieted', { file: home.internal }));
-}
-
-/**
- * `sys` onto `internal.yaml`'s quiet list, where the list is still the one
- * the client shipped before it.
- *
- * `sys status` is MajorMUD's own locate, asked on arrival exactly where `rm`
- * was — for a realm whose own `locate:` setting names it — and the first word
- * is `sys` regardless of which of the two the setting picked, so one entry
- * covers both. Same reasoning as `quietedTheStatusLineAsks`, and the same
- * caveat: this touches only a list that reads exactly `rm, look, pro, set`,
- * because a list cannot say "I removed that" and a list somebody has edited,
- * in either direction, is theirs and is left alone.
- */
-function quietedTheLocateProbe(home: Home, note: (message: string) => void): void {
-  let added = false;
-
-  edit(home.internal, (document) => {
-    const commands = document.getIn(['terminal', 'quiet', 'commands'], true);
-    if (!isSeq(commands)) return false;
-    const words = commands.items.map((item) => (isScalar(item) ? String(item.value) : ''));
-    if (words.join(' ') !== 'rm look pro set') return false;
-    commands.items.push(document.createNode('sys'));
-    added = true;
-    return true;
-  });
-
-  if (!added) return;
-  note(t('notices.migration.locateProbeQuieted', { file: home.internal }));
 }
 
 /**
@@ -2788,37 +2688,182 @@ function dropTheRoundMacro(home: Home, note: (message: string) => void): void {
  * nothing stated is ever overwritten.
  */
 function statedTheRestCeiling(home: Home, note: (message: string) => void): void {
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const block = document.getIn(['automation', 'health'], true);
-      if (!isMap(block) || block.has('restTo')) return false;
-      const pair = document.createPair('restTo', 0) as Pair;
-      /*
-       * Beside `restBelow` rather than at the end of the block: the two are one
-       * pair and a ceiling filed under the potions reads as a third unrelated
-       * threshold. Falls back to appending when the file states the ceiling's
-       * partner nowhere.
-       */
-      const at = block.items.findIndex(
-        (item) => isScalar(item.key) && String(item.key.value) === 'restBelow'
-      );
-      if (at === -1) block.items.push(pair);
-      else block.items.splice(at + 1, 0, pair);
-      if (isScalar(pair.key)) pair.key.commentBefore = REST_TO_COMMENT;
-      stated.push(file);
-      return true;
-    });
-  }
-
+  // Beside `restBelow` rather than at the end of the block: the two are one
+  // pair and a ceiling filed under the potions reads as a third unrelated
+  // threshold.
+  const stated = stateIn(home, HEALTH_BLOCK, 'restTo', 0, 'restBelow', REST_TO_COMMENT);
   if (stated.length === 0) return;
   const params = { count: stated.length, fileList: stated.join(', ') };
   note(
     stated.length === 1
       ? t('notices.migration.restCeiling.one', params)
       : t('notices.migration.restCeiling.many', params)
+  );
+}
+
+/**
+ * One key into a block (`automation.health`, `automation.party`) of every file
+ * that states the block without it: at `value`, with `comment` above it,
+ * directly after its partner `after`, or appended where the file states the
+ * partner nowhere. Nothing stated is overwritten, and a file that inherits the
+ * block is left alone. Returns the files written, for the step's own notice.
+ */
+const HEALTH_BLOCK = ['automation', 'health'] as const;
+const PARTY_BLOCK = ['automation', 'party'] as const;
+const SPELLS_BLOCK = ['automation', 'spells'] as const;
+const REMOTES_BLOCK = ['automation', 'remotes'] as const;
+
+function stateIn(
+  home: Home,
+  block: readonly string[],
+  key: string,
+  value: unknown,
+  after: string,
+  comment: string | undefined
+): string[] {
+  return stateInFrom(home, block, key, () => value, after, comment);
+}
+
+/** `stateIn`, with the value read from the block it is written into. */
+function stateInFrom(
+  home: Home,
+  block: readonly string[],
+  key: string,
+  valueOf: (map: YAMLMap) => unknown,
+  after: string,
+  comment: string | undefined
+): string[] {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+  for (const file of files) {
+    edit(file, (document) => {
+      const map = document.getIn([...block], true);
+      if (!isMap(map) || map.has(key)) return false;
+      const pair = document.createPair(key, valueOf(map)) as Pair;
+      if (comment !== undefined && isScalar(pair.key)) pair.key.commentBefore = comment;
+      const at = map.items.findIndex((item) => keyText(item) === after);
+      if (at === -1) map.items.push(pair);
+      else map.items.splice(at + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+  return stated;
+}
+
+/**
+ * MegaMUD's party settings (todo 831) into every file that states `party:`
+ * without them, at the shipped values and with the template's comments, in
+ * the template's order after `askForHealBelow`.
+ */
+function statedThePartyPacing(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comments = templateComments(template, 'automation');
+  const d = DEFAULT_CONFIG.automation.party;
+  const keys = [
+    ['waitBelow', d.waitBelow],
+    ['waitMinutes', d.waitMinutes],
+    ['ignoreWait', d.ignoreWait],
+    ['ignoreParty', d.ignoreParty],
+    ['askHealth', d.askHealth],
+    ['parSeconds', d.parSeconds],
+    ['parAfterRound', d.parAfterRound]
+  ] as const;
+  const stated = new Set<string>();
+  let after = 'askForHealBelow';
+  for (const [key, value] of keys) {
+    const comment = comments.get(`automation.party.${key}`);
+    for (const file of stateIn(home, PARTY_BLOCK, key, value, after, comment)) stated.add(file);
+    after = key;
+  }
+  if (stated.size === 0) return;
+  const params = { count: stated.size, fileList: [...stated].join(', ') };
+  note(
+    stated.size === 1
+      ? t('notices.migration.partyPacing.one', params)
+      : t('notices.migration.partyPacing.many', params)
+  );
+}
+
+/**
+ * `automation.spells.autoChooseHeal` into every file that states `spells:`
+ * without it, after `healParty` and with the template's comment (todo 05,
+ * 2026-09-27). The heal was chosen under `autoChoose` until it had its own
+ * switch, so each file's new key takes that file's `autoChoose`: a player who
+ * had the heals chosen still has them chosen.
+ */
+function statedTheHealChoice(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const stated = stateInFrom(
+    home,
+    SPELLS_BLOCK,
+    'autoChooseHeal',
+    (spells) => spells.get('autoChoose') === true,
+    'healParty',
+    templateComments(template, 'automation').get('automation.spells.autoChooseHeal')
+  );
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.healChoice.one', params)
+      : t('notices.migration.healChoice.many', params)
+  );
+}
+
+/**
+ * `automation.remotes.autoJoin` into every file that states `remotes:` without
+ * it, off, after `gangpath` (todo 07, 2026-09-27). Its explanation is in the
+ * template's block comment above `remotes:`, so the key carries none.
+ */
+function statedTheAutoJoin(home: Home, note: (message: string) => void): void {
+  const stated = stateIn(
+    home,
+    REMOTES_BLOCK,
+    'autoJoin',
+    DEFAULT_CONFIG.automation.remotes.autoJoin,
+    'gangpath',
+    undefined
+  );
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.autoJoin.one', params)
+      : t('notices.migration.autoJoin.many', params)
+  );
+}
+
+/**
+ * `automation.health.meditateTo` into every file that states `health:`
+ * without it, at the shipped 0 and with the template's comment (todo 825).
+ * After `meditateBelow`, its pair; appended where the file states neither.
+ */
+function statedTheMeditateCeiling(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const stated = stateIn(
+    home,
+    HEALTH_BLOCK,
+    'meditateTo',
+    DEFAULT_CONFIG.automation.health.meditateTo,
+    'meditateBelow',
+    templateComments(template, 'automation').get('automation.health.meditateTo')
+  );
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.meditateCeiling.one', params)
+      : t('notices.migration.meditateCeiling.many', params)
   );
 }
 
@@ -2833,28 +2878,14 @@ function statedTheRestCeiling(home: Home, note: (message: string) => void): void
  * file states neither partner.
  */
 function statedTheTrapRest(home: Home, note: (message: string) => void): void {
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const block = document.getIn(['automation', 'health'], true);
-      if (!isMap(block) || block.has('restBeforeTraps')) return false;
-      const pair = document.createPair(
-        'restBeforeTraps',
-        DEFAULT_CONFIG.automation.health.restBeforeTraps
-      ) as Pair;
-      const at = block.items.findIndex(
-        (item) => isScalar(item.key) && String(item.key.value) === 'restTo'
-      );
-      if (at === -1) block.items.push(pair);
-      else block.items.splice(at + 1, 0, pair);
-      if (isScalar(pair.key)) pair.key.commentBefore = REST_BEFORE_TRAPS_COMMENT;
-      stated.push(file);
-      return true;
-    });
-  }
-
+  const stated = stateIn(
+    home,
+    HEALTH_BLOCK,
+    'restBeforeTraps',
+    DEFAULT_CONFIG.automation.health.restBeforeTraps,
+    'restTo',
+    REST_BEFORE_TRAPS_COMMENT
+  );
   if (stated.length === 0) return;
   const params = { count: stated.length, fileList: stated.join(', ') };
   note(
@@ -3531,6 +3562,76 @@ function theHangPenaltyIsTheRealms(home: Home, note: (message: string) => void):
     changed.length === 1
       ? t('notices.migration.hangPenalties.one', params)
       : t('notices.migration.hangPenalties.many', params)
+  );
+}
+
+/**
+ * The last-ditch teleport below the retreat (2026-09-24, todo 813): the
+ * template's `fleeGoto` block, comments and all, into the options file's
+ * `automation.safety` beside `retreat`, since `reconcileWithTemplate` reaches
+ * no deeper than a top-level block. Off, as shipped; the command is left to
+ * each realm's `server.yaml`, so no realm file is touched. Idempotent: a map
+ * key already there is left alone.
+ */
+function statedTheTeleport(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const source = templateOf(template)?.getIn(['automation', 'safety'], true);
+  const shipped = isMap(source)
+    ? source.items.find((item) => keyText(item as Pair) === 'fleeGoto')
+    : undefined;
+  if (shipped === undefined || !isMap(shipped.value)) return;
+
+  let stated = false;
+  edit(home.options, (document) => {
+    const safety = document.getIn(['automation', 'safety'], true);
+    if (!isMap(safety) || safety.has('fleeGoto')) return false;
+    const pair = document.createPair('fleeGoto', null) as Pair;
+    pair.value = (shipped.value as YAMLMap).clone();
+    const comment = isScalar(shipped.key) ? shipped.key.commentBefore : undefined;
+    if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+    const at = safety.items.findIndex((item) => keyText(item as Pair) === 'retreat');
+    if (at === -1) safety.items.push(pair);
+    else safety.items.splice(at + 1, 0, pair);
+    stated = true;
+    return true;
+  });
+
+  if (stated) note(t('notices.migration.teleportStated', { file: home.options }));
+}
+
+/**
+ * The fourth cure (2026-09-24, todo 810): `spells.cures.freedom`, blank, into
+ * every file whose `cures:` block predates it, after `disease`, so a block
+ * listing three says the fourth exists. A file stating no `cures:` takes the
+ * whole default and is left alone.
+ * Idempotent: a key stays added whatever its value.
+ */
+function statedTheFreedomCure(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const cures = document.getIn(['automation', 'spells', 'cures'], true);
+      if (!isMap(cures) || cures.has('freedom')) return false;
+      const pair = document.createPair('freedom', DEFAULT_CONFIG.automation.spells.cures.freedom);
+      const at = cures.items.findIndex((item) => keyText(item as Pair) === 'disease');
+      if (at === -1) cures.items.push(pair);
+      else cures.items.splice(at + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.freedomCureStated.one', params)
+      : t('notices.migration.freedomCureStated.many', params)
   );
 }
 
@@ -4294,11 +4395,6 @@ function statedTheNewAutomation(home: Home, note: (message: string) => void): vo
       ) {
         changed = true;
       }
-      if (
-        addKeys(document, ['automation', 'party'], PARTY_LEADING_DEFAULTS, PARTY_LEADING_COMMENT)
-      ) {
-        changed = true;
-      }
       if (addKeys(document, ['automation', 'health'], [['useWards', true]], USE_WARDS_COMMENT)) {
         changed = true;
       }
@@ -4693,24 +4789,6 @@ const ASK_FOR_HEAL_COMMENT = ` Say @heal in the room when health falls below thi
  client answers with a heal. Said on the crossing and again every
  tuning.remotes.healAskAgainMs while still under it. 0 never asks.`;
 
-/** MegaMUD's party pacing (2026-09-24), written at their defaults, all off but one. */
-const PARTY_LEADING_DEFAULTS: ReadonlyArray<readonly [string, number | boolean]> = [
-  ['waitForMembersBelow', 0],
-  ['waitNoLongerMinutes', 0],
-  ['ignoreWaitWhenLeading', false],
-  ['ignorePartyWhenFollowing', false],
-  ['requestPartyHealth', true],
-  ['parEverySeconds', 0],
-  ['parAfterRound', false]
-];
-const PARTY_LEADING_COMMENT = ` MegaMUD's party pacing. Leading: waitForMembersBelow pauses the loop while
- a member's listed health is under it (0 never), waitNoLongerMinutes gives up
- on a @wait or a hurt member (0 never), ignoreWaitWhenLeading walks on
- through @wait. Following: ignorePartyWhenFollowing refuses @party. Either:
- requestPartyHealth telepaths @health to whoever joins, parEverySeconds asks
- for the listing on a clock (0 only when the party changes), parAfterRound
- after every combat round.`;
-
 const AREA_SPELL_DEFAULTS: ReadonlyArray<readonly [string, string | number]> = [
   ['areaAttack', ''],
   ['areaMinMobs', 3],
@@ -4770,12 +4848,12 @@ const REPLAN_DRIFT_COMMENT = ` How far the character may have strayed from the r
  Counted in the router's own steps, not in map squares. Past this, the new plan
  is put back on screen to be read. 0 asks every time.`;
 
-const SHOW_LOGO_COMMENT = ` The client's own mark, at the left of the status rail.
+const SHOW_LOGO_COMMENT = ` The client's own mark and its version, at the top right of the card rail.
 
  On by default: it is the one place the client says what it is, and a brand
  nobody ever sees is the same as none. Turn it off if you would rather the
- status rail held nothing but facts about the session -- it is not in the way of
- anything either way, since it takes the height that line already has.`;
+ rail held nothing but cards -- it is not in the way of anything either way,
+ since it shares the row of the put-away cards' chip.`;
 
 const REST_TO_COMMENT = ` Keep sitting back down until health reaches this; 0 is the single sit-down at
  the figure above, which is what this client did before the key existed. The
@@ -4871,30 +4949,7 @@ const LIGHT_COMMENT = ` Light, before the dark -- MegaMUD's AutoLight.
  the light out again in a room that does not need it, while nothing is walking
  the character, so a torch lasts the sewer rather than the walk to it.`;
 
-const CONDITION_WAIT_DEFAULTS: ReadonlyArray<readonly [string, boolean]> = [
-  ['walkWhileBlind', false],
-  ['walkWhilePoisoned', false]
-];
-
 const KEY_PICKUP_DEFAULTS: ReadonlyArray<readonly [string, boolean]> = [['collectKeys', true]];
-
-/** The template's own words for it, so the two files read alike. */
-const CONFUSION_WAIT_COMMENT = ` And confusion -- MegaMUD's Ignore Confusion, off by default as MegaMUD's
- is. Nothing on the wire says a character is confused in words this
- client knows; a realm's message table does (import MegaMUD's
- Messages.md on the realm's settings page), and while it says so a route
- or a loop stands still. A confused character's commands misfire.`;
-
-/** The template's own words for the monster rows, so the files read alike. */
-const MONSTER_ROWS_COMMENT = ` What this character does differently about particular monsters -- MegaMUD's
- Monster Details, laid one field at a time over the realm's own table
- (servers/<id>/monsters.yaml, imported from Monsters.md on the realm's page).
- A row names a monster and only what differs: relationship (friend, avoid,
- enemy, escape, hangup), priority, notHostile, noBackstab, stopToKill, and a
- preAttack or attack spell. A field left out keeps what the realm says.
-
-   monsters:
-     - { mob: gigantic black ooze, attack: mmis }`;
 
 /** The template's own words for it, so the two files read alike. */
 const KEY_PICKUP_COMMENT = ` The key to the door in front of you.
@@ -4911,18 +4966,6 @@ const KEY_PICKUP_COMMENT = ` The key to the door in front of you.
  holds a name that can only be that row -- the realm has three \`iron key\`s,
  and a door opened on a coin toss is the confidently wrong answer the router
  refuses everywhere else. One \`get\` per key per room, said out loud.`;
-
-/** The template's own words for the pair, so the two files read alike. */
-const CONDITION_WAIT_COMMENT = `
- Conditions as waits -- MegaMUD's IgnoreBlind / IgnorePoison, whose
- defaults (0) wait the condition out before the script goes on. Off, a
- route or a loop stands still while the server says the character is
- blind or poisoned, and walks on when it says the condition has passed;
- the card and the tab say which condition it is waiting out. A blind
- character cannot read the room it walks into and misses every swing.
- Paralysis always holds -- a step while held is a command spent to be
- refused -- and disease is left to the cure. A cure spell under \`spells:\`
- ends the wait sooner.`;
 
 const SUPPLIES_COMMENT = ` Keeping the pack stocked -- MegaMUD's Must Have Minimum.
 
@@ -5928,10 +5971,21 @@ function statedTheLightAndSupplies(home: Home, note: (message: string) => void):
  * The key-into-a-map shape, so it is idempotent against somebody who has since
  * set either to `true` — a key stays added whatever its value. Nothing stated
  * is overwritten.
+ *
+ * `walkWhileConfused` joined the run on 2026-09-24 (todo 809) into files that
+ * already state the pair, so each key is written beside the wait before it,
+ * with the paragraph the template puts above it (`CONDITION_WAIT_KEYS` is the
+ * list, in the template's order), and the notice names the keys it wrote.
  */
-function statedTheConditionWaits(home: Home, note: (message: string) => void): void {
+function statedTheConditionWaits(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const comments = templateComments(template, 'automation');
   const stated: string[] = [];
+  const written = new Set<string>();
 
   for (const file of files) {
     edit(file, (document) => {
@@ -5939,23 +5993,38 @@ function statedTheConditionWaits(home: Home, note: (message: string) => void): v
       if (!isMap(movement)) return false;
 
       let changed = false;
-      let first: Pair | null = null;
-      for (const [key, value] of CONDITION_WAIT_DEFAULTS) {
-        if (movement.has(key)) continue;
-        const pair = document.createPair(key, value) as Pair;
-        movement.items.push(pair);
-        if (first === null) first = pair;
-        changed = true;
+      let previous: string | null = null;
+      for (const key of CONDITION_WAIT_KEYS) {
+        if (!movement.has(key)) {
+          const pair = document.createPair(key, DEFAULT_CONFIG.automation.movement[key]) as Pair;
+          // Beside the wait before it, so the three read as the template's run.
+          const at =
+            previous === null
+              ? -1
+              : movement.items.findIndex(
+                  (item) => isScalar(item.key) && String(item.key.value) === previous
+                );
+          if (at === -1) movement.items.push(pair);
+          else movement.items.splice(at + 1, 0, pair);
+          const comment = comments.get(`automation.movement.${key}`);
+          if (comment !== undefined && isScalar(pair.key)) pair.key.commentBefore = comment;
+          written.add(key);
+          changed = true;
+        }
+        previous = key;
       }
       if (!changed) return false;
-      if (first !== null && isScalar(first.key)) first.key.commentBefore = CONDITION_WAIT_COMMENT;
       stated.push(file);
       return true;
     });
   }
 
   if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
+  const params = {
+    count: stated.length,
+    keys: CONDITION_WAIT_KEYS.filter((key) => written.has(key)).join(', '),
+    fileList: stated.join(', ')
+  };
   note(
     stated.length === 1
       ? t('notices.migration.conditionWaitsStated.one', params)
@@ -5982,408 +6051,6 @@ function statedTheConditionWaits(home: Home, note: (message: string) => void): v
  * set it to `false` — a key stays added whatever its value. Nothing stated is
  * overwritten.
  */
-/**
- * Waiting a confusion out, 2026-09-22 — the third condition wait, and the
- * first a realm's message table rather than the wire decides.
- *
- * `walkWhileConfused` ships off, so a file that predates it waits confusion
- * out from the built-in default and says nothing about it: the
- * invisible-setting failure `statedTheConditionWaits` was written for, one
- * key along. Placed after `walkWhilePoisoned` where that key is stated, so
- * the three waits read as the one paragraph they are; at the end of the
- * block otherwise.
- *
- * Idempotent against somebody who has since set it — a key stays added
- * whatever its value — and nothing stated is overwritten.
- */
-/**
- * `useVortexes` and `enterNegativePlane` became `keepOutOf` (2026-09-24).
- *
- * This fork's two switches (2026-09-23) kept route planning out of the
- * vortexes and the Negative Power Plane; upstream's merge (todo 806) says the
- * same thing as a list of the realm's own words, which `statedTheNewAutomation`
- * has already written with both words in it. A switch turned **on** said the
- * player walks that way, so its word comes off the list; either way the two
- * keys go, and the paragraph written with them goes with the first. Nothing
- * else in the file is touched, and a file stating neither is left alone.
- */
-function theRegionsBecameKeepOut(home: Home, note: (message: string) => void): void {
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const moved: string[] = [];
-  const words: Record<string, string> = {
-    useVortexes: 'vortex',
-    enterNegativePlane: 'negative power plane'
-  };
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const movement = document.getIn(['automation', 'movement'], true);
-      if (!isMap(movement)) return false;
-      const stated = Object.keys(words).filter((key) => movement.has(key));
-      if (stated.length === 0) return false;
-      const keepOut = movement.get('keepOutOf', true);
-      for (const key of stated) {
-        if (movement.get(key) === true && isSeq(keepOut)) {
-          keepOut.items = keepOut.items.filter(
-            (item) => !(isScalar(item) && String(item.value).toLowerCase() === words[key])
-          );
-        }
-        movement.delete(key);
-      }
-      moved.push(file);
-      return true;
-    });
-  }
-
-  if (moved.length === 0) return;
-  const params = { count: moved.length, fileList: moved.join(', ') };
-  note(
-    moved.length === 1
-      ? t('notices.migration.regionsBecameKeepOut.one', params)
-      : t('notices.migration.regionsBecameKeepOut.many', params)
-  );
-}
-
-/**
- * `automation.combat.monsters` (roadmap step 3, 2026-09-23): a character's own
- * monster rows, laid over the realm's imported table. Written as an empty list
- * after `mobRules`, with the paragraph, into every file that states a combat
- * block — so the setting is found beside the rules it is read with. After
- * `theMobListsBecameRules`, which turns `mobPriority` into `mobRules`.
- */
-function statedTheMonsterRows(home: Home, note: (message: string) => void): void {
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const combat = document.getIn(['automation', 'combat'], true);
-      if (!isMap(combat) || combat.has('monsters')) return false;
-      const pair = document.createPair('monsters', []) as Pair;
-      if (isScalar(pair.key)) pair.key.commentBefore = MONSTER_ROWS_COMMENT;
-      const after = combat.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'mobRules'
-      );
-      if (after === -1) combat.items.push(pair);
-      else combat.items.splice(after + 1, 0, pair);
-      stated.push(file);
-      return true;
-    });
-  }
-
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
-  note(
-    stated.length === 1
-      ? t('notices.migration.monsterRowsStated.one', params)
-      : t('notices.migration.monsterRowsStated.many', params)
-  );
-}
-
-/**
- * `automation.health.meditateTo` (2026-09-23): the mana half of `restTo`,
- * asked for when skinny's lap walked on at 42% with `meditateBelow` at 50%.
- * Written after `meditateBelow` at 0 — what the hold did before it was a
- * setting — with the template's paragraph, into every file that states a
- * health block, so the figure is found beside the one it lets go of.
- */
-function statedTheMeditateTarget(
-  home: Home,
-  note: (message: string) => void,
-  template: string | undefined
-): void {
-  const comment = templateComments(template, 'automation').get('automation.health.meditateTo');
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const health = document.getIn(['automation', 'health'], true);
-      if (!isMap(health) || health.has('meditateTo')) return false;
-      const pair = document.createPair('meditateTo', 0) as Pair;
-      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
-      const after = health.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'meditateBelow'
-      );
-      if (after === -1) health.items.push(pair);
-      else health.items.splice(after + 1, 0, pair);
-      stated.push(file);
-      return true;
-    });
-  }
-
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
-  note(
-    stated.length === 1
-      ? t('notices.migration.meditateTargetStated.one', params)
-      : t('notices.migration.meditateTargetStated.many', params)
-  );
-}
-
-/**
- * `automation.safety.fleeGoto` (2026-09-22): the `sys goto` escape, off, for
- * a realm that answers `sys status`. Written after `retreat` with the
- * template's paragraph into every file that states a safety block — the one
- * setting the flee's own settings screen reads from and nothing in the file
- * said existed. The shipped figures, never a copy of them.
- */
-function statedTheFleeGoto(
-  home: Home,
-  note: (message: string) => void,
-  template: string | undefined
-): void {
-  const comment = templateComments(template, 'automation').get('automation.safety.fleeGoto');
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const safety = document.getIn(['automation', 'safety'], true);
-      if (!isMap(safety) || safety.has('fleeGoto')) return false;
-      const pair = document.createPair('fleeGoto', {
-        ...DEFAULT_CONFIG.automation.safety.fleeGoto
-      }) as Pair;
-      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
-      const after = safety.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'retreat'
-      );
-      if (after === -1) safety.items.push(pair);
-      else safety.items.splice(after + 1, 0, pair);
-      stated.push(file);
-      return true;
-    });
-  }
-
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
-  note(
-    stated.length === 1
-      ? t('notices.migration.fleeGotoStated.one', params)
-      : t('notices.migration.fleeGotoStated.many', params)
-  );
-}
-
-/**
- * `automation.spells.drain`, `areaDrain`, `drainBelow` and `drainTo`
- * (2026-09-28): a necrolyte's `vampiric assault` and `necromantic storm` cast
- * in place of the attack spells while health is low. Written off, after
- * `areaCasts`, with the template's paragraph on the first, into every file
- * that states a spells block.
- */
-function statedTheDrain(
-  home: Home,
-  note: (message: string) => void,
-  template: string | undefined
-): void {
-  const comment = templateComments(template, 'automation').get('automation.spells.drain');
-  const defaults = DEFAULT_CONFIG.automation.spells;
-  const keys = [
-    ['drain', defaults.drain],
-    ['areaDrain', defaults.areaDrain],
-    ['drainBelow', defaults.drainBelow],
-    ['drainTo', defaults.drainTo]
-  ] as const;
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const spells = document.getIn(['automation', 'spells'], true);
-      if (!isMap(spells) || spells.has('drain')) return false;
-      const pairs = keys
-        .filter(([key]) => !spells.has(key))
-        .map(([key, value]) => document.createPair(key, value) as Pair);
-      const first = pairs[0];
-      if (typeof comment === 'string' && first !== undefined && isScalar(first.key)) {
-        first.key.commentBefore = comment;
-      }
-      const after = spells.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'areaCasts'
-      );
-      if (after === -1) spells.items.push(...pairs);
-      else spells.items.splice(after + 1, 0, ...pairs);
-      stated.push(file);
-      return true;
-    });
-  }
-
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
-  note(
-    stated.length === 1
-      ? t('notices.migration.drainStated.one', params)
-      : t('notices.migration.drainStated.many', params)
-  );
-}
-
-/**
- * `mobRules` became monster rows (2026-09-24): the two lists about named
- * monsters were one question asked in two panels.
- *
- * Upstream's `mobRules` said two things about a monster — `never`, and one of
- * five bands — and this fork's `monsters` rows (MegaMUD's *Monster Details*)
- * say both and more: `never` is a Friend, never attacked even when it swings
- * first, and a band is `priority`. So every row moves, at the scope it was
- * written at: the options file's and each character's into
- * `automation.combat.monsters`, and a realm's `server.yaml` list into its
- * imported table, `servers/<id>/monsters.yaml`, created if the realm had
- * none.
- *
- * **The rule wins where the two rows disagree**, as it did while both were
- * read: a band beat a monster row's priority (`AutoCombat.bandOf`), and a
- * `never` left the monster alone whatever its relationship. Except a Flee or
- * a Hang up, which stay: those already keep the character out of the fight,
- * and turning one into a Friend would throw away the running or the
- * disconnect. Idempotent: the key is gone once it has moved.
- */
-function theMobRulesBecameMonsterRows(home: Home, note: (message: string) => void): void {
-  const moved: string[] = [];
-
-  /** A monster row with a rule laid over it, as plain data for the file. */
-  const laid = (row: Record<string, unknown>, rule: MobRule): Record<string, unknown> => {
-    if (rule.treat !== 'never') return { ...row, priority: rule.treat };
-    const kept = row['relationship'] === 'escape' || row['relationship'] === 'hangup';
-    return kept ? row : { ...row, relationship: 'friend' };
-  };
-  /** Rules folded into a list of rows, a rule's monster keeping its place. */
-  const fold = (rows: unknown, rules: MobRule[]): Array<Record<string, unknown>> => {
-    const out = (Array.isArray(rows) ? rows : [])
-      .filter((row): row is Record<string, unknown> => isRecord(row))
-      .map((row) => ({ ...row }));
-    for (const rule of rules) {
-      const at = out.findIndex((row) => row['mob'] === rule.mob);
-      if (at === -1) out.push(laid({ mob: rule.mob }, rule));
-      else out[at] = laid(out[at]!, rule);
-    }
-    return out;
-  };
-
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  for (const file of files) {
-    edit(file, (document) => {
-      const combat = document.getIn(['automation', 'combat'], true);
-      if (!isMap(combat) || !combat.has('mobRules')) return false;
-      const listed = combat.get('mobRules', true);
-      const rules = normalizeMobRules(isSeq(listed) ? listed.toJSON() : []);
-      const current = combat.get('monsters', true);
-      const rows = fold(isSeq(current) ? current.toJSON() : [], rules);
-      combat.delete('mobRules');
-      // An empty list moves nothing: the rows somebody wrote keep their layout.
-      if (rules.length === 0) {
-        moved.push(file);
-        return true;
-      }
-      if (isSeq(current)) {
-        current.items = (document.createNode(rows) as YAMLSeq).items;
-      } else if (rows.length > 0) {
-        combat.set('monsters', document.createNode(rows));
-      }
-      moved.push(file);
-      return true;
-    });
-  }
-
-  for (const id of directories(home.serversDir)) {
-    const file = home.server(id).file;
-    let rules: MobRule[] = [];
-    edit(file, (document) => {
-      if (!document.has('mobRules')) return false;
-      const listed = document.get('mobRules', true);
-      rules = normalizeMobRules(isSeq(listed) ? listed.toJSON() : []);
-      document.delete('mobRules');
-      return true;
-    });
-    if (rules.length === 0) continue;
-    const table = path.join(home.server(id).dir, MONSTER_TABLE.file);
-    if (fs.existsSync(table)) {
-      edit(table, (document) => {
-        const current = document.get('monsters', true);
-        const rows = fold(isSeq(current) ? current.toJSON() : [], rules);
-        document.set('monsters', document.createNode(rows));
-        return true;
-      });
-    } else {
-      const document = new Document({ source: null, monsters: fold([], rules) });
-      document.commentBefore = MONSTER_TABLE.header;
-      try {
-        fs.writeFileSync(table, String(document), 'utf8');
-      } catch {
-        // Read by the store that opens it next, which reports a missing file
-        // as an empty table; the rules are still in `server.yaml.bak`.
-      }
-    }
-    moved.push(table);
-  }
-
-  if (moved.length === 0) return;
-  note(t('notices.migration.mobRulesBecameMonsterRows', { fileList: moved.join(', ') }));
-}
-
-function statedTheConfusionWait(home: Home, note: (message: string) => void): void {
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const movement = document.getIn(['automation', 'movement'], true);
-      if (!isMap(movement) || movement.has('walkWhileConfused')) return false;
-      const pair = document.createPair('walkWhileConfused', false) as Pair;
-      if (isScalar(pair.key)) pair.key.commentBefore = CONFUSION_WAIT_COMMENT;
-      const after = movement.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'walkWhilePoisoned'
-      );
-      if (after === -1) movement.items.push(pair);
-      else movement.items.splice(after + 1, 0, pair);
-      stated.push(file);
-      return true;
-    });
-  }
-
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
-  note(
-    stated.length === 1
-      ? t('notices.migration.confusionWaitStated.one', params)
-      : t('notices.migration.confusionWaitStated.many', params)
-  );
-}
-
-/**
- * MegaMUD's Freedom, 2026-09-22: a fourth cure, for a character that cannot
- * move. Blank, so nothing is cast until a spell is named — but a `cures:`
- * block that predates it would go on listing three with nothing to say a
- * fourth exists, so it is written in after `disease`, where a player
- * reading the block will find it. Idempotent; nothing stated is overwritten.
- */
-function statedTheFreedomCure(home: Home, note: (message: string) => void): void {
-  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
-  const stated: string[] = [];
-
-  for (const file of files) {
-    edit(file, (document) => {
-      const cures = document.getIn(['automation', 'spells', 'cures'], true);
-      if (!isMap(cures) || cures.has('freedom')) return false;
-      const pair = document.createPair('freedom', '') as Pair;
-      const after = cures.items.findIndex(
-        (item) => isScalar(item.key) && item.key.value === 'disease'
-      );
-      if (after === -1) cures.items.push(pair);
-      else cures.items.splice(after + 1, 0, pair);
-      stated.push(file);
-      return true;
-    });
-  }
-
-  if (stated.length === 0) return;
-  const params = { count: stated.length, fileList: stated.join(', ') };
-  note(
-    stated.length === 1
-      ? t('notices.migration.freedomCureStated.one', params)
-      : t('notices.migration.freedomCureStated.many', params)
-  );
-}
-
 function statedTheKeyPickup(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
   const stated: string[] = [];
@@ -6541,9 +6208,6 @@ function theTuningBlockGainedKeys(
     // makes is bounded by one of these, so a run that looks stuck is diagnosed
     // from this block or not at all.
     addGroup('quests', { ...DEFAULT_INTERNAL.tuning.quests });
-    // A realm's message table acted on (2026-09-24): four clocks that were
-    // constants in the code, where nobody could reach them.
-    addGroup('messages', { ...DEFAULT_INTERNAL.tuning.messages });
 
     /** One key into a sub-block the file already states, with its paragraph. */
     const addKey = (group: string, key: string, value: number): void => {
@@ -6643,11 +6307,13 @@ function theTuningBlockGainedKeys(
     addKey('session', 'sentenceHoldMs', DEFAULT_INTERNAL.tuning.session.sentenceHoldMs);
     /* How long a listing the client redraws waits for its prompt (2026-09-10, todo 99). */
     addKey('session', 'rewriteHoldMs', DEFAULT_INTERNAL.tuning.session.rewriteHoldMs);
+    /* How long a Goto or a Loop waits for the locate word's answer (todo 812). */
+    addKey('session', 'locateResolveMs', DEFAULT_INTERNAL.tuning.session.locateResolveMs);
+    /* And how long its ask is worth sending, once a literal in `Claims` (todo 762). */
+    addKey('session', 'locateExpiresMs', DEFAULT_INTERNAL.tuning.session.locateExpiresMs);
     /* The look queue's floor and its shelf life (2026-09-07, todo 10). */
     addKey('queue', 'lookAskMs', DEFAULT_INTERNAL.tuning.queue.lookAskMs);
     addKey('queue', 'lookExpiresMs', DEFAULT_INTERNAL.tuning.queue.lookExpiresMs);
-    // The required facts asked for again until read (2026-09-25).
-    addKey('queue', 'unreadRetryMs', DEFAULT_INTERNAL.tuning.queue.unreadRetryMs);
     /* What a room's own spell costs, and when the router looks for another way
        (2026-09-09, todo 01), and how much shorter the way with the right items
        has to be to be offered (2026-09-10, todo 01). */
@@ -6695,6 +6361,8 @@ function theTuningBlockGainedKeys(
     addKey('walk', 'followSettleMs', DEFAULT_INTERNAL.tuning.walk.followSettleMs);
     // How long an item errand waits on a summons it asked for (todo 806).
     addKey('walk', 'errandAskMs', DEFAULT_INTERNAL.tuning.walk.errandAskMs);
+    // And how late a handover's item can land, once that window's minutes (todo 765).
+    addKey('walk', 'handoverDelayMs', DEFAULT_INTERNAL.tuning.walk.handoverDelayMs);
     // And how many levers-behind-levers one walk will fetch (todo 807).
     addKey('walk', 'leverErrandDepth', DEFAULT_INTERNAL.tuning.walk.leverErrandDepth);
     /*
@@ -6732,32 +6400,21 @@ function theTuningBlockGainedKeys(
     addKey('world', 'anotherWayPenalty', DEFAULT_INTERNAL.tuning.world.anotherWayPenalty);
     addKey('world', 'anotherWayLonger', DEFAULT_INTERNAL.tuning.world.anotherWayLonger);
     addKey('world', 'hazardSupplyCount', DEFAULT_INTERNAL.tuning.world.hazardSupplyCount);
-    // The router's reach for a lever in another room (2026-09-24).
-    addKey('world', 'leverDetourCost', DEFAULT_INTERNAL.tuning.world.leverDetourCost);
-    /*
-     * This fork's own clocks (2026-09-22 to 09-23), which reached no file that
-     * already stated their groups: which attack a `*Combat Engaged*` answers,
-     * the room re-read after a death or an arrival and how long it is owed,
-     * the room spell's settle before it is let go, the one heal or blessing a
-     * round, a blessing's onset settling, how long the errand waits on a
-     * summons, and how long a locate answer is waited for.
-     */
-    addKey('parse', 'engageBindMs', DEFAULT_INTERNAL.tuning.parse.engageBindMs);
-    addKey('combat', 'lookAfterKillMs', DEFAULT_INTERNAL.tuning.combat.lookAfterKillMs);
-    addKey('combat', 'roomOwedMs', DEFAULT_INTERNAL.tuning.combat.roomOwedMs);
-    addKey('combat', 'areaSettleMs', DEFAULT_INTERNAL.tuning.combat.areaSettleMs);
-    addKey('spells', 'onsetSettleMs', DEFAULT_INTERNAL.tuning.spells.onsetSettleMs);
-    addKey('spells', 'roundGapMs', DEFAULT_INTERNAL.tuning.spells.roundGapMs);
-    addKey('spells', 'castRoundMs', DEFAULT_INTERNAL.tuning.spells.castRoundMs);
-    addKey('spells', 'refusedWindowMs', DEFAULT_INTERNAL.tuning.spells.refusedWindowMs);
-    addKey('walk', 'errandAskMs', DEFAULT_INTERNAL.tuning.walk.errandAskMs);
-    addKey('session', 'locateResolveMs', DEFAULT_INTERNAL.tuning.session.locateResolveMs);
     /*
      * What a key's fetch is weighed at against the way round (2026-09-23,
      * todo 805): the one number that decides whether a locked door is offered
      * as an errand or left to the long way.
      */
     addKey('world', 'keyFetchTrips', DEFAULT_INTERNAL.tuning.world.keyFetchTrips);
+    // And what a door's lever in another room may cost to walk to (todo 837).
+    addKey('world', 'leverDetourCost', DEFAULT_INTERNAL.tuning.world.leverDetourCost);
+    // Where a round's blows begin, and how long a heal, blessing or cure
+    // holds the next one when none are seen (todo 823).
+    addKey('combat', 'roundGapMs', DEFAULT_INTERNAL.tuning.combat.roundGapMs);
+    // How long an entry st or i waits before it is asked again (todo 835).
+    addKey('queue', 'unreadRetryMs', DEFAULT_INTERNAL.tuning.queue.unreadRetryMs);
+    addKey('queue', 'unreadRetries', DEFAULT_INTERNAL.tuning.queue.unreadRetries);
+    addKey('spells', 'castSlackMs', DEFAULT_INTERNAL.tuning.spells.castSlackMs);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {
@@ -6805,19 +6462,6 @@ function theTuningBlockGainedKeys(
      * a figure.
      */
     dropKey('walk', 'searchTries');
-    /*
-     * The item errand's pack-check spacing (this fork, 2026-09-23), retired
-     * when upstream's merge read a handover off one pack listing instead
-     * (`PackAfter`, todo 806): nothing asks for the pack on a clock now.
-     */
-    dropKey('walk', 'errandPackCheckMs');
-    /*
-     * The follower's settle before `@ok` (this fork, 2026-09-24), retired when
-     * `@wait` went by the walker's own figures (`stillFor`, 2026-09-25): a
-     * hold that ends at its ceiling cannot flicker, and waiting past it only
-     * kept a leader standing.
-     */
-    dropKey('remotes', 'okAfterMs');
     const tallyAt = tuning.items.findIndex((item) => keyText(item) === 'tally');
     if (tallyAt !== -1) {
       tuning.items.splice(tallyAt, 1);

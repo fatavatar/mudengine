@@ -101,8 +101,6 @@ export interface BelongingsSink {
   recallSpellDurations(): Readonly<Record<string, number>>;
   /** A cast→wear-off pair has been observed; the newest measurement wins. */
   rememberSpellDuration(spell: string, seconds: number): void;
-  /** Drops a measured duration the stat sheet has contradicted. */
-  forgetSpellDuration(spell: string): void;
   /**
    * What `abil` last summed for this character, with the clock it was read on.
    *
@@ -171,7 +169,6 @@ export const NO_BELONGINGS: BelongingsSink = {
   rememberSpellbook: () => {},
   recallSpellDurations: () => ({}),
   rememberSpellDuration: () => {},
-  forgetSpellDuration: () => {},
   recallAbilities: () => null,
   rememberAbilities: () => {},
   recallIdentity: () => null,

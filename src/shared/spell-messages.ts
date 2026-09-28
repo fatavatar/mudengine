@@ -153,61 +153,35 @@ export interface SpellMessageRow {
   start: string | null;
   /** Printed when the effect ends. */
   stop: string | null;
-  /** The message record both sentences come from (`desc_msg_id`), where the file says. */
+  /** The message record both sentences come from (`desc_msg_id`, `DescMsg`), where the file says. */
   message?: number;
 }
 
 /**
- * The ability that carries a spell's message record number — `DescMsg` in
- * `src/shared/abilities.ts`. The one link between a realm's Spells row and
- * the sentences, which the shipped file keys by the *spell's name*.
- */
-const DESC_MSG_ABILITY = 115;
-
-/** Just what {@link withRealmSpellNames} reads off a realm's spell row. */
-export interface RealmSpellRow {
-  name: string;
-  abilities?: ReadonlyArray<readonly [number, number]>;
-}
-
-/**
- * The shipped rows, and the same sentences again under **this realm's** name
- * for every spell whose message record the file holds.
+ * The shipped rows, and the same sentences again under this realm's name for
+ * every spell whose message record the file holds (todo 824).
  *
- * The file was extracted from one server and names each row the way that
- * server's Spells table does. A derivative realm keeps the message records
- * and renames the spells: on Paramud `pagan ritual` carries record 820, the
- * file's `blood ritual`, and `aura of undeath` carries 8542, the file's
- * `unholy aura` (captured 2026-09-23). Keyed by name alone, `You are affected
- * by a blood ritual!` named a spell the character never cast, and a blessing
- * configured as `pagan ritual` was recast every thirty seconds with the
- * ritual up. The record number is the realm's own statement of which
- * sentences a spell prints, so it is what joins the two.
- *
- * The file's own names are kept: a monster's spell on this realm may still go
- * by them, and a lookup answers every name a sentence could mean.
+ * The file names each row as one server's Spells table does, and a realm built
+ * on it may rename a spell and keep the record: Paradigm's `vile ward` carries
+ * `unholy aura`'s. The record is the realm's own statement of which sentences
+ * a spell prints, so it is what joins the two. `realm` is record → the realm's
+ * spell names carrying it (`WorldGraph.spellsByMessage(DESC_MESSAGE_ABILITY)`).
  */
 export function withRealmSpellNames(
   rows: readonly SpellMessageRow[],
-  spells: Iterable<RealmSpellRow>
+  realm: ReadonlyMap<number, readonly string[]>
 ): SpellMessageRow[] {
-  const byMessage = new Map<number, SpellMessageRow>();
-  const named = new Set<string>();
+  const named = new Set(rows.map((row) => spellKey(row.spell)));
+  const joined = [...rows];
   for (const row of rows) {
-    named.add(spellKey(row.spell));
-    if (row.message !== undefined && !byMessage.has(row.message)) byMessage.set(row.message, row);
+    if (row.message === undefined) continue;
+    for (const spell of realm.get(row.message) ?? []) {
+      if (named.has(spellKey(spell))) continue;
+      named.add(spellKey(spell));
+      joined.push({ spell, start: row.start, stop: row.stop, message: row.message });
+    }
   }
-  const extra: SpellMessageRow[] = [];
-  for (const spell of spells) {
-    const key = spellKey(spell.name);
-    if (key.length === 0 || named.has(key)) continue;
-    const record = spell.abilities?.find(([id]) => id === DESC_MSG_ABILITY)?.[1];
-    const row = record === undefined ? undefined : byMessage.get(record);
-    if (row === undefined) continue;
-    named.add(key);
-    extra.push({ spell: spell.name, start: row.start, stop: row.stop, message: record! });
-  }
-  return extra.length === 0 ? [...rows] : [...rows, ...extra];
+  return joined;
 }
 
 /**
@@ -282,12 +256,13 @@ export function parseSpellMessagesCsv(text: string): SpellMessageRow[] {
     if (spell.length === 0) continue;
     const start = (record[startAt] ?? '').trim();
     const stop = (record[stopAt] ?? '').trim();
-    const message = messageAt < 0 ? NaN : Number.parseInt(record[messageAt] ?? '', 10);
+    const cell = messageAt < 0 ? '' : (record[messageAt] ?? '').trim();
+    const message = cell.length > 0 ? Number(cell) : NaN;
     rows.push({
       spell,
       start: start.length > 0 ? start : null,
       stop: stop.length > 0 ? stop : null,
-      ...(Number.isInteger(message) && message > 0 ? { message } : {})
+      ...(Number.isInteger(message) ? { message } : {})
     });
   }
   return rows;

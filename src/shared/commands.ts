@@ -744,14 +744,22 @@ export function breaksStealth(input: string): boolean {
 export const REREAD_ROOM = '';
 
 /**
- * The queue's key for a `REREAD_ROOM` nothing but the room is waiting on — a
- * death, an arrival or a departure, a message's *check who is in the room*,
- * auto-combat's every-few-rounds refresh. One key, because two such reads
- * queued together are one read answered twice (2026-09-24: four keys had let
- * a kill and a refresh send two Enters back to back). A step's own nudge
- * keeps `Walker`'s key, since it is the step's answer and goes with the step.
+ * The claim one `REREAD_ROOM` filed on the room its answer reprints, asked
+ * after by whoever sent it: owed until the tracker takes it off the queue,
+ * with the room block that answered it or with nothing (a refusal behind it,
+ * the write-off, a locate, a death). The tracker says which claim a room
+ * answered, so a sender waiting on its own reprint reads that rather than
+ * counting rooms: a reprint already on the wire answers the claim ahead of
+ * it (todo 767).
  */
-export const ROOM_READ_KEY = 'room-read';
+export interface RereadClaim {
+  owed(): boolean;
+}
+
+/** Where the latest bare Enter's claim is read: null when it filed none, outside the realm. */
+export interface RereadClaims {
+  readonly lastReread: RereadClaim | null;
+}
 
 /**
  * Commands in the table above that the **MajorMUD lineage does not have**.
@@ -858,7 +866,7 @@ export const GREATERMUD_ONLY: ReadonlySet<CommandName> = new Set([
  * realm data gives 1/2620 `s → 1/2619` and `e → 1/2625`, and the server had
  * just printed `Obvious exits: south, east`. So the escape sends a
  * **direction**, always, and never a word invented for the purpose — see
- * `SessionManager.escape`.
+ * `Travel.escape`.
  *
  * This list exists so the mistake cannot be made twice quietly.
  * `commands.test.ts` asserts every word in it is absent from `COMMAND_WORDS`

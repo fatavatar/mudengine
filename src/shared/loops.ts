@@ -30,6 +30,7 @@
 
 import { fileSlug } from './files';
 import type { RoomId } from './world';
+import type { AfflictionHold } from './walk';
 
 /** One place a loop visits, named the way a person would say it. */
 export interface LoopStop {
@@ -506,7 +507,7 @@ export type LoopStatus = 'idle' | 'running' | 'stopped';
 export type LoopHold =
   | 'fight'
   | 'health'
-  /** Mana under `meditateBelow`; walks on again at `resumeAtMana`. */
+  /** Mana under `meditateBelow`, until `meditateTo` (todo 825). */
   | 'mana'
   | 'retreated'
   | 'errand'
@@ -522,12 +523,13 @@ export type LoopHold =
    */
   | 'resting'
   /** Waiting out a stated affliction before the next leg — see `afflictionHolding` in `walk.ts`. */
-  | 'blind'
-  | 'held'
-  | 'poisoned'
-  /** Waiting out what the realm's message table says is on the character. */
-  | 'condition'
+  | AfflictionHold
   | null;
+
+/** A lap waiting for the character to be fit to walk on, drawn as resting. */
+export function loopIsResting(hold: LoopHold): boolean {
+  return hold === 'health' || hold === 'mana' || hold === 'resting';
+}
 
 export interface LoopProgress {
   status: LoopStatus;

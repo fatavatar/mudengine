@@ -72,12 +72,14 @@ import type { Block } from '../../shared/blocks';
 import type { CharacterState } from '../../shared/character';
 import type { EncumbranceGate, LootConfig, SuppliesConfig } from '../../shared/config';
 import { carriedCount } from '../../shared/supplies';
-import { DENOMINATIONS, type Denomination } from '../../shared/character';
-import { STOCK_COIN_READER, type CoinReader } from '../../shared/coins';
+import { coinNamed, type Denomination } from '../../shared/character';
 import { bareName, countedName } from '../../shared/items';
 import { nameAnswersTo } from '../../shared/world';
 import { wireItem, type ItemEntity } from '../../shared/entities';
+import type { RereadClaims } from '../../shared/commands';
 import { tuning } from '../app/tuning';
+import { FloorAfterKill } from './FloorAfterKill';
+import type { SessionModule } from './Module';
 
 /**
  * A floor entry that is **entirely** a coin pile: `15 copper farthings`, or the
@@ -95,6 +97,9 @@ import { tuning } from '../app/tuning';
  * denomination is an item with a colour in its name.
  */
 const COIN = /^(?<count>\d+) (?<coin>copper|silver|gold|platinum|runic)(?: [a-z]+)?$/i;
+
+/** A take's coalesce key, by what it names: the floor read waits on the ones queued (todo 765). */
+const TAKE_KEY = 'loot:take:';
 
 /**
  * How the server's own grading words rank against each other.
@@ -129,7 +134,45 @@ const GRADE_RANK: Readonly<Record<string, number>> = {
   heavy: 3
 };
 
-export class AutoLoot {
+/** What the loot reads besides its configuration, named (todo 760). */
+export interface AutoLootDeps {
+  /**
+   * The realm's row for a name on the floor, whole; omitted, the wire's own
+   * entity, which is what a realm with no data says.
+   *
+   * The entity rather than a price, on `AutoHeal`'s precedent and for the
+   * same reason: a module handed one projection cannot ask a second question
+   * without a second callback threaded from `SessionManager`. Here it is
+   * asked two — what a thing is worth and what it weighs — and the default
+   * answers neither, which is a first class answer rather than an error.
+   */
+  readonly realmItem?: (name: string) => ItemEntity;
+  /**
+   * Something worth telling the player, for the one decision here that is a
+   * **refusal**: a coin this client will not shed because dropping it would
+   * drop a piece of kit instead. A safety feature that silently declines is
+   * worse than one never offered.
+   */
+  readonly notice?: (message: string) => void;
+  /**
+   * Whether the character is on the ground (`Grounded.down`). The session
+   * hands every block to `onBlock` ahead of its own gate. Required: a
+   * construction that forgot it would read a character down as standing.
+   */
+  readonly onTheGround: () => boolean;
+  /**
+   * Whether the character is under a timed spell the way in cast
+   * (`SessionManager.underTimedSpell`): the walk moves and nothing else does,
+   * and this block path is ahead of the session's own stand-down (todo 765).
+   */
+  readonly moveOnly: (state: CharacterState) => boolean;
+  /** The claim a bare Enter filed, which the floor read closes on (`FloorAfterKill`, todo 767). */
+  readonly rereads: RereadClaims;
+  /** The word that picks a coin up on this realm (`Vocabulary.coins`, todo 830); omitted, the denomination. */
+  readonly coinWord?: (coin: Denomination) => string;
+}
+
+export class AutoLoot implements SessionModule {
   /** Names already asked for in this room, lower case. */
   private attempted = new Set<string>();
   /**
@@ -160,6 +203,14 @@ export class AutoLoot {
    */
   private saidClash = new Set<Denomination>();
 
+  private readonly realmItem: (name: string) => ItemEntity;
+  private readonly notice: (message: string) => void;
+  private readonly onTheGround: () => boolean;
+  private readonly moveOnly: (state: CharacterState) => boolean;
+  private readonly coinWord: (coin: Denomination) => string;
+  /** The room read again after a kill, since items drop unannounced (todo 814). */
+  private readonly floor: FloorAfterKill;
+
   constructor(
     private config: LootConfig,
     /**
@@ -171,25 +222,22 @@ export class AutoLoot {
     private supplies: SuppliesConfig,
     private enabled: boolean,
     private readonly queue: CommandQueue,
-    /**
-     * The realm's row for a name on the floor, whole.
-     *
-     * The entity rather than a price, on `AutoHeal`'s precedent and for the
-     * same reason: a module handed one projection cannot ask a second question
-     * without a second callback threaded from `SessionManager`. Here it is
-     * asked two — what a thing is worth and what it weighs — and the default
-     * answers neither, which is what a realm with no data says and is a first
-     * class answer rather than an error.
-     */
-    private readonly realmItem: (name: string) => ItemEntity = (name) => wireItem(name),
-    /**
-     * Something worth telling the player, for the one decision here that is a
-     * **refusal**: a coin this client will not shed because dropping it would
-     * drop a piece of kit instead. A safety feature that silently declines is
-     * worse than one never offered.
-     */
-    private readonly notice: (message: string) => void = () => {}
-  ) {}
+    deps: AutoLootDeps
+  ) {
+    this.realmItem = deps.realmItem ?? ((name) => wireItem(name));
+    this.notice = deps.notice ?? (() => {});
+    this.onTheGround = deps.onTheGround;
+    this.moveOnly = deps.moveOnly;
+    this.coinWord = deps.coinWord ?? ((coin) => coin);
+    this.floor = new FloorAfterKill(queue, deps.rereads, () =>
+      queue.queued((intent) => intent.coalesceKey?.startsWith(TAKE_KEY) === true)
+    );
+  }
+
+  /** Whether the floor read asked after a kill is unanswered — the walk waits on it. */
+  get floorInFlight(): boolean {
+    return this.floor.inFlight;
+  }
 
   /**
    * Names something else wants picked up for as long as it is asking.
@@ -208,23 +256,6 @@ export class AutoLoot {
     this.wanted.delete(name.trim());
   }
 
-  /** What this realm calls its coins; the stock names until told. */
-  private coins: CoinReader = STOCK_COIN_READER;
-
-  /**
-   * A renamed coin is read as the stock one (`CoinReader.stock`) and asked
-   * for by the realm's own word: `get runic` is `You don't see any` on a
-   * realm whose runic coin is a Krabby Patty, where `get krabby` takes it.
-   */
-  useCoins(reader: CoinReader): void {
-    this.coins = reader;
-  }
-
-  private wordFor(coin: string): string {
-    const which = DENOMINATIONS.find((name) => name === coin.toLowerCase());
-    return which === undefined ? coin.toLowerCase() : this.coins.word(which);
-  }
-
   configure(config: LootConfig, supplies: SuppliesConfig, enabled: boolean): void {
     this.config = config;
     this.supplies = supplies;
@@ -236,6 +267,7 @@ export class AutoLoot {
     this.shed.clear();
     this.saidClash.clear();
     this.wanted.clear();
+    this.floor.reset();
   }
 
   /**
@@ -275,9 +307,7 @@ export class AutoLoot {
        * it. Refused rather than worked around, and said once — the alternative
        * is this client throwing away a piece of kit to tidy up some change.
        */
-      const clash = state.inventory.items.find((item) =>
-        matchesWord(item.name, this.coins.word(coin))
-      );
+      const clash = state.inventory.items.find((item) => matchesWord(item.name, coin));
       if (clash !== undefined) {
         if (this.saidClash.has(coin)) continue;
         this.saidClash.add(coin);
@@ -286,7 +316,7 @@ export class AutoLoot {
       }
       this.shed.set(coin, count);
       this.queue.enqueue({
-        command: `drop ${count} ${this.coins.word(coin)}`,
+        command: `drop ${count} ${coin}`,
         priority: 'probe',
         coalesceKey: `loot:shed:${coin}`,
         expiresAt: Date.now() + tuning().loot.expiresMs,
@@ -312,7 +342,11 @@ export class AutoLoot {
       if (coin) this.attempted.delete(coin.toLowerCase());
       return;
     }
-    if (!this.enabled || state.phase !== 'in-game') return;
+    // Down, nothing is taken: `get` is refused there (`GetCommand`). What lands
+    // meanwhile is not owed afterwards; the next listing standing is (todo 760).
+    // Nor under a timed spell, where the walk no longer waits for it (todo 765).
+    if (!this.enabled || state.phase !== 'in-game' || this.onTheGround()) return;
+    if (this.moveOnly(state)) return;
     /*
      * The converter is decided on the *grade*, and an inventory listing is the
      * only thing that states one — so it is considered on every block, gated
@@ -329,10 +363,20 @@ export class AutoLoot {
       if (coin && this.wantsCoin(coin, state))
         this.take(
           this.wordFor(coin),
-          t('automation.loot.reasonCoinsDropped', { count: block.groups['count'] ?? '', coin }),
-          // Keyed on the denomination, which is what the pickup line reports.
-          coin
+          t('automation.loot.reasonCoinsDropped', { count: block.groups['count'] ?? '', coin })
         );
+      return;
+    }
+
+    /*
+     * Something this character was paid for died, and what it carried is on
+     * the floor unannounced (`FloorAfterKill`). The experience line rather
+     * than the death sentence, which a realm's first kill of a kind leaves
+     * unlearned; asked only while a listing could hold something taken here,
+     * since coins announce themselves (todo 814).
+     */
+    if (block.type === 'user-gain-experience') {
+      if (this.looksForItems(state)) this.floor.ask();
       return;
     }
 
@@ -363,11 +407,10 @@ export class AutoLoot {
         const coin = found?.['coin'];
         if (coin) {
           if (this.wantsCoin(coin, state)) {
-            const word = coin.toLowerCase();
+            const word = this.wordFor(coin);
             const count = found?.['count'];
-            const named = this.wordFor(word);
             this.take(
-              hidden && count !== undefined ? `${count} ${named}` : named,
+              hidden && count !== undefined ? `${count} ${word}` : word,
               t('automation.loot.reasonListed', { item }),
               // Keyed on the denomination whichever form goes out, so one
               // room asks for its copper once however many times a repeated
@@ -451,15 +494,38 @@ export class AutoLoot {
     const floor = bareName(bare);
     if (floor.length === 0) return null;
     for (const row of this.supplies.items) {
-      const wanted = bareName(row.name);
-      const ceiling = Math.max(row.min, row.max);
-      if (wanted.length === 0 || ceiling <= 0) continue;
-      if (!nameAnswersTo(floor, wanted)) continue;
-      const have = carriedCount(state, row.name);
-      if (have >= ceiling) continue;
-      return { name: row.name, have, max: ceiling };
+      if (!nameAnswersTo(floor, bareName(row.name))) continue;
+      const short = this.underCeiling(row, state);
+      if (short !== null) return { name: row.name, ...short };
     }
     return null;
+  }
+
+  /** How many of a supplies row the pack holds against its ceiling, while under it — or null. */
+  private underCeiling(
+    row: SuppliesConfig['items'][number],
+    state: CharacterState
+  ): { have: number; max: number } | null {
+    const ceiling = Math.max(row.min, row.max);
+    if (bareName(row.name).length === 0 || ceiling <= 0) return null;
+    const have = carriedCount(state, row.name);
+    return have < ceiling ? { have, max: ceiling } : null;
+  }
+
+  /**
+   * Whether a floor listing could hold anything this would take: a name on
+   * the list or an errand's, anything priced over `minPrice`, or a supply the
+   * pack is under the ceiling of — the three readings `onBlock` takes an item
+   * by. Coins are left out: their drop line says so the moment they land.
+   */
+  private looksForItems(state: CharacterState): boolean {
+    if (this.config.items.length > 0 || this.wanted.size > 0 || this.config.minPrice > 0) {
+      return true;
+    }
+    return (
+      this.supplies.enabled &&
+      this.supplies.items.some((row) => this.underCeiling(row, state) !== null)
+    );
   }
 
   /**
@@ -497,8 +563,7 @@ export class AutoLoot {
    */
   private wantsCoin(coin: string, state: CharacterState): boolean {
     if (!this.config.coins) return false;
-    const word = coin.trim().toLowerCase();
-    const wanted = DENOMINATIONS.find((name) => name === word);
+    const wanted = coinNamed(coin);
     // A denomination this client cannot name is one a realm has renamed, and
     // it is left alone rather than guessed at — the rule the pack's own coin
     // counting already follows.
@@ -548,6 +613,12 @@ export class AutoLoot {
     });
   }
 
+  /** The realm's word for a coin the line named, as `get` wants it. */
+  private wordFor(coin: string): string {
+    const named = coinNamed(coin);
+    return named === undefined ? coin.toLowerCase() : this.coinWord(named);
+  }
+
   private take(name: string, reason: string, asked = name): void {
     const key = asked.toLowerCase();
     if (this.attempted.has(key)) return;
@@ -557,7 +628,7 @@ export class AutoLoot {
       priority: 'probe',
       // One key per name: two drops of gold in one round are one `get gold`,
       // and gold and silver are two.
-      coalesceKey: `loot:${key}`,
+      coalesceKey: `${TAKE_KEY}${key}`,
       expiresAt: Date.now() + tuning().loot.expiresMs,
       reason
     });

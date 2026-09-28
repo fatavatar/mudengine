@@ -52,15 +52,32 @@ describe('a saved server', () => {
     expect(asServerDraft(good)).toEqual({
       ...good,
       login: [],
-      // Absent above: the default word, `rm`.
-      locate: 'rm',
       loops: [],
       database: '',
       // Absent above: a realm rules nothing until somebody playing it says so.
+      mobRules: [],
       hangPenalties: null,
-      // And renames no coin until it says so.
-      coins: {}
+      // And asked with `rm`, what every realm was asked before (todo 811).
+      locate: 'rm',
+      // And the stock coin names: a renamed one is the player's to state (todo 830).
+      coins: {},
+      // And no teleport: it is never guessed (todo 813).
+      fleeGoto: ''
     });
+    expect(asServerDraft({ ...good, coins: { runic: 'Dime Bag', lead: 'slug' } })?.coins).toEqual({
+      runic: 'dime bag'
+    });
+  });
+
+  it('takes the realm’s teleport as typed, trimmed and bounded', () => {
+    expect(asServerDraft({ ...good, fleeGoto: ' sys go 1 297 ' })?.fleeGoto).toBe('sys go 1 297');
+    expect(asServerDraft({ ...good, fleeGoto: 42 })?.fleeGoto).toBe('');
+    expect(asServerDraft({ ...good, fleeGoto: 'x'.repeat(300) })?.fleeGoto).toHaveLength(120);
+  });
+
+  it('takes the realm’s locate word, and reads one it does not know as `rm`', () => {
+    expect(asServerDraft({ ...good, locate: 'none' })?.locate).toBe('none');
+    expect(asServerDraft({ ...good, locate: 'sys-status' })?.locate).toBe('rm');
   });
 
   /*
@@ -95,13 +112,6 @@ describe('a saved server', () => {
 
   it('takes a port typed into a text field', () => {
     expect(asServerDraft({ ...good, port: '2427' })?.port).toBe(2427);
-  });
-
-  it('takes the locate setting, and falls back to rm for anything else', () => {
-    expect(asServerDraft({ ...good, locate: 'sys-status' })?.locate).toBe('sys-status');
-    expect(asServerDraft({ ...good, locate: 'none' })?.locate).toBe('none');
-    expect(asServerDraft({ ...good, locate: 'nonsense' })?.locate).toBe('rm');
-    expect(asServerDraft({ ...good, locate: undefined })?.locate).toBe('rm');
   });
 
   /*
@@ -237,6 +247,12 @@ describe('a character', () => {
     expect(draft?.login).toEqual([]);
   });
 
+  it('takes its own locate word, and reads anything else as "as the realm says"', () => {
+    expect(asProfileDraft({ ...good, locate: 'none' })?.locate).toBe('none');
+    expect(asProfileDraft({ ...good, locate: '' })?.locate).toBeNull();
+    expect(asProfileDraft({ ...good, locate: 'sys-status' })?.locate).toBeNull();
+  });
+
   it('refuses anything that is not a mapping', () => {
     expect(asProfileDraft(null)).toBeNull();
     expect(asProfileDraft('vaelor')).toBeNull();
@@ -254,7 +270,7 @@ describe('a character', () => {
     it('takes them, as fractions', () => {
       const draft = asProfileDraft({
         ...good,
-        health: { restBelow: 0.5, meditateBelow: 0.25 },
+        health: { restBelow: 0.5, meditateBelow: 0.25, meditateTo: 0.6 },
         movement: { openDoors: true, openTries: 2, sneak: true },
         spells: { attack: 'ice blade', minMana: 0.2 }
       });
@@ -267,8 +283,7 @@ describe('a character', () => {
         // Absent above, and on: a blank field must not sit a character down in a lair.
         restNextDoor: true,
         meditateBelow: 0.25,
-        // Absent, and 0: the margin above the floor, as before it was a setting.
-        meditateTo: 0,
+        meditateTo: 0.6,
         // The rules list, empty where the payload states none.
         potions: [],
         // And the realm's own half of them: absent above, and on, on the
@@ -296,7 +311,6 @@ describe('a character', () => {
         walkWhileBlind: false,
         walkWhilePoisoned: false,
         walkWhileConfused: false,
-        // Off unless said: the dangerous regions stay out of planning.
         fightOnArrival: true,
         // A list the payload did not send keeps the shipped words, since an
         // empty one is a choice and a missing one is not.
@@ -319,20 +333,44 @@ describe('a character', () => {
         autoChoose: false,
         attackCasts: 0,
         areaCasts: 0,
-        drain: '',
-        areaDrain: '',
-        drainBelow: 0,
-        drainTo: 0,
         healBelow: 0,
         healBelowInCombat: 0,
         healTo: 0,
         healParty: false,
+        autoChooseHeal: false,
         minMana: 0.2,
         cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
         autoBless: true,
         invokeItems: false
+      });
+    });
+
+    // The condition waits carry through the payload a window sends (todo 809).
+    it('takes each condition wait the form switched on', () => {
+      const draft = asProfileDraft({
+        ...good,
+        movement: { walkWhileBlind: true, walkWhilePoisoned: true, walkWhileConfused: true }
+      });
+      expect(draft?.movement).toMatchObject({
+        walkWhileBlind: true,
+        walkWhilePoisoned: true,
+        walkWhileConfused: true
+      });
+    });
+
+    // The fourth cure carries through as the other three do (todo 810).
+    it('takes the Freedom cure the form named, trimmed', () => {
+      const draft = asProfileDraft({
+        ...good,
+        spells: { cures: { poison: 'cure poison', freedom: ' freedom ' } }
+      });
+      expect(draft?.spells.cures).toEqual({
+        blindness: '',
+        poison: 'cure poison',
+        disease: '',
+        freedom: 'freedom'
       });
     });
 
@@ -376,7 +414,6 @@ describe('a character', () => {
         walkWhileBlind: false,
         walkWhilePoisoned: false,
         walkWhileConfused: false,
-        // Off unless said: the dangerous regions stay out of planning.
         fightOnArrival: true,
         keepOutOf: ['vortex', 'Negative Power Plane'],
         // The shipped default, for the same reason `restBelow` keeps 0.35
@@ -395,15 +432,12 @@ describe('a character', () => {
         healBelowInCombat: 0,
         healTo: 0,
         healParty: false,
+        autoChooseHeal: false,
         minMana: 0,
         attackFallback: '',
         autoChoose: false,
         attackCasts: 0,
         areaCasts: 0,
-        drain: '',
-        areaDrain: '',
-        drainBelow: 0,
-        drainTo: 0,
         cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
@@ -503,7 +537,7 @@ describe('a character', () => {
           retaliate: false,
           maxMobs: 3,
           refreshRounds: 3,
-          monsters: [{ mob: 'town guard', relationship: 'friend' }],
+          mobRules: [{ mob: 'town guard', treat: 'never' }],
           politeAttacks: true
         }
       });
@@ -517,7 +551,7 @@ describe('a character', () => {
         minMobs: 0,
         maxMonsterExperience: 0,
         // Stated above, keyed the way the wire spells it.
-        monsters: [{ mob: 'town guard', relationship: 'friend' }],
+        mobRules: [{ mob: 'town guard', treat: 'never' }],
         engage: 'all',
         retaliate: false,
         // Absent above, and off: it spends a command per fight.
@@ -554,15 +588,15 @@ describe('a character', () => {
       const draft = asProfileDraft({
         ...good,
         combat: {
-          monsters: [
-            { mob: 'giant rat', relationship: 'friend' },
-            { mob: 'town guard', relationship: 'friend' }
+          mobRules: [
+            { mob: 'giant rat', treat: 'never' },
+            { mob: 'town guard', treat: 'never' }
           ]
         }
       });
-      expect(draft?.combat.monsters).toEqual([
-        { mob: 'giant rat', relationship: 'friend' },
-        { mob: 'town guard', relationship: 'friend' }
+      expect(draft?.combat.mobRules).toEqual([
+        { mob: 'giant rat', treat: 'never' },
+        { mob: 'town guard', treat: 'never' }
       ]);
     });
 
@@ -599,11 +633,11 @@ describe('a character', () => {
     it('clamps rather than refusing the whole save', () => {
       const draft = asProfileDraft({
         ...good,
-        combat: { maxMobs: 999, monsters: 'town guard' }
+        combat: { maxMobs: 999, mobRules: 'town guard' }
       });
       expect(draft?.combat.maxMobs).toBe(20);
       // Not a list at all: nothing rather than a guess at what was meant.
-      expect(draft?.combat.monsters).toEqual([]);
+      expect(draft?.combat.mobRules).toEqual([]);
     });
   });
 });

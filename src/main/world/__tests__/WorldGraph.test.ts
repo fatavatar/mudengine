@@ -28,6 +28,7 @@ import {
 } from '../../../shared/world';
 import { roomId } from '../../../shared/world';
 import { tuning } from '../../app/tuning';
+import { t } from '../../app/i18n';
 import { questLevel } from '../../../shared/quests';
 import type { QuestStep } from '../../../shared/quests';
 
@@ -356,7 +357,7 @@ describe('edgePenalty', () => {
    * The other kind of hidden exit, once the levers are read — todo 01.
    *
    * A passage this room can open costs the commands, exactly as a searchable
-   * one costs the search: `Walker.pullLevers` sends them, so the route is
+   * one costs the search: `Levers.pullLevers` sends them, so the route is
    * priced through it rather than around it. 150 of the shipped realm's gated
    * exits are that shape.
    */
@@ -373,9 +374,8 @@ describe('edgePenalty', () => {
     expect(edgePenalty(here, {})!).toBeGreaterThanOrEqual(25);
   });
 
-  /* A lever two rooms away is a room this function cannot see, so the flat
-     price stands here; the walk to it is priced by the graph, which can
-     (`leverErrand`, below). */
+  /* A lever two rooms away is a detour this planner does not plan, so nothing
+     about the price changes — only what the client can now *say* about it. */
   it('leaves a hidden exit whose lever is elsewhere priced as it was', () => {
     const away = {
       kind: 'hidden' as const,
@@ -423,7 +423,9 @@ describe('routing', () => {
   it('reports an unknown start or destination rather than hanging', () => {
     const graph = makeWorld(corridor(3));
     expect(graph.route('9/9', '1/1').blocked).toBe(true);
-    expect(graph.route('1/1', '9/9').reason).toMatch(/Unknown destination/);
+    expect(graph.route('1/1', '9/9').reason).toBe(
+      t('cards.route.reasons.unknownDestinationRoom', { roomId: '9/9' })
+    );
   });
 
   it('reports no route when none exists', () => {
@@ -721,7 +723,7 @@ describe('the real realm data', () => {
    * `Class: Paladin` to row 3 are all in the file.
    */
   it.runIf(available)("walks a class-gated maze by the character's own class", () => {
-    const paladin = graph!.classId('Paladin');
+    const paladin = graph!.classNamed('Paladin')?.id ?? null;
     expect(paladin).toBe(3);
 
     // The two doors the report names, as the realm states them.
@@ -1772,18 +1774,16 @@ describe('the shipped realm data', () => {
     expect(gate?.requirement?.actionsNeeded).toBeUndefined();
 
     /*
-     * And the router plans the errand the player made by hand: the reported
+     * And the router still takes the character to the gate: the reported
      * traveller had 0 picklocks against the door's 301 and 86 strength, so the
-     * door alone is a wall — but a Guardroom is one room away, so the plan
-     * steps into it, pulls on the way back, and goes north (2026-09-24; it
-     * was `['n']` and a refusal at the gate until then).
+     * edge is priced as a wall and remains the only way through — which is why
+     * the walk arrives there and why the errand is the answer rather than a
+     * cheaper route being one.
      */
     const traveller = { pickSkill: 0, strength: 86, level: 20 };
     const through = realm!.route(roomId(1, 1331), roomId(1, 1375), traveller);
     expect(through.blocked).toBe(false);
-    expect(through.cost).toBeLessThan(tuning().world.wallCost);
-    expect(through.steps.map((step) => step.command)).toEqual(['e', 'w', 'n']);
-    expect(through.steps[1]!.pull?.say).toEqual(['pull lever']);
+    expect(through.steps.map((step) => step.command)).toEqual(['n']);
 
     // The errand is walkable: each Guardroom is a route away and comes back.
     for (const guardroom of ['1/1339', '1/1345']) {
@@ -1805,7 +1805,7 @@ describe('the shipped realm data', () => {
    * exit is real and it was shut; what the console said was that the realm data
    * had promised an exit that does not exist.
    *
-   * This is the shape `Walker.runLeverSet` walks: a **set**, because the stated
+   * This is the shape `Levers.runLeverSet` walks: a **set**, because the stated
    * count matches the levers found, ordered by `Requirement.actions`, which is
    * the only place the realm's own order survives.
    */
@@ -2377,7 +2377,8 @@ describe('reading an item kind back off disk', () => {
         speed: 1200,
         strength: 30,
         type: 'two-handed blunt',
-        hands: 2
+        hands: 2,
+        kind: 1
       }
     });
   });
@@ -2391,7 +2392,7 @@ describe('reading an item kind back off disk', () => {
       worn: 5,
       // Class 1 is the whole cloth category — padded, cotton, silk, robes —
       // and neither `padded` nor MMUD-Explorer's `Silk` was true of it.
-      armour: { ac: 10, dr: 1, material: 'cloth' }
+      armour: { ac: 10, dr: 1, material: 'cloth', kind: 1 }
     });
   });
 
@@ -2718,145 +2719,62 @@ describe('the levers that open an exit', () => {
     });
 
     /*
-     * A lever somewhere else is a walk there and back, planned (2026-09-24).
-     *
-     * It was a wall, left to `Walker.fetchLever` to find when the door
-     * refused — and the route panel never showed a way through such a door,
-     * however short: the Grand Stair at 7/150, `Door [251
-     * picklocks/strength]`, opens to `pull lever` in the Guard Room two rooms
-     * back, and the Black House way to the Fungus Forest was never offered.
-     * Now the walk to the lever and back is the price, and it is on the plan:
-     * out to the Guardroom, the pull on the first step home, then the door.
+     * A lever somewhere else prices the walk to it and back (todo 837), which
+     * `Levers.fetchLever` makes when the server refuses the step; it was a
+     * wall, and kept the Fungus Forest from Black House.
      */
-    it('walks to the word when it is said somewhere else', () => {
-      const route = barred('1/9').route('1/1', '1/2', { packKnown: true });
-      expect(route.blocked).toBe(false);
-      expect(route.cost).toBeLessThan(tuning().world.wallCost);
-      expect(route.walls ?? []).toEqual([]);
-      expect(route.steps.map((step) => [step.command, step.to])).toEqual([
-        ['e', '1/9'],
-        ['w', '1/1'],
-        ['w', '1/2']
-      ]);
-      expect(route.steps[1]!.pull).toEqual({ say: ['lift portcullis'], opensName: 'Beyond' });
-      expect(route.steps[0]!.pull).toBeUndefined();
-      expect(route.steps[2]!.pull).toBeUndefined();
+    it('is priced as the walk to the word said somewhere else and back', () => {
+      const here = barred('1/1').route('1/1', '1/2', { packKnown: true });
+      const elsewhere = barred('1/9').route('1/1', '1/2', { packKnown: true });
+      expect(elsewhere.blocked).toBe(false);
+      expect(elsewhere.walls ?? []).toEqual([]);
+      expect(elsewhere.cost).toBeGreaterThan(here.cost);
+      expect(elsewhere.cost).toBeLessThan(tuning().world.wallCost);
+      // And the step names the room the word is said in.
+      expect(elsewhere.steps[0]?.obstacle?.label).toBe(
+        t('map.obstacle.leverSayThere', { phrase: 'lift portcullis', roomName: 'Guardroom' })
+      );
     });
 
     /*
-     * Planned from the door's room, the first leg retraces the way in when
-     * the lever is off a room the plan already crossed — the Grand Stair's is
-     * off 7/148, two rooms before the door. Those steps are taken out: the
-     * walk turns into the lever room where it passes it, and never climbs to
-     * the door to come straight back down.
+     * Levers with no count are alternatives, as `Levers.fetchLever` walks them:
+     * one room is visited, the cheapest there and back. 1/8 is a pit with no
+     * way out, so a lever there opens nothing for this character.
      */
-    it('turns off to the lever where the plan passes it, not from the door', () => {
-      const graph = makeWorld([
-        { m: 1, r: 1, n: 'Stair Foot', x: { n: { m: 1, r: 2 } } },
-        {
-          m: 1,
-          r: 2,
-          n: 'Stair',
-          x: { s: { m: 1, r: 1 }, n: { m: 1, r: 3 }, e: { m: 1, r: 9 } }
-        },
-        {
-          m: 1,
-          r: 3,
-          n: 'Stair Head',
-          x: { s: { m: 1, r: 2 }, n: { m: 1, r: 4, i: 'Door [251 picklocks/strength]' } }
-        },
-        { m: 1, r: 4, n: 'Landing', x: { s: { m: 1, r: 3 } } },
-        {
-          m: 1,
-          r: 9,
-          n: 'Guard Room',
-          x: { w: { m: 1, r: 2 } },
-          cmd: [{ say: ['pull lever'], opens: { room: '1/3', direction: 'n' } }]
-        }
-      ]);
-      const route = graph.route('1/1', '1/4', { packKnown: true, strength: 95, pickSkill: 0 });
-      expect(route.steps.map((step) => step.to)).toEqual(['1/2', '1/9', '1/2', '1/3', '1/4']);
-      expect(route.steps[2]!.pull?.say).toEqual(['pull lever']);
-    });
-
-    /*
-     * Past `leverDetourCost` the lever is too far to plan: the wall stands,
-     * and the walker's errand is what finds it, as it always was.
-     */
-    it('leaves it a wall when the lever is further than the router reaches', () => {
-      const far = tuning().world.leverDetourCost + 5;
-      const corridor = Array.from({ length: far }, (_, index) => ({
-        m: 1,
-        r: 100 + index,
-        n: 'Long Corridor',
-        x: {
-          w: index === 0 ? { m: 1, r: 1 } : { m: 1, r: 99 + index },
-          ...(index + 1 < far ? { e: { m: 1, r: 101 + index } } : {})
-        },
-        ...(index + 1 === far
-          ? { cmd: [{ say: ['pull lever'], opens: { room: '1/1', direction: 'w' } }] }
-          : {})
-      }));
-      const graph = makeWorld([
+    const levered = (leverRooms: readonly string[]): WorldGraph => {
+      const lever = (room: string): object =>
+        leverRooms.includes(room)
+          ? { cmd: [{ say: ['lift portcullis'], opens: { room: '1/1', direction: 'w' } }] }
+          : {};
+      return makeWorld([
         {
           m: 1,
           r: 1,
           n: 'Pathway',
-          x: { w: { m: 1, r: 2, i: 'Door [1000 picklocks/strength]' }, e: { m: 1, r: 100 } }
-        },
-        { m: 1, r: 2, n: 'Beyond', x: {} },
-        ...corridor
-      ]);
-      const route = graph.route('1/1', '1/2', { packKnown: true });
-      expect(route.cost).toBeGreaterThan(tuning().world.wallCost);
-      expect(route.walls?.length).toBe(1);
-      expect(route.steps.some((step) => step.pull !== undefined)).toBe(false);
-    });
-
-    /*
-     * A set spread over rooms — `Needs 2 Actions` with a lever in each of two
-     * — is a round of them, which `Walker.runLeverSet` walks on the wire and
-     * this does not plan: one room's lever opens nothing on its own.
-     */
-    it('does not plan a set of levers spread over several rooms', () => {
-      const graph = makeWorld([
-        {
-          m: 1,
-          r: 1,
-          n: 'Crypt',
           x: {
-            n: {
-              m: 1,
-              r: 2,
-              i: 'Hidden/Needs 2 Actions, any order',
-              a: [
-                { say: ['pull lever'], at: { map: 1, room: 8 } },
-                { say: ['push lever'], at: { map: 1, room: 9 } }
-              ]
-            },
-            e: { m: 1, r: 8 },
-            w: { m: 1, r: 9 }
+            w: { m: 1, r: 2, i: 'Door [1000 picklocks/strength]' },
+            e: { m: 1, r: 9 },
+            n: { m: 1, r: 8 },
+            s: { m: 1, r: 7 }
           }
         },
         { m: 1, r: 2, n: 'Beyond', x: {} },
-        {
-          m: 1,
-          r: 8,
-          n: 'East Niche',
-          x: { w: { m: 1, r: 1 } },
-          cmd: [{ say: ['pull lever'], opens: { room: '1/1', direction: 'n' } }]
-        },
-        {
-          m: 1,
-          r: 9,
-          n: 'West Niche',
-          x: { e: { m: 1, r: 1 } },
-          cmd: [{ say: ['push lever'], opens: { room: '1/1', direction: 'n' } }]
-        }
+        { m: 1, r: 7, n: 'Barracks', x: { n: { m: 1, r: 1 } }, ...lever('1/7') },
+        { m: 1, r: 8, n: 'Pit', x: {}, ...lever('1/8') },
+        { m: 1, r: 9, n: 'Guardroom', x: { w: { m: 1, r: 1 } }, ...lever('1/9') }
       ]);
-      const route = graph.route('1/1', '1/2', { packKnown: true });
-      expect(route.steps.map((step) => step.to)).toEqual(['1/2']);
-      expect(route.steps[0]!.pull).toBeUndefined();
+    };
+
+    it('leaves it a wall when the only lever room has no way back', () => {
+      const route = levered(['1/8']).route('1/1', '1/2', { packKnown: true });
+      expect(route.walls?.length).toBe(1);
+    });
+
+    it('takes another lever room when one is kept out of or has no way back', () => {
+      const graph = levered(['1/7', '1/8', '1/9']);
+      const route = graph.route('1/1', '1/2', { packKnown: true, avoid: new Set(['1/9']) });
+      expect(route.blocked).toBe(false);
+      expect(route.walls ?? []).toEqual([]);
     });
   });
 
@@ -5618,7 +5536,7 @@ describe('the order a step fetches its items in', () => {
 
     /**
      * The session's own arithmetic, in miniature: every room spell prices as
-     * a discouragement, summons included (`SessionManager.roomHazard`), so
+     * a discouragement, summons included (`Errands.roomHazard`), so
      * `RouteHazard.share` is non-null for the summons and the plan has to
      * read the spell's facts to drop it, never the share.
      */

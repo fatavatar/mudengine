@@ -1,25 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import zlib from 'node:zlib';
 
 import { WorldGraph } from '../WorldGraph';
+import { worldOf } from './realmFile';
 import { localMap } from '../localMap';
 import { layoutMap } from '../../../shared/map';
-
-function makeWorld(rooms: Array<Record<string, unknown>>): WorldGraph {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-map-'));
-  const file = path.join(dir, 'rooms.jsonl.gz');
-  const header = JSON.stringify({ v: 1, source: 'test', rooms: rooms.length, generatedAt: 'x' });
-  fs.writeFileSync(
-    file,
-    zlib.gzipSync([header, ...rooms.map((r) => JSON.stringify(r))].join('\n') + '\n')
-  );
-  const graph = WorldGraph.load(file);
-  fs.rmSync(dir, { recursive: true, force: true });
-  return graph;
-}
+import { phrase } from '../../app/copyMatch';
 
 /** Where the map put a room, or undefined if it did not place it. */
 const at = (map: ReturnType<typeof localMap>, id: string) =>
@@ -27,14 +14,14 @@ const at = (map: ReturnType<typeof localMap>, id: string) =>
 
 describe('laying out a local map', () => {
   it('puts the character at the origin', () => {
-    const graph = makeWorld([{ m: 1, r: 1, n: 'Here', x: {} }]);
+    const graph = worldOf([{ m: 1, r: 1, n: 'Here', x: {} }]);
     const map = localMap(graph, '1/1');
     expect(map.centre).toBe('1/1');
     expect(at(map, '1/1')).toMatchObject({ gx: 0, gy: 0 });
   });
 
   it('walks each direction the way a compass does', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       {
         m: 1,
         r: 1,
@@ -68,7 +55,7 @@ describe('laying out a local map', () => {
   it('does not place what is up or down, and marks the room instead', () => {
     // A map that put a staircase on the plane would draw two different rooms in
     // one square and call it a floor plan.
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Stairwell', x: { u: { m: 1, r: 2 }, d: { m: 1, r: 3 } } },
       { m: 1, r: 2, n: 'Above', x: {} },
       { m: 1, r: 3, n: 'Below', x: {} }
@@ -82,7 +69,7 @@ describe('laying out a local map', () => {
   });
 
   it('tells a way down from a way up', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Cellar Steps', x: { d: { m: 1, r: 2 } } },
       { m: 1, r: 2, n: 'Cellar', x: {} }
     ]);
@@ -90,7 +77,7 @@ describe('laying out a local map', () => {
   });
 
   it('leaves a room with no stairs unmarked', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Street', x: { n: { m: 1, r: 2 } } },
       { m: 1, r: 2, n: 'Street', x: {} }
     ]);
@@ -104,7 +91,7 @@ describe('laying out a local map', () => {
      * claim is arbitrary but *stable*, and the count is reported rather than the
      * conflict being drawn as though it were not there.
      */
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Centre', x: { e: { m: 1, r: 2 }, n: { m: 1, r: 3 } } },
       { m: 1, r: 2, n: 'East', x: { n: { m: 1, r: 4 } } },
       { m: 1, r: 3, n: 'North', x: { e: { m: 1, r: 5 } } },
@@ -124,20 +111,20 @@ describe('laying out a local map', () => {
       n: `Room ${i + 1}`,
       x: i + 1 < 12 ? { e: { m: 1, r: i + 2 } } : {}
     }));
-    const map = localMap(makeWorld(corridor), '1/1', 3);
+    const map = localMap(worldOf(corridor), '1/1', 3);
     expect(map.cells).toHaveLength(4); // the centre plus three steps
     expect(at(map, '1/5')).toBeUndefined();
   });
 
   it('returns nothing for a room the realm does not have', () => {
-    expect(localMap(makeWorld([{ m: 1, r: 1, n: 'Here', x: {} }]), '9/9')).toMatchObject({
+    expect(localMap(worldOf([{ m: 1, r: 1, n: 'Here', x: {} }]), '9/9')).toMatchObject({
       centre: null,
       cells: []
     });
   });
 
   it('carries what the card needs to draw a room', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       // `s` and `lair` are the field names `build-world.mjs` actually writes.
       { m: 1, r: 1, n: 'Shop', x: { e: { m: 1, r: 2 } }, s: 4 },
       { m: 1, r: 2, n: 'Den', x: {}, lair: '(Max 2): 781,' }
@@ -145,6 +132,24 @@ describe('laying out a local map', () => {
     const map = localMap(graph, '1/1');
     expect(at(map, '1/1')).toMatchObject({ shop: true, name: 'Shop' });
     expect(at(map, '1/2')).toMatchObject({ lair: true });
+  });
+
+  /* Todo 03: a lair drawn by how its fight goes, and only a lair asked. */
+  it('carries a lair’s level where its fight has been run, and none where not', () => {
+    const graph = worldOf([
+      { m: 1, r: 1, n: 'Road', x: { e: { m: 1, r: 2 }, w: { m: 1, r: 3 } } },
+      { m: 1, r: 2, n: 'Den', x: { w: { m: 1, r: 1 } }, lair: '(Max 2): 781,' },
+      { m: 1, r: 3, n: 'Pit', x: { e: { m: 1, r: 1 } }, lair: '(Max 1): 782,' }
+    ]);
+    const asked: string[] = [];
+    const map = localMap(graph, '1/1', undefined, (room) => {
+      asked.push(room.name);
+      return room.name === 'Den' ? 'deadly' : null;
+    });
+    expect(at(map, '1/2')).toMatchObject({ lair: true, lairOdds: 'deadly' });
+    expect(at(map, '1/3')?.lairOdds).toBeUndefined();
+    expect(asked.sort()).toEqual(['Den', 'Pit']);
+    expect(layoutMap(map).nodes.find((node) => node.id === '1/2')?.odds).toBe('deadly');
   });
 });
 
@@ -198,7 +203,7 @@ describe('against the shipped realm data', () => {
       // Where to get one...
       expect(door?.detail).toContain('Sheriff Lionheart');
       // ...and the way through without it.
-      expect(door?.detail).toMatch(/pick\/bash \d+/);
+      expect(door?.detail).toMatch(phrase('map.obstacle.pickOrBash'));
       // The realm's own words survive for anything not modelled.
       expect(door?.raw).toContain('Key:');
       /*
@@ -215,7 +220,7 @@ describe('against the shipped realm data', () => {
     const map = localMap(realm!, '1/297', 1);
     const vault = map.cells.find((entry) => entry.id === '1/297')?.blocked?.['w'];
     expect(vault?.kind).toBe('door');
-    expect(vault?.detail).toMatch(/pick\/bash \d+/);
+    expect(vault?.detail).toMatch(phrase('map.obstacle.pickOrBash'));
   });
 
   it.runIf(realm !== null && realm.size > 0)(
@@ -227,14 +232,14 @@ describe('against the shipped realm data', () => {
       const spoken = map.cells
         .flatMap((cell) => Object.values(cell.blocked ?? {}))
         .find((block) => block.kind === 'text');
-      if (spoken) expect(spoken.detail).toMatch(/^Say: /);
+      if (spoken) expect(spoken.detail).toMatch(phrase('map.obstacle.sayCommand'));
     }
   );
 });
 
 describe('the ways out that leave the plane', () => {
   it('carries up and down with where each lands', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Foot', x: { u: { m: 1, r: 2 }, d: { m: 1, r: 3 } } },
       { m: 1, r: 2, n: 'Ledge', x: { d: { m: 1, r: 1 } } },
       { m: 1, r: 3, n: 'Cellar', x: { u: { m: 1, r: 1 } } }
@@ -246,7 +251,7 @@ describe('the ways out that leave the plane', () => {
   });
 
   it("sends the exit's own phrase where the direction does not work", () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Foot', x: { u: { m: 1, r: 2, i: 'Text: climb rope' } } },
       { m: 1, r: 2, n: 'Ledge', x: {} }
     ]);
@@ -254,7 +259,7 @@ describe('the ways out that leave the plane', () => {
   });
 
   it('carries the door on the way up, so the control can say so', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'Foot', x: { u: { m: 1, r: 2, i: 'Door' } } },
       { m: 1, r: 2, n: 'Ledge', x: {} }
     ]);
@@ -262,12 +267,12 @@ describe('the ways out that leave the plane', () => {
   });
 
   it('leaves out a way to a room the realm does not have', () => {
-    const graph = makeWorld([{ m: 1, r: 1, n: 'Foot', x: { u: { m: 9, r: 9 } } }]);
+    const graph = worldOf([{ m: 1, r: 1, n: 'Foot', x: { u: { m: 9, r: 9 } } }]);
     expect(at(localMap(graph, '1/1'), '1/1')?.away).toBeUndefined();
   });
 
   it('carries nothing for an ordinary room', () => {
-    const graph = makeWorld([
+    const graph = worldOf([
       { m: 1, r: 1, n: 'A', x: { e: { m: 1, r: 2 } } },
       { m: 1, r: 2, n: 'B', x: {} }
     ]);

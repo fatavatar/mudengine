@@ -27,12 +27,13 @@ import {
   DEFAULT_CONFIG,
   normalizeConfig,
   type AppConfig,
-  type LocateMethod,
   type LoginStep,
+  type SafetyConfig,
   type Server
 } from './config';
+import { mergeMobRules, normalizeMobRules, type MobRule } from './mobRules';
 import { asCoinNames, type CoinNames } from './coins';
-import { asMonsterRules, mergeMonsterRules, type MonsterRule } from './monsterRules';
+import { asLocateWord, DEFAULT_LOCATE, type LocateWord } from './locate';
 import type { ConnectionTarget } from './types';
 import { isRecord, str } from './values';
 
@@ -85,6 +86,18 @@ export interface Profile {
    * settings screen could not keep the two honest. See `Server.database`.
    */
   database: string;
+  /**
+   * How this character asks its realm where it stands: its own `locate:`, else
+   * the realm's, else `rm` — resolved the way the login script is, a
+   * character's own replacing its realm's. Beside `database` rather than in
+   * `config` for that field's reason. See `shared/locate.ts`.
+   */
+  locate: LocateWord;
+  /**
+   * The realm's own words for the coins it renamed, the character's own
+   * `coins:` over its realm's, coin by coin (todo 830). See `CoinNames`.
+   */
+  coins: CoinNames;
   /** Dial this character when the client starts. */
   autoConnect: boolean;
   /**
@@ -151,10 +164,12 @@ function resolveServer(
   target: ConnectionTarget;
   name: string;
   login: LoginStep[];
-  locate: LocateMethod;
   database: string;
+  mobRules: MobRule[];
   hangPenalties: boolean | null;
+  locate: LocateWord;
   coins: CoinNames;
+  fleeGoto: string;
 } | null {
   if (typeof value === 'string') {
     const found = byName(servers, value);
@@ -163,10 +178,12 @@ function resolveServer(
           target: { host: found.host, port: found.port, encoding: found.encoding },
           name: found.name,
           login: found.login,
-          locate: found.locate,
           database: found.database,
+          mobRules: found.mobRules,
           hangPenalties: found.hangPenalties,
-          coins: found.coins
+          locate: found.locate,
+          coins: found.coins,
+          fleeGoto: found.fleeGoto
         }
       : null;
   }
@@ -182,9 +199,6 @@ function resolveServer(
       // An address spelled out inline names no server entry, so there is no
       // script to inherit — the character's own, or the global default, wins.
       login: [],
-      // Same reasoning: nothing to inherit, so the global default answers
-      // which word this address is tried with.
-      locate: DEFAULT_CONFIG.connection.locate,
       /*
        * The realm database, which an inline address *may* state.
        *
@@ -196,10 +210,16 @@ function resolveServer(
        * its map at all.
        */
       database: str(value['database'], ''),
+      // An inline address names no server directory, so there is no realm list
+      // to inherit — the character's own, over the global one, is the whole of
+      // it. Same reasoning as `login` above.
+      mobRules: [],
       hangPenalties: null,
-      // What an inline realm calls its coins, which it may state for the
-      // reason it may state its database: there is nowhere else to say it.
+      // The realm declaration, spelled out inline, may say it as `database` may.
+      locate: asLocateWord(value['locate']) ?? DEFAULT_LOCATE,
       coins: asCoinNames(value['coins']),
+      // And its teleport, which is as much a fact about the place.
+      fleeGoto: str(value['fleeGoto'], '').trim(),
       target: {
         host,
         port,
@@ -216,86 +236,124 @@ function resolveServer(
 }
 
 /**
- * The options file's monster rows laid under the character's own, field by
- * field (`mergeMonsterRules`).
+ * Folds the realm's monster list in between the global one and the character's.
  *
- * The one list in `automation:` that is merged across scopes rather than
+ * The one setting in `automation:` that is merged across scopes rather than
  * replaced, and it has to be done **after** `normalizeConfig` rather than as
  * part of the overlay, because `overlay` is the thing being worked around: by
- * the time it has run, a character that stated its own rows has already
- * replaced the global ones, and the two are no longer distinguishable inside
- * the merged record. So each is read from where it is written — the base file
- * and the character's raw mapping.
+ * the time it has run, a character that stated its own list has already
+ * replaced the global one, and the two are no longer distinguishable inside
+ * the merged record.
  *
- * Merged because a row is addressed by monster, as loops are by name: a
- * character that wants the global rows plus one of its own should not have to
- * restate them. The realm's imported table goes under both when a session is
- * configured (`withRealmMonsters`).
+ * So the three lists are read from where each is actually written — the base
+ * file, the realm's `server.yaml`, and the character's own raw mapping — and
+ * merged broadest-first by `mergeMobRules`. A character's row for a
+ * monster wins over the realm's, and the realm's over the global one; a
+ * monster only one scope names is kept by all three.
+ *
+ * Read from the *raw* profile rather than the merged config for the same
+ * reason: `patch` has already flattened "stated nothing" and "stated a list"
+ * into one value, and only the raw mapping still knows which happened.
  */
-function withGlobalMonsters(
+function withRealmMobRules(
   config: AppConfig,
-  global: MonsterRule[],
+  global: MobRule[],
+  realm: MobRule[],
   raw: Record<string, unknown>
 ): AppConfig {
-  const own = ownMonsterRules(raw);
-  if (global.length === 0 || own.length === 0) return config;
+  const own = ownMobRules(raw);
+  /*
+   * Read from where each is actually written, not off the merged config:
+   * `overlay` has already replaced the global list with the character's where
+   * the character stated one, so by this point the merged value cannot tell
+   * the two apart. `base` is the options file as parsed, `realm` the server's
+   * own file, `own` the character's raw rows.
+   */
+  if (realm.length === 0 && own.length === 0) return config;
+  const merged = mergeMobRules(global, realm, own);
   return {
     ...config,
     automation: {
       ...config.automation,
-      combat: { ...config.automation.combat, monsters: mergeMonsterRules(global, own) }
+      combat: { ...config.automation.combat, mobRules: merged }
     }
   };
 }
 
 /**
- * The monster rows a character's own file states, before `overlay` flattened
- * them.
+ * The rows a character's own file states, before `overlay` flattened them.
  *
  * Exported because the settings screen needs the same distinction: it seeds
  * its form from these rather than from the resolved list, or saving would
- * write the options file's rows into this character's own.
+ * write the realm's and the global file's rows into this character's own.
  */
-export function ownMonsterRules(raw: Record<string, unknown>): MonsterRule[] {
+export function ownMobRules(raw: Record<string, unknown>): MobRule[] {
   const automation = raw['automation'];
   if (!isRecord(automation)) return [];
   const combat = automation['combat'];
   if (!isRecord(combat)) return [];
-  return asMonsterRules(combat['monsters']);
+  const rows = combat['mobRules'];
+  return Array.isArray(rows) ? normalizeMobRules(rows) : [];
 }
 
 /**
- * The realm's answer to whether a hang-up is charged, under a character that
- * gives none (todo 01). A character's own file is read raw for the reason
- * `ownMonsterRules` is: after `overlay` an inherited value and a stated one look
- * alike.
+ * The realm's answer to one `automation.safety` key, under a character that
+ * gives none: whether a hang-up is charged (todo 01), the teleport's command
+ * (todo 813). A character's own is read raw for the reason `ownMobRules` is:
+ * after `overlay` an inherited value and a stated one look alike. Null on
+ * either side leaves the config as the options file and the character made it.
  */
-function withRealmHangPenalties(
+function withRealmSafety<B extends keyof SafetyConfig, K extends keyof SafetyConfig[B]>(
   config: AppConfig,
-  realm: boolean | null,
-  raw: Record<string, unknown>
+  block: B,
+  key: K,
+  realm: SafetyConfig[B][K] | null,
+  own: unknown
 ): AppConfig {
-  if (realm === null || ownHangPenalties(raw) !== null) return config;
+  if (realm === null || own !== null) return config;
   const safety = config.automation.safety;
-  return {
-    ...config,
-    automation: {
-      ...config.automation,
-      safety: { ...safety, hangUp: { ...safety.hangUp, penalties: realm } }
-    }
-  };
+  const changed = { ...safety, [block]: { ...safety[block], [key]: realm } } as SafetyConfig;
+  return { ...config, automation: { ...config.automation, safety: changed } };
 }
 
 /** A character's own `penalties`, or null where its file leaves it to the realm. */
 export function ownHangPenalties(raw: Record<string, unknown>): boolean | null {
-  const automation = raw['automation'];
-  if (!isRecord(automation)) return null;
-  const safety = automation['safety'];
-  if (!isRecord(safety)) return null;
-  const hangUp = safety['hangUp'];
-  if (!isRecord(hangUp)) return null;
-  const penalties = hangUp['penalties'];
+  const penalties = ownSafety(raw, 'hangUp', 'penalties');
   return typeof penalties === 'boolean' ? penalties : null;
+}
+
+/** A character's own teleport command, or null where its file leaves it to the realm. */
+export function ownFleeGotoCommand(raw: Record<string, unknown>): string | null {
+  const command = ownSafety(raw, 'fleeGoto', 'command');
+  return typeof command === 'string' && command.trim().length > 0 ? command.trim() : null;
+}
+
+/** One key of one `automation.safety` block, as the character's own file states it. */
+function ownSafety(raw: Record<string, unknown>, block: string, key: string): unknown {
+  const automation = raw['automation'];
+  if (!isRecord(automation)) return undefined;
+  const safety = automation['safety'];
+  if (!isRecord(safety)) return undefined;
+  const found = safety[block];
+  return isRecord(found) ? found[key] : undefined;
+}
+
+/** What a realm calls things, read by the session through `Vocabulary`: its locate word and its coins. */
+export type RealmWords = Pick<Profile, 'locate' | 'coins'>;
+
+/** A realm that states no words of its own: asked with `rm`, and the stock coins. */
+export const UNSTATED_REALM_WORDS: RealmWords = Object.freeze({
+  locate: DEFAULT_LOCATE,
+  coins: {}
+});
+
+/**
+ * A character's own locate word, or null where its file leaves it to the
+ * realm — a word this client does not know included, since it was never a
+ * choice the form could show.
+ */
+export function ownLocate(raw: Record<string, unknown>): LocateWord | null {
+  return asLocateWord(raw['locate']);
 }
 
 /**
@@ -382,12 +440,6 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
         host: target.host,
         port: target.port,
         encoding: target.encoding,
-        // On the server, same as `login.steps` — every character dialling this
-        // BBS gets the same answer to which locate word works, because it is a
-        // fact about the BBS and not about the account.
-        locate: server.locate,
-        // And what it calls its coins, for the same reason.
-        coins: server.coins,
         login: {
           enabled: credentials.username.length > 0,
           /*
@@ -417,6 +469,8 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
       target,
       serverName: server.name,
       database: server.database,
+      locate: ownLocate(raw) ?? server.locate,
+      coins: { ...server.coins, ...asCoinNames(raw['coins']) },
       autoConnect: raw['autoConnect'] === true,
       // `!== false`, not `=== true`: this one is on unless the file says
       // otherwise. See the field.
@@ -425,14 +479,23 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
       // Merged onto the file as written, then coerced by the same function the
       // options file goes through: one place decides what a valid value is, and
       // it runs exactly once.
-      config: withRealmHangPenalties(
-        withGlobalMonsters(
-          normalizeConfig(overlay(baseSource, patch)),
-          base.automation.combat.monsters,
-          raw
+      config: withRealmSafety(
+        withRealmSafety(
+          withRealmMobRules(
+            normalizeConfig(overlay(baseSource, patch)),
+            base.automation.combat.mobRules,
+            server.mobRules,
+            raw
+          ),
+          'hangUp',
+          'penalties',
+          server.hangPenalties,
+          ownHangPenalties(raw)
         ),
-        server.hangPenalties,
-        raw
+        'fleeGoto',
+        'command',
+        server.fleeGoto.length > 0 ? server.fleeGoto : null,
+        ownFleeGotoCommand(raw)
       )
     }
   };
@@ -441,17 +504,30 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
 /**
  * Strips the keys that describe the character itself, leaving the overlay.
  *
- * `server`, `account` and `login` are resolved into `connection:` above; `name`,
- * `accent`, `autoConnect` and `autoReconnect` are properties of the profile
- * rather than of the client. Leaving them in would put keys into the merged
- * config that `normalizeConfig` does not know, which is harmless but
- * misleading to read.
+ * `server`, `account` and `login` are resolved into `connection:` above, and
+ * `locate` into the profile beside it; `name`, `accent`, `autoConnect` and
+ * `autoReconnect` are properties of the profile rather than of the client.
+ * Leaving them in would put keys into the merged config that `normalizeConfig`
+ * does not know, which is harmless but misleading to read.
  */
 function withoutProfileKeys(raw: Record<string, unknown>): Record<string, unknown> {
-  const { server, account, login, name, accent, autoConnect, autoReconnect, ...rest } = raw;
+  const {
+    server,
+    account,
+    login,
+    locate,
+    coins,
+    name,
+    accent,
+    autoConnect,
+    autoReconnect,
+    ...rest
+  } = raw;
   void server;
   void account;
   void login;
+  void locate;
+  void coins;
   void name;
   void accent;
   void autoConnect;

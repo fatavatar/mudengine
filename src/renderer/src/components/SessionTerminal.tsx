@@ -9,7 +9,7 @@ import type { AttachSnapshot, SessionId } from '@shared/ipc';
 import type { TerminalConfig } from '@shared/config';
 import type { QuestRunProgress } from '@shared/quests';
 import type { WalkProgress } from '@shared/walk';
-import type { TerminalActionName, TerminalSize } from '@shared/types';
+import type { LostEnter, TerminalActionName, TerminalSize } from '@shared/types';
 import type { NameIndex } from '../lib/names';
 import type { PopoverAnchor } from '../lib/popover';
 import type { TerminalPalette } from '@shared/themes';
@@ -26,6 +26,8 @@ export interface SessionTerminalProps {
   onInspect?(name: string, at: PopoverAnchor): void;
   onSelectPlayer?(session: SessionId, name: string, at: PopoverAnchor): void;
   onSelectGang?(session: SessionId, name: string, at: PopoverAnchor): void;
+  /** A slot word in a listing clicked: the slot's quick view, for this character. */
+  onSelectSlot?(session: SessionId, slot: string, at: PopoverAnchor): void;
   /** A room's name clicked in the console: the route panel, on that room. */
   onChooseRoom?(name: string): void;
   /** A console button main runs — `Deposit All`. See `TerminalIntentAction`. */
@@ -103,6 +105,7 @@ function SessionTerminal({
   onInspect,
   onSelectPlayer,
   onSelectGang,
+  onSelectSlot,
   onChooseRoom,
   run,
   walk,
@@ -231,6 +234,11 @@ function SessionTerminal({
 
   const input = useCallback((data: string) => onInput(session, data), [onInput, session]);
   const resize = useCallback((size: TerminalSize) => onResize(session, size), [onResize, session]);
+  // Sent straight to the bridge, as `App` does; nothing between here and main acts on it.
+  const lostEnter = useCallback(
+    (report: LostEnter) => api.lostEnter(session, report),
+    [api, session]
+  );
 
   /*
    * Placed by grid coordinate rather than by document order, which is what lets
@@ -253,6 +261,11 @@ function SessionTerminal({
   const selectGang = useCallback(
     (name: string, at: PopoverAnchor) => onSelectGang?.(session, name, at),
     [onSelectGang, session]
+  );
+  // And a slot: what this character can wear there, whoever's listing named it.
+  const selectSlot = useCallback(
+    (slot: string, at: PopoverAnchor) => onSelectSlot?.(session, slot, at),
+    [onSelectSlot, session]
   );
   // And the same for a console button: the counter it is asked at belongs to
   // this terminal's character, never to whichever pane has the keyboard.
@@ -284,10 +297,12 @@ function SessionTerminal({
         onInspect={onInspect}
         onSelectPlayer={selectPlayer}
         onSelectGang={selectGang}
+        onSelectSlot={selectSlot}
         onChooseRoom={onChooseRoom}
         onAct={act}
         onReady={handleReady}
         onResize={resize}
+        onLostEnter={lostEnter}
         // Search belongs to the terminal being read, so only the focused pane
         // reports counts into the search bar. One shared no-op for the rest:
         // an arrow written here was a fresh function per render, which made

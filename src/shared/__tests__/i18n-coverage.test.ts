@@ -9,12 +9,13 @@
  * that looks maintained and is dead). Both directions are walked from the
  * sources themselves, so neither list can drift from the code it describes.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { asUiDict, flattenDict } from '../i18n';
+import { sourceFiles } from './sources';
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
@@ -24,7 +25,7 @@ const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
  * as read. An exemption is a claim with a date on it; when the call site
  * goes, the row goes.
  */
-const DYNAMIC_CALLS: readonly { file: string; prefix: string; reason: string }[] = [
+const DYNAMIC_CALLS: readonly { file: string; prefix: string | null; reason: string }[] = [
   {
     file: 'src/shared/rewrites.ts',
     prefix: 'rewrites.labels',
@@ -48,6 +49,22 @@ const DYNAMIC_CALLS: readonly { file: string; prefix: string; reason: string }[]
       'one is named and has a singular to address its rows by.'
   },
   {
+    file: 'src/main/app/copyMatch.ts',
+    prefix: null,
+    reason:
+      'The copy a test or harness names by key, rendered to match it (2026-09-25): the keys ' +
+      "are its callers', none of which ships, so it claims none as read; it throws on a key " +
+      'the dictionary lacks, which is the check this guard would otherwise make.'
+  },
+  {
+    file: 'src/main/app/i18n.ts',
+    prefix: null,
+    reason:
+      '`isSaidBy` reads the template of a key its caller names, to recognise a sentence main ' +
+      "said (2026-09-25): the keys are its callers', each also rendered by a literal t() " +
+      'where the sentence is said, so it claims none; a missing key recognises nothing.'
+  },
+  {
     file: 'src/renderer/src/components/RewriteEditor.tsx',
     prefix: 'rewrites.fields',
     reason:
@@ -56,17 +73,6 @@ const DYNAMIC_CALLS: readonly { file: string; prefix: string; reason: string }[]
       'asserts every one is described.'
   }
 ];
-
-function sourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...sourceFiles(path));
-    else if (/\.tsx?$/.test(entry.name) && !entry.name.endsWith('.test.ts')) out.push(path);
-  }
-  return out;
-}
 
 /** Light comment stripping, so a key quoted in a doc comment is not "usage". */
 function stripComments(code: string): string {
@@ -140,7 +146,9 @@ describe('the UI dictionary and its readers agree', () => {
 
   it('every key in the dictionary is read by something', () => {
     const dead = [...keys].filter(
-      (key) => !usage.literal.has(key) && !DYNAMIC_CALLS.some((d) => key.startsWith(`${d.prefix}.`))
+      (key) =>
+        !usage.literal.has(key) &&
+        !DYNAMIC_CALLS.some((d) => d.prefix !== null && key.startsWith(`${d.prefix}.`))
     );
     expect(dead, 'keys in locales/ui.en.yaml that nothing reads').toEqual([]);
   });

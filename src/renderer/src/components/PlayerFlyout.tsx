@@ -21,7 +21,7 @@ import {
   type RemoteGrant,
   type RemoteName
 } from '@shared/remotes';
-import { playerKey, type PlayerRecord } from '@shared/players';
+import { recordOf, type PlayerRecord, type PlayerRegistry } from '@shared/players';
 import { titleReading } from '@shared/titles';
 
 /**
@@ -44,6 +44,8 @@ export interface PlayerFlyoutProps {
   asked: PlayerAsked;
   /** The character whose listing was clicked — not necessarily the shown one. */
   character: CharacterState;
+  /** That character's registry, which is pushed apart from it. */
+  players: PlayerRegistry;
   /**
    * How that character's remote answering is configured — `automation.remotes`,
    * resolved for it. The whole block rather than only this person's grant: the
@@ -60,7 +62,7 @@ export interface PlayerFlyoutProps {
    * rather than local state: a permission somebody set by clicking and lost on
    * relaunch is one they will not trust enough to use. The **whole** grant,
    * because *Allow all* is one press and twenty writes would be twenty rewrites
-   * of the same file racing each other. See `App.tsx`.
+   * of the same file racing each other. See `SlideOuts`.
    */
   onGrant(name: string, grant: RemoteGrant): void;
   /**
@@ -68,7 +70,7 @@ export interface PlayerFlyoutProps {
    *
    * The same control every other item name in the client is, and it replaces
    * this panel rather than opening beside it — one panel at a time, which is
-   * `inspect`'s own rule in `App.tsx` and the reason clicking through never
+   * `inspect`'s own rule in `useSlideOuts` and the reason clicking through never
    * leaves two things to put away.
    *
    * The stats are deliberately **not** inlined here. A `PlayerRecord` is
@@ -78,6 +80,8 @@ export interface PlayerFlyoutProps {
    * file is rebuilt. The realm's answer is one click away and always current.
    */
   inspect?(name: string, anchor: HTMLElement): void;
+  /** A slot word clicked: what the reading character can wear there, replacing this panel. */
+  onSelectSlot?(slot: string, anchor: HTMLElement): void;
   /**
    * Their gang's name clicked: the Gang flyout on it, replacing this panel.
    *
@@ -160,20 +164,22 @@ type Face = 'player' | 'equipment' | 'access';
 export default function PlayerFlyout({
   asked,
   character,
+  players,
   remotes,
   onGrant,
   onSelectGang,
   onAsk,
   onDismiss,
   returnFocus,
-  inspect
+  inspect,
+  onSelectSlot
 }: PlayerFlyoutProps) {
   const [face, setFace] = useState<Face>('player');
   const copy = useCopyMenu();
 
-  // A direct lookup: `playerKey` is what the registry files a name under.
-  const record = character.players[playerKey(asked.name)] ?? null;
-  const now = character.updatedAt ?? 0;
+  const record = recordOf(players, asked.name);
+  // Read at the draw, which follows the character's pushes and the registry's alike.
+  const now = Date.now();
 
   /*
    * Whether this person shares this character's gang, read **once** and handed
@@ -268,6 +274,7 @@ export default function PlayerFlyout({
               aria-selected={face === entry.id}
               className="crumb"
               data-active={face === entry.id ? 'true' : 'false'}
+              data-tab={entry.id}
               key={entry.id}
               onClick={() => setFace(entry.id)}
               onMouseDown={keepFocus}
@@ -295,7 +302,12 @@ export default function PlayerFlyout({
             {onAsk && <PlayerAsks name={record.name} onAsk={onAsk} />}
           </>
         ) : face === 'equipment' ? (
-          <PlayerEquipment inspect={inspect} now={now} record={record} />
+          <PlayerEquipment
+            inspect={inspect}
+            now={now}
+            onSelectSlot={onSelectSlot}
+            record={record}
+          />
         ) : (
           <PlayerAccess
             gang={ownGang(character) ?? null}
@@ -613,11 +625,13 @@ function PlayerDetail({
 function PlayerEquipment({
   record,
   now,
-  inspect
+  inspect,
+  onSelectSlot
 }: {
   record: PlayerRecord;
   now: number;
   inspect?: (name: string, anchor: HTMLElement) => void;
+  onSelectSlot?: (slot: string, anchor: HTMLElement) => void;
 }) {
   if (record.equipment === null) {
     return <p className="empty">{t('cards.player.equipmentNeverLooked', { name: record.name })}</p>;
@@ -643,7 +657,21 @@ function PlayerEquipment({
       <dl className="readout player-equipment">
         {record.equipment.map((worn) => (
           <Fragment key={`${worn.slot}:${worn.name}`}>
-            <dt>{worn.slot}</dt>
+            <dt>
+              {onSelectSlot === undefined ? (
+                worn.slot
+              ) : (
+                <button
+                  className="lookup"
+                  onClick={(event) => onSelectSlot(worn.slot, event.currentTarget)}
+                  onMouseDown={keepFocus}
+                  title={t('cards.slotPeek.slotTooltip')}
+                  type="button"
+                >
+                  {worn.slot}
+                </button>
+              )}
+            </dt>
             <dd>
               {inspect === undefined ? (
                 worn.name

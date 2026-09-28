@@ -104,6 +104,7 @@ beforeEach(async () => {
       rosterPublishes += 1;
     },
     configFor: () => config,
+    wordsFor: () => ({ locate: 'rm', coins: {} }),
     autoReconnect: () => autoReconnect,
     label: (id) => ({ name: id, server: 'test', accent: 'cyan' }),
     logDirectory: () => '',

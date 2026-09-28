@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  castIn,
-  castOf,
   castWord,
   castsBare,
   castsOnOthers,
   castsOnSelf,
   cureGates,
   holdsMovement,
-  isShortIn,
   resolveSpell,
   sameSpell,
   spellCost,
@@ -69,6 +66,13 @@ const cureDisease: AbilityPairs = [
   [122, 362]
 ];
 const magicMissile: AbilityPairs = [[17, 0]];
+/* `freedom` (70) and `cure paralysis` (160) state this pair and nothing else. */
+const freedom: AbilityPairs = [[81, 0]];
+/* `remove bonds` (447), the diamond-studded ring's cast: the mark beside its message. */
+const removeBonds: AbilityPairs = [
+  [81, 0],
+  [120, 1348]
+];
 const minorHealing: AbilityPairs = [
   [18, 0],
   [108, 0]
@@ -102,6 +106,18 @@ describe('cureGates', () => {
     expect(cureGates([magicMissile, minorHealing]).disease).toBe(false);
   });
 
+  /*
+   * `Freedom` (81): `Spell.cs` strips every active effect whose spell carries
+   * `HoldPerson` — the one test `CheckForHoldPerson` makes — so the mark is the
+   * cure for exactly what `held` records. Whatever its value: all eight rows
+   * state zero.
+   */
+  it('opens freedom on the realm’s Freedom mark, and on nothing else', () => {
+    expect(cureGates([freedom]).freedom).toBe(true);
+    expect(cureGates([magicMissile, removeBonds]).freedom).toBe(true);
+    expect(cureGates([curePoison, cureBlindness, cureDisease, minorHealing]).freedom).toBe(false);
+  });
+
   it('closes every gate on an empty book and opens them all for a spell the realm cannot name', () => {
     expect(cureGates([])).toEqual({
       poison: false,
@@ -117,10 +133,16 @@ describe('cureGates', () => {
       freedom: true
     });
   });
+});
 
-  it("opens freedom only on the realm's own Freedom mark (81)", () => {
-    expect(cureGates([[[81, 0]]]).freedom).toBe(true);
-    expect(cureGates([curePoison]).freedom).toBe(false);
+describe('spellServes', () => {
+  it('says a Freedom-marked row serves a hold, and a heal or a cure for poison does not', () => {
+    expect(spellServes(freedom).held).toBe(true);
+    expect(spellServes(removeBonds).held).toBe(true);
+    expect(spellServes(minorHealing)).toMatchObject({ hp: true, held: false });
+    expect(spellServes(curePoison)).toMatchObject({ poisoned: true, held: false });
+    // Unknown serves nothing on the offering side.
+    expect(spellServes(undefined).held).toBe(false);
   });
 });
 
@@ -300,7 +322,7 @@ describe('holdsMovement', () => {
    * A realm that does not say is not a realm that says no — but it answers
    * false all the same, because an unstated hold must never stand a walk
    * still. What catches those is the refusal on the wire: see
-   * `Walker.onsetAnsweredStep`.
+   * `Holds.onsetAnsweredStep`.
    */
   it('answers false for a realm that states nothing, and for no spell at all', () => {
     expect(holdsMovement({})).toBe(false);
@@ -309,111 +331,47 @@ describe('holdsMovement', () => {
   });
 });
 
-/*
- * Both spellings the server reads as a cast: `c <short>` and the short name
- * bare, which is what this client sends (healbot's `rsto stat`, answered `You
- * may not cast that spell on a user!`, 2026-09-22).
- */
-describe('castOf', () => {
-  const book = [
-    { name: 'pagan ritual', short: 'ritu' },
-    { name: 'minor healing', short: 'mahe' }
+/* Todo 829: Blessings, AutoInvoke and AttackSpells share one same-spell check. */
+describe('sameSpell', () => {
+  const listed: CastableSpell[] = [
+    { name: 'bless', short: 'bles' },
+    { name: 'pressure points', short: 'pres' }
   ];
-  const known = (word: string): boolean => isShortIn(word, book);
+  const realm = (name: string): WorldSpell | null =>
+    ({
+      bless: { id: 14, name: 'bless', short: 'bles' },
+      bles: { id: 14, name: 'bless', short: 'bles' },
+      'protection from evil': { id: 9, name: 'protection from evil', short: 'prev' },
+      prev: { id: 9, name: 'protection from evil', short: 'prev' },
+      'blessed light': { id: 40, name: 'blessed light', short: 'blig' },
+      // Two spells the realm gives one short, and a spell it renamed.
+      'resist cold': { id: 6, name: 'resist cold', short: 'rcol' },
+      'ice shield': { id: 7, name: 'ice shield', short: 'rcol' },
+      'unholy aura': { id: 50, name: 'vile ward', short: 'vwar' },
+      'vile ward': { id: 50, name: 'vile ward', short: 'vwar' }
+    })[name.trim().toLowerCase()] ?? null;
 
-  it('reads the Cast command and a bare short name alike', () => {
-    expect(castOf('c ritu', known)).toEqual({ word: 'ritu', argument: '' });
-    expect(castOf('cast mahe bob', known)).toEqual({ word: 'mahe', argument: 'bob' });
-    expect(castOf('ritu', known)).toEqual({ word: 'ritu', argument: '' });
-    expect(castOf('MAHE bob', known)).toEqual({ word: 'MAHE', argument: 'bob' });
+  it.each([
+    ['bless', 'bless', true],
+    ['BLESS ', 'bless', true],
+    // The short word the book lists, and the whole name the server prints.
+    ['bles', 'bless', true],
+    ['pres', 'pressure points', true],
+    // The realm's short name with no book at all.
+    ['prev', 'protection from evil', true],
+    // Same first letters, another spell.
+    ['bless', 'blessed light', false],
+    ['bles', 'blessed light', false],
+    ['pressure points', 'protection from evil', false],
+    ['resist cold', 'ice shield', false],
+    ['unholy aura', 'vile ward', true]
+  ])('%s and %s: %s', (a, b, same) => {
+    expect(sameSpell(a, b, listed, realm)).toBe(same);
+    expect(sameSpell(b, a, listed, realm)).toBe(same);
   });
 
-  it('reads no command of the table, and no word the book lacks, as a cast', () => {
-    expect(castOf('rest', known)).toBeNull();
-    expect(castOf('look', () => true)).toBeNull();
-    expect(castOf('swan', known)).toBeNull();
-    expect(castOf('c', known)).toBeNull();
-    expect(castOf('  ', known)).toBeNull();
-  });
-});
-
-/*
- * One answer to *is this a cast* and *is this the same spell* (2026-09-24),
- * for every module that asks — AutoCombat, the tracker, Blessings, AutoInvoke.
- */
-describe('castIn and sameSpell', () => {
-  const listed = [{ name: 'pagan ritual', short: 'ritu' }];
-  const realm: Record<string, WorldSpell> = {
-    bless: { id: 3, name: 'bless', short: 'bles' },
-    bles: { id: 3, name: 'bless', short: 'bles' },
-    fury: { id: 9, name: 'unholy fury', short: 'fury' },
-    'unholy fury': { id: 9, name: 'unholy fury', short: 'fury' }
-  } as unknown as Record<string, WorldSpell>;
-  const realmSpell = (name: string): WorldSpell | null => realm[name.toLowerCase()] ?? null;
-
-  it('reads a bare short the listing or the realm owns as a cast', () => {
-    expect(castIn('ritu', listed, realmSpell)).toEqual({ word: 'ritu', argument: '' });
-    expect(castIn('fury rat', null, realmSpell)).toEqual({ word: 'fury', argument: 'rat' });
-    expect(castIn('look', listed, realmSpell)).toBeNull();
-  });
-
-  it('names one spell by the realm’s id, or by any spelling the listing knows', () => {
-    expect(sameSpell('bles', 'bless', null, realmSpell)).toBe(true);
-    expect(sameSpell('fury', 'Unholy Fury', null, realmSpell)).toBe(true);
-    expect(sameSpell('fury', 'bless', null, realmSpell)).toBe(false);
-    // The realm silent, the listing joins the short to its whole name.
-    expect(sameSpell('ritu', 'pagan ritual', listed, () => null)).toBe(true);
-    expect(sameSpell('ritu', 'mahe', listed, () => null)).toBe(false);
-  });
-});
-
-/*
- * A drain hurts the target and heals the caster: `DrainLife` on the row, or a
- * hit whose `EndCast` heals — the mudrev realm's rows (2026-09-28).
- */
-describe('spellServes drains', () => {
-  const suckTheLifeForce: AbilityPairs = [[18, 0]];
-  const linked = (id: number): AbilityPairs | undefined =>
-    id === 1501 ? suckTheLifeForce : id === 108 ? [[115, 0]] : undefined;
-
-  it('reads DrainLife on the row (vampiric assault)', () => {
-    expect(
-      spellServes([
-        [8, 0],
-        [108, 0]
-      ]).drains
-    ).toBe(true);
-  });
-
-  it('follows a hit to an EndCast heal (necromantic storm)', () => {
-    const storm: AbilityPairs = [
-      [17, 0],
-      [120, 108],
-      [151, 1501]
-    ];
-    expect(spellServes(storm, linked).drains).toBe(true);
-    // Without the lookup, only the row's own marks are read.
-    expect(spellServes(storm).drains).toBe(false);
-  });
-
-  it('is not a drain when what the hit ends in heals nothing, or nothing is hit', () => {
-    expect(
-      spellServes(
-        [
-          [17, 0],
-          [151, 108]
-        ],
-        linked
-      ).drains
-    ).toBe(false);
-    expect(
-      spellServes(
-        [
-          [115, 0],
-          [151, 1501]
-        ],
-        linked
-      ).drains
-    ).toBe(false);
+  it('falls back to the words where nothing names either', () => {
+    expect(sameSpell('mystery', 'Mystery', null)).toBe(true);
+    expect(sameSpell('mystery', 'myst', null)).toBe(false);
   });
 });

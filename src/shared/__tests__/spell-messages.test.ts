@@ -58,45 +58,36 @@ describe('reading the shipped table', () => {
   });
 });
 
-/*
- * Paramud renames spells and keeps their message records (2026-09-23): its
- * `pagan ritual` prints the file's `blood ritual` sentences, record 820.
- */
-describe('a realm that names the same sentences differently', () => {
-  const rows = parseSpellMessagesCsv(
-    [
-      'spell_id,spell_name,start,stop,desc_msg_id',
-      '348,blood ritual,You are affected by a blood ritual!,The effects of the blood ritual wear off.,820',
-      '21,unholy aura,You feel safe from good!,You no longer feel safe from good!,8542'
-    ].join('\n')
-  );
+describe('a realm that renames a spell and keeps its message record', () => {
+  const rows = parseSpellMessagesCsv(csv);
+  const realm = new Map([
+    [8539, ['bless', 'heavenly favour']],
+    [590, ['bear stance']],
+    [4242, ['nothing shipped']]
+  ]);
 
-  it('files the sentences under the realm’s name too, joined by the message record', () => {
-    const book = SpellMessageBook.fromRows(
-      withRealmSpellNames(rows, [
-        {
-          name: 'pagan ritual',
-          abilities: [
-            [22, 5],
-            [115, 820]
-          ]
-        },
-        { name: 'aura of undeath', abilities: [[115, 8542]] },
-        { name: 'undead armour', abilities: [[115, 8679]] },
-        { name: 'harm' }
-      ])
-    );
-    expect(book.match('You are affected by a blood ritual!')?.starts).toEqual([
-      'blood ritual',
-      'pagan ritual'
+  it("adds the realm's name for a record the file holds, with the record's sentences", () => {
+    const joined = withRealmSpellNames(rows, realm);
+    expect(joined.slice(0, rows.length)).toEqual(rows);
+    expect(joined.slice(rows.length)).toEqual([
+      {
+        spell: 'heavenly favour',
+        start: 'You feel lucky!',
+        stop: 'The effects of bless wear off!',
+        message: 8539
+      },
+      {
+        spell: 'bear stance',
+        start: 'You feel strong, but clumsy!',
+        stop: 'The way of the bear wears off.',
+        message: 590
+      }
     ]);
-    expect(book.stopOf('aura of undeath')).toBe('You no longer feel safe from good!');
-    expect(book.startOf('undead armour')).toBeNull();
   });
 
-  it('leaves a name the file already carries as the file has it', () => {
-    const merged = withRealmSpellNames(rows, [{ name: 'Blood Ritual', abilities: [[115, 8542]] }]);
-    expect(merged).toHaveLength(2);
+  it('answers a sentence with the realm name beside the shipped ones', () => {
+    const book = SpellMessageBook.fromRows(withRealmSpellNames(rows, realm));
+    expect(book.match('You feel lucky!')?.starts).toEqual(['bless', 'chant', 'heavenly favour']);
   });
 });
 

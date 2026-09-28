@@ -55,6 +55,7 @@ import { nameAnswersTo, type WorldItem, type WorldSpell } from '../../shared/wor
 import { t } from '../app/i18n';
 import { tuning } from '../app/tuning';
 import type { CommandQueue } from './CommandQueue';
+import type { SessionModule } from './Module';
 
 /** What this needs of the realm and of the character, injected as functions. */
 export interface InvokeSources {
@@ -66,7 +67,7 @@ export interface InvokeSources {
    * And by name, for the buff list — which carries words, not ids.
    *
    * Both sides of *is this buff already up* are resolved to the realm's own
-   * id before they are compared, which is the reading `sameSpell` (`shared/spellcraft`)
+   * id before they are compared, which is the reading `Blessings.sameSpell`
    * settled on and for its reason: the server prints a spell's whole name
    * where a configuration may hold a short one, so words alone hold a
    * configured `bles` against a recorded `bless` for ever.
@@ -74,7 +75,7 @@ export interface InvokeSources {
   spellNamed(name: string): WorldSpell | null;
 }
 
-export class AutoInvoke {
+export class AutoInvoke implements SessionModule {
   /** When each item was last asked, so a proposal in flight is not repeated. */
   private readonly askedAt = new Map<string, number>();
 
@@ -164,16 +165,11 @@ export class AutoInvoke {
     // a spell with no duration is not a blessing.
     if (spell === null || spell.duration === undefined || spell.duration <= 0) return null;
 
-    /*
-     * Already up, under its own name or any the establishing sentence could
-     * have meant — `sameSpell`, which compares by the realm's **id** where it
-     * can: the server prints a spell's whole name where a configuration may
-     * hold a short one.
-     */
-    const named = (name: string): WorldSpell | null => this.sources.spellNamed(name);
+    // Already up, under its own name or any the establishing sentence could
+    // have meant (`sameSpell`: the server prints the whole name).
     const held = state.buffs.some((buff) =>
       [buff.spell, ...(buff.candidates ?? [])].some((candidate) =>
-        sameSpell(candidate, spell.name, null, named)
+        sameSpell(candidate, spell.name, state.spellbook, this.sources.spellNamed)
       )
     );
     return held ? null : spell;

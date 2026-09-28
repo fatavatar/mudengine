@@ -262,6 +262,9 @@ describe('who the realm lets wear a thing', () => {
     raceId: 4,
     level: 28,
     strength: 40,
+    alignment: null,
+    weaponType: null,
+    armourType: null,
     classNames: { 3: 'Paladin', 4: 'Cleric', 5: 'Priest', 6: 'Missionary', 15: 'Mystic' },
     raceNames: { 4: 'Halfling', 5: 'Elf' }
   };
@@ -369,18 +372,18 @@ describe('choosing a kit for the situation', () => {
     'golden chalice': OFF_HAND
   };
   const slotOf = (name: string): string | null => SLOTS[name] ?? null;
-  const still: GearSituation = { moving: false, fighting: false, target: null };
+  const still: GearSituation = { moving: false, fighting: false, backstab: false, target: null };
 
   it('takes the most specific set, and the first of two that match equally', () => {
     expect(overlayFor(sets, still)).toBeNull();
     expect(overlayFor(sets, { ...still, moving: true })?.name).toBe('Moving');
     expect(overlayFor(sets, { ...still, fighting: true })?.name).toBe('Fighting');
     // The monster narrows it; another monster does not reach the boss row.
-    const boss = { moving: false, fighting: true, target: 'nasty sandworm' };
+    const boss = { ...still, fighting: true, target: 'nasty sandworm' };
     expect(overlayFor(sets, boss)?.name).toBe('Boss');
     expect(overlayFor(sets, { ...boss, target: 'big sandworm' })?.name).toBe('Fighting');
     // A fight outranks a walk: the fight decides what the next round costs.
-    expect(overlayFor(sets, { moving: true, fighting: true, target: null })?.name).toBe('Fighting');
+    expect(overlayFor(sets, { ...still, moving: true, fighting: true })?.name).toBe('Fighting');
   });
 
   it('lays the set over the base rather than replacing it', () => {
@@ -397,6 +400,32 @@ describe('choosing a kit for the situation', () => {
   });
 
   /*
+   * MegaMUD's `BsWeapon` as a set (todo 02): the weapon to open with, worn
+   * between fights while the opener is a backstab, and the fighting set once
+   * the fight is on. Laid over the moving set, so a walk keeps its boots.
+   */
+  it('wears the backstab set between fights, and the fighting set once one starts', () => {
+    const withStab: GearSet[] = [
+      ...sets,
+      { name: 'Backstab', when: 'backstab', mob: '', wear: ['nexus spear'] }
+    ];
+    const ready = { ...still, backstab: true };
+    expect(overlayFor(sets, ready)).toBeNull();
+    expect(overlayFor(withStab, still)).toBeNull();
+    expect(overlayFor(withStab, ready)?.name).toBe('Backstab');
+    expect(overlayFor(withStab, { ...ready, moving: true })?.name).toBe('Backstab');
+    expect(overlayFor(withStab, { ...ready, fighting: true })?.name).toBe('Fighting');
+    expect([...kitFor(withStab, { ...ready, moving: true }, slotOf)]).toEqual([
+      ['feet', 'brown leather boots'],
+      ['weapon hand', 'nexus spear']
+    ]);
+    expect([...kitFor(withStab, ready, slotOf)]).toEqual([
+      ['feet', 'plate boots'],
+      ['weapon hand', 'nexus spear']
+    ]);
+  });
+
+  /*
    * The ordering rule, which is the whole reason this is a plan rather than a
    * list of `wear`s: `UseCommand`'s own refusal is about the hand, and the
    * server will not put a two-hander on over a held shield.
@@ -408,7 +437,7 @@ describe('choosing a kit for the situation', () => {
       worn('lifestealer', WEAPON_HAND),
       carried({ name: 'nexus spear' })
     ];
-    const kit = kitFor(sets, { moving: false, fighting: true, target: 'nasty sandworm' }, slotOf);
+    const kit = kitFor(sets, { ...still, fighting: true, target: 'nasty sandworm' }, slotOf);
     expect(swapPlan(kit, pack, 10, hands).commands).toEqual([
       'remove golden chalice',
       'wear nexus spear'
@@ -483,5 +512,72 @@ describe('using an item between rounds', () => {
   it('sends nothing for an item the pack does not hold, or with nothing to aim at', () => {
     expect(offRoundPlan('nexus spear', 'big sandworm', [], hands)).toEqual([]);
     expect(offRoundPlan('nexus spear', '', [worn('nexus spear', WEAPON_HAND)], hands)).toEqual([]);
+  });
+});
+
+/**
+ * The rest of `ItemType.CanPlayerUseItem` (`ItemType.cs:250–470`): the
+ * alignment gates first, `ClassOk` beside `ClassRest`, and the class's own
+ * armour and weapon kinds, lifted where the item names the class or race.
+ */
+describe('what else the server checks before an item goes on', () => {
+  const mage: Wearer = {
+    ...UNKNOWN_WEARER,
+    classId: 12,
+    raceId: 1,
+    level: 20,
+    alignment: 'Neutral',
+    weaponType: 9,
+    armourType: 1
+  };
+
+  it('refuses a good-only item to a neutral character, and allows it to a good one', () => {
+    const halo: EquipRestrictions = { slot: 'Head', abilities: [[97, 0]] };
+    expect(equipBlock(halo, mage)).toEqual({ kind: 'alignment', has: 'Neutral' });
+    expect(equipBlock(halo, { ...mage, alignment: 'Good' })).toBeNull();
+  });
+
+  it('reads an evil threshold off the row, and leaves a band it runs through unknown', () => {
+    // `hellblade`: Evil 250. Criminal (80–120) is refused; Villain (120–210) is below it too.
+    const blade: EquipRestrictions = { slot: 'Weapon Hand', abilities: [[98, 250]] };
+    expect(equipBlock(blade, { ...mage, alignment: 'Criminal' })?.kind).toBe('alignment');
+    // FIEND's band (210–1000) straddles 250: unknown, so not refused.
+    expect(equipBlock(blade, { ...mage, alignment: 'FIEND' })).toBeNull();
+  });
+
+  it('refuses nothing on alignment while the roster has not said', () => {
+    expect(equipBlock({ abilities: [[97, 0]] }, { ...mage, alignment: null })).toBeNull();
+  });
+
+  it('lets ClassOk name a class the ClassRest list leaves out', () => {
+    const knife: EquipRestrictions = { classes: [1], abilities: [[59, 12]] };
+    expect(equipBlock(knife, mage)).toBeNull();
+    expect(equipBlock(knife, { ...mage, classId: 8 })?.kind).toBe('class');
+  });
+
+  it('refuses armour heavier than the class wears, unless the item names the class or race', () => {
+    const plate: EquipRestrictions = { kind: 'armour', armour: { kind: 9 } };
+    expect(equipBlock(plate, mage)).toEqual({ kind: 'armour', heaviest: 1, is: 9 });
+    expect(equipBlock({ ...plate, races: [1] }, mage)).toBeNull();
+    expect(equipBlock({ ...plate, classes: [12] }, mage)).toBeNull();
+    // Cloth is what a Mage wears.
+    expect(equipBlock({ kind: 'armour', armour: { kind: 1 } }, mage)).toBeNull();
+  });
+
+  it('reads the class weapon codes: 4 one-handed, 7 blunt, 9 none unnamed', () => {
+    const weapon = (kind: number): EquipRestrictions => ({ kind: 'weapon', weapon: { kind } });
+    const as = (weaponType: number): Wearer => ({ ...mage, weaponType });
+    expect(equipBlock(weapon(3), as(4))).toEqual({ kind: 'weapon', is: 3 });
+    expect(equipBlock(weapon(2), as(4))).toBeNull();
+    expect(equipBlock(weapon(2), as(7))?.kind).toBe('weapon');
+    expect(equipBlock(weapon(1), as(7))).toBeNull();
+    expect(equipBlock(weapon(0), as(9))?.kind).toBe('weapon');
+    expect(equipBlock({ ...weapon(0), classes: [12] }, as(9))).toBeNull();
+    expect(equipBlock(weapon(3), as(8))).toBeNull();
+  });
+
+  it('refuses no kind to a class nothing has read', () => {
+    const plate: EquipRestrictions = { kind: 'armour', armour: { kind: 9 } };
+    expect(equipBlock(plate, UNKNOWN_WEARER)).toBeNull();
   });
 });

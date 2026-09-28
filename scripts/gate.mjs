@@ -53,9 +53,10 @@ const isTest = (file) => file.includes('/__tests__/');
 /*
  * A test runs when a changed file is in its import closure, or is a file on
  * disk that something in that closure names (`resources/`, `locales/`,
- * `captures/`, `mdb/`, `src/` — the guards read source as text rather than
- * importing it, so `src/main/client.ts` in a string is a claim on that file
- * and `src` is a claim on the tree). The same closure decides the realm tests and the
+ * `captures/`, `mdb/`, `src/`, `scripts/` — the guards read source as text
+ * rather than importing it, so `src/main/client.ts` in a string is a claim on
+ * that file and `src` is a claim on the tree; `scripts` is the probes'
+ * two-argument guard's). The same closure decides the realm tests and the
  * corpus replay. Nothing here is a guessed directory mapping.
  */
 const ALIASES = [
@@ -65,7 +66,7 @@ const ALIASES = [
 ];
 const SPECIFIER =
   /\bfrom\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)|^\s*import\s*['"]([^'"]+)['"]/gm;
-const DISK = /['"]((?:resources|locales|captures|mdb|src)(?:\/[^'"]*)?)['"]/g;
+const DISK = /['"]((?:resources|locales|captures|mdb|src|scripts)(?:\/[^'"]*)?)['"]/g;
 const toPosix = (p) => p.split(path.sep).join('/');
 const isFile = (p) => fs.existsSync(p) && fs.statSync(p).isFile();
 
@@ -175,6 +176,7 @@ const SMOKE_PATHS = [
   'src/shared/map.ts',
   'src/shared/drafts.ts',
   'src/shared/i18n.ts',
+  'src/shared/regex.ts',
   'src/shared/profiles.ts',
   'src/shared/files.ts',
   'locales/',
@@ -195,6 +197,12 @@ const WEB_SMOKE_PATHS = [
   'src/shared/internal.ts',
   'src/renderer/src/lib/webBridge.ts',
   'src/renderer/src/lib/pickers.ts',
+  // The copy the harness types for, and what finds it (`copyMatch.ts`).
+  'locales/',
+  'src/main/app/i18n.ts',
+  'src/main/app/copyMatch.ts',
+  'src/shared/i18n.ts',
+  'src/shared/regex.ts',
   'scripts/web.mjs',
   'scripts/web-smoke.mjs',
   'scripts/web-smoke-baseline.json',
@@ -470,7 +478,7 @@ if (NARROW) {
     gated(
       'smoke',
       'smoke',
-      [NODE, 'scripts/smoke.mjs'],
+      [NODE, ...REGISTER, 'scripts/smoke.mjs'],
       [...expand([...SMOKE_PATHS, 'scripts/lib']).filter((c) => !isTest(c)), ...CONFIGS]
     )
   );

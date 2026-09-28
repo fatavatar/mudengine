@@ -6,6 +6,7 @@ import Icon from './Icon';
 import { commandsOf, runsOf, stepSignature } from '../lib/route';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { useListNavigation } from '../hooks/useListNavigation';
+import { useRoomSearch } from '../hooks/useRoomSearch';
 import { t } from '../lib/i18n';
 import { type LocalMap } from '@shared/map';
 import { errorMessage } from '@shared/values';
@@ -229,18 +230,6 @@ function chips(step: RouteStep) {
               : t('cards.route.spendsUses', { useCount: step.invoke.uses })}
         </span>
       )}
-      {/* And the lever the plan came here for (`RouteStep.pull`), said
-      before this step: the far end of a detour to open a door further on.
-      The door itself is named on hover, because the chip is on a room the
-      reader may not connect with it. */}
-      {step.pull !== undefined && (
-        <span
-          className="chip warn"
-          title={t('cards.route.pullTitle', { roomName: step.pull.opensName })}
-        >
-          {t('cards.route.pullFirst', { phrase: step.pull.say.join(', ') })}
-        </span>
-      )}
       {/* And what the room itself does to whoever stands in it. A chip
       rather than a figure per step: on a route that crosses eight hundred of
       them the number is the same eight hundred times, and the figure that
@@ -333,15 +322,13 @@ export default function RoutePanel({
   onPeekEnd
 }: RoutePanelProps) {
   const [query, setQuery] = useState('');
-  const [matches, setMatches] = useState<WorldRoom[]>([]);
   const [route, setRoute] = useState<Route | null>(null);
   const [target, setTarget] = useState<WorldRoom | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
-  /*
-   * The room a plan has been asked for and not yet answered. A route across
-   * the realm takes long enough — a second and more, with the alternatives —
-   * that a click with nothing to show for it read as a missed click
-   * (2026-09-24), so the panel says it is planning until the answer lands.
+  /**
+   * The room a plan is being drawn to, until it lands or fails (todo 838). A
+   * plan across Paradigm takes a median 184ms and up to 714ms, so the panel
+   * says it is working; `--delay-planning` keeps a quick one from flashing.
    */
   const [planningTo, setPlanningTo] = useState<WorldRoom | null>(null);
   /**
@@ -473,6 +460,34 @@ export default function RoutePanel({
     return () => window.cancelAnimationFrame(id);
   }, [open]);
 
+  /**
+   * Plans a route to `room`, landing the answer only while it is still the
+   * latest plan: every plan, a close and a withdrawn destination bump
+   * `planning`, so an older answer is disowned and never clears or sets
+   * `planningTo` behind a newer one.
+   */
+  const plan = useCallback(
+    (room: WorldRoom): void => {
+      planning.current += 1;
+      const mine = planning.current;
+      setTarget(room);
+      setRefused(null);
+      setPlanningTo(room);
+      void onRoute(room)
+        .then((answer) => {
+          if (planning.current !== mine) return;
+          setRoute(answer);
+          setPlanningTo(null);
+        })
+        .catch((error) => {
+          if (planning.current !== mine) return;
+          setRefused(errorMessage(error));
+          setPlanningTo(null);
+        });
+    },
+    [onRoute]
+  );
+
   /*
    * A destination handed in from outside is planned straight away, so opening
    * the panel from a map click shows the steps rather than an empty search.
@@ -486,24 +501,12 @@ export default function RoutePanel({
    */
   useEffect(() => {
     if (!open || destination === null) return;
-    let live = true;
-    setTarget(destination);
-    setRefused(null);
-    setPlanningTo(destination);
-    void onRoute(destination)
-      .then((plan) => {
-        if (live) setRoute(plan);
-      })
-      .catch((error) => {
-        if (live) setRefused(errorMessage(error));
-      })
-      .finally(() => {
-        if (live) setPlanningTo(null);
-      });
+    plan(destination);
     return () => {
-      live = false;
+      planning.current += 1;
+      setPlanningTo(null);
     };
-  }, [open, destination, onRoute]);
+  }, [open, destination, plan]);
 
   /*
    * A name handed in with no room settled: type it into the field for the
@@ -579,34 +582,15 @@ export default function RoutePanel({
   /* One element for as long as the reason holds, so the view's memo holds too. */
   const empty = useMemo(() => <div className="empty">{t('cards.map.emptyNoWorldData')}</div>, []);
 
+  /*
+   * Debounced: the realm has 55,806 rooms and a two-letter query matches a lot
+   * of them. The same search as the palette's, so the two answer typing at
+   * one speed. A search that died says why, and leaves no stale matches.
+   */
+  const { matches, failed } = useRoomSearch(onSearch, query);
   useEffect(() => {
-    if (query.trim().length < tuning().roomSearchMinChars) {
-      setMatches([]);
-      return;
-    }
-    let live = true;
-    // Debounced: the realm has 55,806 rooms and a two-letter query matches a
-    // lot of them. The figures come out of `internal.yaml`, shared with the
-    // palette, which searches the same index — two surfaces answering the same
-    // typing at different speeds is two behaviours to explain.
-    const timer = window.setTimeout(() => {
-      void onSearch(query)
-        .then((found) => {
-          if (live) setMatches(found);
-        })
-        .catch((error) => {
-          // A search that died must not leave the previous query's matches
-          // standing as though they were the answer.
-          if (!live) return;
-          setMatches([]);
-          setRefused(errorMessage(error));
-        });
-    }, tuning().roomSearchDebounceMs);
-    return () => {
-      live = false;
-      window.clearTimeout(timer);
-    };
-  }, [query, onSearch]);
+    if (failed !== null) setRefused(failed);
+  }, [failed]);
 
   /*
    * A room chosen from the list, planned. Stamped with the request it belongs
@@ -615,21 +599,7 @@ export default function RoutePanel({
    * otherwise land the abandoned plan on top of whatever replaced it.
    */
   const choose = (room: WorldRoom): void => {
-    planning.current += 1;
-    const mine = planning.current;
-    setTarget(room);
-    setRefused(null);
-    setPlanningTo(room);
-    void onRoute(room)
-      .then((plan) => {
-        if (planning.current === mine) setRoute(plan);
-      })
-      .catch((error) => {
-        if (planning.current === mine) setRefused(errorMessage(error));
-      })
-      .finally(() => {
-        if (planning.current === mine) setPlanningTo(null);
-      });
+    plan(room);
   };
 
   /*
@@ -883,6 +853,13 @@ export default function RoutePanel({
             outright has no result area of its own to say so in. */}
           {refused && <div className="route-refused">{refused}</div>}
 
+          {planningTo !== null && (
+            <div className="route-planning" role="status">
+              <span aria-hidden="true" className="dot planning" />
+              {t('cards.route.planning', { roomName: planningTo.name })}
+            </div>
+          )}
+
           {/* The plan was drawn again from here, and this is what changed about
             it. Drawn only while the plan on screen is still that one: anything
             planned since makes the sentence a claim about a route nobody is
@@ -904,15 +881,7 @@ export default function RoutePanel({
             </div>
           )}
 
-          {/* In place of the plan on screen, which is the previous room's, and of
-            the list the room was picked from: either left standing reads as
-            the click not having landed. */}
-          {planningTo !== null ? (
-            <div aria-live="polite" className="route-planning" role="status">
-              <span aria-hidden="true" className="route-spinner" />
-              {t('cards.route.planning', { roomName: planningTo.name })}
-            </div>
-          ) : route !== null && shown !== null ? (
+          {route !== null && shown !== null ? (
             <div className="route-result">
               <div className="route-head">
                 <strong>{target?.name}</strong>

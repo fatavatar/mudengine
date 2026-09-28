@@ -47,6 +47,7 @@
  * longer the only one. See CLAUDE.md "Every listing is seeded by a command and
  * maintained for free".
  */
+import { PartyListing } from './PartyListing';
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
 import type { AutomationConfig } from '../../shared/config';
@@ -55,14 +56,31 @@ import type { Block, BlockType } from '../../shared/blocks';
 import { READ, REFRESH, staleAfter, unread, type StaleFact } from '../../shared/staleness';
 import { SET_STATLINE } from '../../shared/statline';
 import { tuning } from '../app/tuning';
+import type { SessionModule } from './Module';
 
 export interface RoutineEvents {
   notice?(message: string): void;
+  /**
+   * Whether the character is on the ground (`Grounded.down`), for the two
+   * drains, which keep what they owe until it is up (todo 760); the idle
+   * tick and the fan-out ahead of `act`'s gate are handed no state. Not the
+   * keep-alive, which serves the connection, nor the one-shot asks (`st`,
+   * `pro`, `par`, the spellbook), which the server answers on the ground and
+   * which would be lost. Required: a construction that forgot it would read a
+   * character down as standing.
+   */
+  onTheGround(): boolean;
 }
 
-export class Routines {
+export class Routines implements SessionModule {
   /** Whether the realm-entry probe has already run this session. */
   private probed = false;
+  /** What an answer has read this session (todo 835): `READ`, whatever it said. */
+  private readonly read = new Set<StaleFact>();
+  /** When the entry commands were last asked, or null before entering or once given up. See `askUnread`. */
+  private askedAt: number | null = null;
+  /** How many times `askUnread` has asked again this session. */
+  private unreadAsks = 0;
   /** Whether the character is in the realm: the only time the idle clock runs. */
   private inRealm = false;
   private idleTimer: NodeJS.Timeout | null = null;
@@ -120,21 +138,19 @@ export class Routines {
   private askedAbilities = false;
   /** When the stat sheet was last asked for to settle a buff ending; null is never. */
   private sheetAskedAt: number | null = null;
-  /** A sheet asked for inside `sheetAskMs` of the last, sent when that has passed. */
-  private sheetTimer: NodeJS.Timeout | null = null;
   /** The wrong-book correction has run, so it can only run once. */
   private bookCorrected = false;
-  /**
-   * Each required fact asked for while unread: when, and whether its listing
-   * has come back since. Forgotten once the fact is read. See `askUnread`.
-   */
-  private readonly unreadAsks = new Map<StaleFact, { at: number; answered: boolean }>();
+
+  /** The party listing on its clock and after a round (todo 831). See `PartyListing`. */
+  private readonly partyListing: PartyListing;
 
   constructor(
     private config: AutomationConfig,
     private readonly queue: CommandQueue,
-    private readonly events: RoutineEvents = {}
-  ) {}
+    private readonly events: RoutineEvents
+  ) {
+    this.partyListing = new PartyListing(queue, () => this.config);
+  }
 
   configure(config: AutomationConfig): void {
     this.config = config;
@@ -144,8 +160,10 @@ export class Routines {
   /** New connection: forget that we ever probed, and who we looked at. */
   reset(): void {
     this.sheetAskedAt = null;
-    this.stopSheetTimer();
     this.probed = false;
+    this.read.clear();
+    this.askedAt = null;
+    this.unreadAsks = 0;
     this.toLookAt = [];
     this.lookedAt.clear();
     this.lookedAtAt = 0;
@@ -154,10 +172,52 @@ export class Routines {
     this.askedBook = null;
     this.askedAbilities = false;
     this.bookCorrected = false;
-    this.unreadAsks.clear();
     this.lastSent = Date.now();
     this.inRealm = false;
+    this.partyListing.reset();
     this.stopIdle();
+  }
+
+  /**
+   * What entering the realm asked for and nothing has answered, asked again
+   * once `tuning.queue.unreadRetryMs` has passed (todo 835), at most
+   * `tuning.queue.unreadRetries` times: an `st` or `i` that never came back
+   * (the stat screen's hold drops what is queued) leaves health unknown all
+   * session. Only what `onEnterRealm` asks, never once an answer came, and
+   * said only for what the queue took; one it refused is tried after the wait.
+   */
+  private askUnread(): void {
+    if (!this.config.enabled || this.askedAt === null) return;
+    if (Date.now() - this.askedAt < tuning().queue.unreadRetryMs) return;
+    const missing = unread(this.config.onEnterRealm, this.read);
+    if (missing.length === 0) return;
+    this.askedAt = Date.now();
+    const commands = missing.map((fact) => REFRESH[fact].command).join(', ');
+    if (this.unreadAsks >= tuning().queue.unreadRetries) {
+      this.askedAt = null;
+      this.events.notice?.(t('automation.routines.unreadGaveUp', { commands }));
+      return;
+    }
+    const queued = missing.filter(
+      (fact) =>
+        this.queue.offer({
+          ...REFRESH[fact],
+          priority: 'probe',
+          reason: t('automation.routines.reasonUnread')
+        }) === 'queued'
+    );
+    if (queued.length === 0) return;
+    this.unreadAsks += 1;
+    this.events.notice?.(
+      t('automation.routines.askingAgain', {
+        commands: queued.map((fact) => REFRESH[fact].command).join(', ')
+      })
+    );
+  }
+
+  /** A combat round has come round: the party listing, where it is asked for then. */
+  round(state: CharacterState): void {
+    this.partyListing.afterRound(state);
   }
 
   /**
@@ -217,6 +277,7 @@ export class Routines {
         this.events.notice?.(
           t('automation.routines.enteringRealm', { commands: commands.join(', ') })
         );
+        this.askedAt = Date.now();
       }
       this.askForTheStatline();
     }
@@ -227,7 +288,6 @@ export class Routines {
      * not be known until the stat sheet the batch itself asks for answers.
      */
     this.askSpellbook(state);
-    this.askUnread(state);
     /*
      * And the third drain of the roster flag, for a character that neither
      * goes quiet nor sees another arrival: the window opens mid-fight as
@@ -236,6 +296,9 @@ export class Routines {
      * busiest path in the client.
      */
     this.askRoster();
+    this.askUnread();
+    // And the party listing on its clock (todo 831).
+    this.partyListing.onCharacter(state);
   }
 
   /**
@@ -372,7 +435,8 @@ export class Routines {
      * refresh the roster*, and it only ever governed this by accident of one
      * timer serving both.
      */
-    if (!this.config.enabled) return;
+    // Down, the flag waits for the character to be up (todo 760).
+    if (!this.config.enabled || this.events.onTheGround()) return;
     const since = Date.now() - this.rosterAskedAt;
     if (since < tuning().queue.rosterAskMs) return;
 
@@ -416,7 +480,7 @@ export class Routines {
    * character into the Caves of Chaos on 2026-09-15.
    *
    * **Asked when the question is live, not on the way in** (`askBook`'s shape,
-   * and `SessionManager.askCountersFor` is the caller): a plan that crosses
+   * and `Errands.askCountersFor` is the caller): a plan that crosses
    * one of those gates. A listing is not free of consequence even though the
    * command is — a *complete* one enumerates, so it settles **every** counter,
    * and the quest book stops offering its nodes as controls the moment one
@@ -471,10 +535,10 @@ export class Routines {
    * one-name row with the server's own listing.
    */
   onBlock(block: Block): void {
-    if (!this.config.enabled) return;
-    for (const [fact, asked] of this.unreadAsks) {
-      if (READ[fact].answeredBy === block.type) asked.answered = true;
+    for (const fact of Object.keys(READ) as StaleFact[]) {
+      if (READ[fact] === block.type) this.read.add(fact);
     }
+    if (!this.config.enabled) return;
     if (block.type === 'spellbook-refused') {
       const book = block.groups?.['book'];
       if (this.bookCorrected || (book !== 'spells' && book !== 'powers')) return;
@@ -549,39 +613,6 @@ export class Routines {
     if (stale.length > 0) this.refresh(stale, this.whyStale(block.type));
   }
 
-  /**
-   * The facts nothing can be trusted without (`REQUIRED`), asked for again
-   * until read.
-   *
-   * The entry probe is the first ask, and its answer can be lost however the
-   * character came in — on the ground, confused, behind a half-typed line —
-   * so this asks whether, never why: a fact the state has still not read
-   * `tuning.queue.unreadRetryMs` after it was first seen unread is asked for
-   * through the same refresh a level-up uses, on the status lines that arrive
-   * anyway. Only a fact the player's own `onEnterRealm` asks for: this makes
-   * their ask land, and adds none they did not choose. And only while its
-   * listing has not come back since: a realm that answered without the figure
-   * has answered, and asking it for ever would be a command every half minute
-   * spent on the same silence.
-   */
-  private askUnread(state: CharacterState, now: number = Date.now()): void {
-    if (!this.config.enabled || !this.probed) return;
-    const asked = new Set(this.config.onEnterRealm);
-    const missing = unread(state).filter((fact) => asked.has(REFRESH[fact].command));
-    for (const fact of this.unreadAsks.keys()) {
-      if (!missing.includes(fact)) this.unreadAsks.delete(fact);
-    }
-    const due: StaleFact[] = [];
-    for (const fact of missing) {
-      const last = this.unreadAsks.get(fact);
-      if (last === undefined) this.unreadAsks.set(fact, { at: now, answered: false });
-      else if (!last.answered && now - last.at >= tuning().queue.unreadRetryMs) due.push(fact);
-    }
-    if (due.length === 0) return;
-    for (const fact of due) this.unreadAsks.set(fact, { at: now, answered: false });
-    this.refresh(due, t('automation.routines.reasonUnread'));
-  }
-
   /** Asks for each stale fact once, in the words of whatever made it stale. */
   private refresh(facts: readonly StaleFact[], reason: string): void {
     for (const fact of facts) {
@@ -605,7 +636,7 @@ export class Routines {
   /**
    * A sentence nothing recognised may have ended a buff, and the stat sheet
    * is what says which — it prints each active effect's own start sentence
-   * at its foot, so `CharacterTracker.readSheet` can drop what is gone,
+   * at its foot, so `EffectTracker.readSheet` can drop what is gone,
    * settle a pending ending, or take back a lesson the wire contradicts.
    *
    * Asked for on the tracker's word (`takeSheetRequest`), never on the shape
@@ -621,25 +652,7 @@ export class Routines {
    */
   askSheet(now: number = Date.now()): void {
     if (!this.config.enabled) return;
-    const floor = tuning().spells.sheetAskMs;
-    if (this.sheetAskedAt !== null && now - this.sheetAskedAt < floor) {
-      /*
-       * Deferred, not dropped: a cast whose start is being learned, or a
-       * watchdog checking a shield, still wants its answer once the floor
-       * has passed, and nothing else will ask again (2026-09-23).
-       */
-      if (this.sheetTimer === null) {
-        this.sheetTimer = setTimeout(
-          () => {
-            this.sheetTimer = null;
-            this.askSheet();
-          },
-          floor - (now - this.sheetAskedAt)
-        );
-        this.sheetTimer.unref?.();
-      }
-      return;
-    }
+    if (this.sheetAskedAt !== null && now - this.sheetAskedAt < tuning().spells.sheetAskMs) return;
     this.sheetAskedAt = now;
     this.queue.enqueue({
       command: 'st',
@@ -708,6 +721,8 @@ export class Routines {
    */
   private lookAt(): void {
     if (!this.config.enabled || !this.config.talk.lookAtPlayers) return;
+    // Down, the names wait for the character to be up (todo 760).
+    if (this.events.onTheGround()) return;
     if (Date.now() - this.lookedAtAt < tuning().queue.lookAskMs) return;
 
     // Marked spent before the send, like the roster flag, so a look still held
@@ -762,13 +777,6 @@ export class Routines {
 
   dispose(): void {
     this.stopIdle();
-    this.stopSheetTimer();
-  }
-
-  private stopSheetTimer(): void {
-    if (this.sheetTimer === null) return;
-    clearTimeout(this.sheetTimer);
-    this.sheetTimer = null;
   }
 
   private armIdle(): void {

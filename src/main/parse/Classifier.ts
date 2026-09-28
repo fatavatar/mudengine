@@ -8,8 +8,8 @@
  * because magenta — which breaks on any server with a different scheme, and on
  * every theme a colour-blind player would choose.
  */
+import type { CoinReader } from '../../shared/coins';
 import { domainOf, type Block, type BlockType } from '../../shared/blocks';
-import { STOCK_COIN_READER, type CoinReader } from '../../shared/coins';
 import { commandOf } from '../../shared/commands';
 import {
   answersTo,
@@ -232,6 +232,9 @@ const EMOTE_SHAPED: ReadonlySet<BlockType> = new Set<BlockType>([
   'player-misses'
 ]);
 
+/** The rules that read somebody talking; see `Classifier.coinText`. */
+const TALK_RULES = RULES.filter((rule) => domainOf(rule.type) === 'conversation');
+
 export class Classifier {
   private batch: {
     rule: BatchRule;
@@ -291,9 +294,9 @@ export class Classifier {
    * The receipt the server answers with (`--- Telepath Sent to Soul ---`)
    * confirms the send and names the resolved recipient, and nothing else: the
    * body is never echoed, so this slot is the only record of what was
-   * actually said. One slot, the shape the attack-command binding takes and
-   * for the same reason — where two addressed messages are in flight at once,
-   * the earlier receipt goes unbound rather than bound to the wrong words.
+   * actually said. One slot, so that where two addressed messages are in
+   * flight at once the earlier receipt goes unbound rather than bound to the
+   * wrong words.
    */
   private addressed: { sigil: '/' | '>'; name: string; body: string } | null = null;
   /**
@@ -381,8 +384,25 @@ export class Classifier {
      * is what makes `You retch uncontrollably!` a thrown-away command rather
      * than a line the table merely explains.
      */
-    private readonly fumbles?: (row: number) => boolean
+    private readonly fumbles?: (row: number) => boolean,
+    /**
+     * The realm's renamed coins read back to the stock names before a line is
+     * matched (`coinReader`, todo 830), so every coin rule reads them as it
+     * reads the stock ones. The terminal is shown the line as it came.
+     */
+    private readonly coins?: () => CoinReader
   ) {}
+
+  /**
+   * The line with the realm's renamed coins read as the stock ones (todo 830),
+   * except where somebody is talking: a coin named in speech is the speaker's
+   * word, and the talk card shows it as said.
+   */
+  private coinText(plain: string): string {
+    const coined = this.coins?.().toStock(plain) ?? plain;
+    if (coined === plain || TALK_RULES.some((rule) => rule.pattern.test(plain))) return plain;
+    return coined;
+  }
 
   /** The type of the listing being collected, or null between listings. */
   get batchType(): BlockType | null {
@@ -427,13 +447,6 @@ export class Classifier {
     }
   }
 
-  /** What this realm calls its coins; the stock names until told. */
-  private coins: CoinReader = STOCK_COIN_READER;
-
-  useCoins(reader: CoinReader): void {
-    this.coins = reader;
-  }
-
   /**
    * Classifies one line.
    *
@@ -453,8 +466,7 @@ export class Classifier {
    * the blow or lose the newer reading of the bar it changed.
    */
   classify(line: StreamLine): { block: Block; batch?: BatchBlock; tails?: Block[] } {
-    // A realm's own name for a coin, read as the stock one. See `CoinReader`.
-    const text = this.coins.stock(line.plain);
+    const text = this.coinText(line.plain);
     const block = this.classifyLine(line, text);
     let batch = this.feedBatch(line, text, block.type);
 
@@ -580,6 +592,7 @@ export class Classifier {
       const match = rule.pattern.exec(text);
       if (!match) continue;
       if (rule.type === 'room-name' && !looksLikeRoomName(text)) continue;
+      if (this.inDescription && rule.outsideDescription) continue;
       /*
        * Not a room while a listing is being read. A gang name wrapped onto its
        * own line in a columnar `who` — `Khazarad`, the tail of `Dukes of` —
@@ -805,13 +818,7 @@ export class Classifier {
         if (names[2] !== undefined) groups['target'] = names[2];
       }
       if (figure !== undefined) groups['amount'] = figure;
-      /*
-       * A `%s` is greedy, and a spell's name holds no comma: `You cast %s!`
-       * fitted to `You cast aura of undeath, surrounding everyone in the room
-       * with a black glow!` named the whole tail as the spell (2026-09-23).
-       */
-      if (groups['spell'] !== undefined) groups['spell'] = groups['spell'].split(',')[0]!.trim();
-      if (groups['spell'] === undefined || groups['spell'].length === 0) {
+      if (groups['spell'] === undefined) {
         return this.build(line, 'realm-message', this.messageGroups(hit), text, confidence);
       }
       groups['message'] = String(hit.number);
@@ -848,7 +855,7 @@ export class Classifier {
    * only one; several left standing are kept as `mobs`, `|`-separated, and
    * named by nothing — refused rather than guessed, and the experience line
    * that follows this character's own kill can still say which
-   * (`CharacterTracker.deathSentenceBefore`).
+   * (`DeathSentence.before`).
    */
   private asDeathSentence(line: StreamLine, text: string, block: Block): Block {
     if (!this.deaths || block.type !== 'unknown') return block;

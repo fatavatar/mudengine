@@ -81,7 +81,7 @@ function vaelorConfig(): AutomationConfig {
     retaliate: true,
     maxMobs: 0,
     refreshRounds: 3,
-    monsters: []
+    mobRules: []
   };
   return base;
 }
@@ -130,7 +130,7 @@ function harness(engage: 'hostile' | 'likely' = 'likely'): Harness {
       }
     }
   });
-  const combat = new AutoCombat(config.combat, true, queue);
+  const combat = new AutoCombat(config.combat, true, queue, { onTheGround: () => false });
   let seq = 0;
 
   const feed = (text: string): void => {

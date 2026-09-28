@@ -28,10 +28,12 @@
  * (todo 01, 2026-09-13): at 145/150 a character carrying *major healing*
  * spends a major heal's mana to mend five points, and at 90/150 one carrying
  * *minor healing* never gets ahead of the damage. Under
- * `automation.spells.autoChoose` — the same switch the round spell is derived
- * by — the heal is chosen per cast against the **deficit**, the ceiling less
- * what the bar holds: `chooseHealSpell`, the cheapest cast expected to reach
- * it, else the one that mends most.
+ * `automation.spells.autoChooseHeal` (the heal's own switch since todo 05;
+ * before that it used `autoChoose`), the heal is chosen per cast against the
+ * **deficit**, the ceiling less what the bar holds: `chooseHealSpell`, the
+ * cheapest cast expected to reach it, else the one that mends most. With more
+ * than one person hurt, `planHeal` weighs one heal on each against a
+ * party-wide heal on all.
  *
  * **A derivation that cannot answer falls back to the configured spell**, and
  * says so once. This is where the heal deliberately differs from the round
@@ -77,23 +79,34 @@
  * (`castWord`). In the `combat` band: a heal that arrives after the round has
  * been lost has lost it, unlike a rest.
  */
-import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
-import type { CharacterState, PartyMember } from '../../shared/character';
+import { joinedMembers, type CharacterState, type PartyMember } from '../../shared/character';
 import type { SpellsConfig } from '../../shared/config';
-import { castsBare, resolveSpell, spellCost, spellTargeting } from '../../shared/spellcraft';
+import {
+  castsBare,
+  healFloor,
+  OPEN_CAST_GATE,
+  resolveSpell,
+  spellCost,
+  spellTargeting,
+  type CastGate
+} from '../../shared/spellcraft';
 import { canPayFor } from './mana';
 import { chooseHealSpell, type HealAim, type HealChoice } from '../../shared/spellchoice';
+import { healTargets, planHeal } from '../../shared/healplan';
 import { prowessSheetOf } from '../../shared/verdict';
 import type { RealmFamily } from '../../shared/realm';
 import type { WorldSpell } from '../../shared/world';
 import { tuning } from '../app/tuning';
+import type { SessionModule } from './Module';
 
 /** The key a target's cooldown and its in-progress heal are filed under. */
 const SELF = '@self';
+/** The key a party-wide heal's cooldown is filed under: it has no one target. */
+const AREA = '@party';
 
-export class AutoHeal {
+export class AutoHeal implements SessionModule {
   private lastCastAt = new Map<string, number>();
   /**
    * Targets a heal has started on and not yet finished.
@@ -141,31 +154,10 @@ export class AutoHeal {
       combat: number | null;
       magery: number | null;
       family: RealmFamily | null;
-    } = () => ({ combat: null, magery: null, family: null })
+    } = () => ({ combat: null, magery: null, family: null }),
+    /** The one heal, blessing or cure a round, asked at the send (`CastRound`). */
+    private readonly gate: CastGate = OPEN_CAST_GATE
   ) {}
-
-  /** The one heal, blessing or cure a round allows. See `CastRound`. */
-  private gate: CastGate = OPEN_GATE;
-  /** The last heal this sent, and when, for the refusal that may answer it. */
-  private lastSent: { key: string; at: number } | null = null;
-
-  useCastGate(gate: CastGate): void {
-    this.gate = gate;
-  }
-
-  /**
-   * The server answered `You have already cast a spell this round!`. If the
-   * last cast this module sent is what it answered, that cast failed: its
-   * clock is given back, so it goes again once the round has passed rather
-   * than on its retry floor (the player, 2026-09-23 — *this should be caught
-   * as a failure and retried later*).
-   */
-  noteRefused(): void {
-    const sent = this.lastSent;
-    this.lastSent = null;
-    if (sent === null || this.now() - sent.at > tuning().spells.refusedWindowMs) return;
-    this.lastCastAt.delete(sent.key);
-  }
 
   configure(config: SpellsConfig, enabled: boolean): void {
     this.config = config;
@@ -201,7 +193,7 @@ export class AutoHeal {
         ? t('automation.heal.requestHealOff', { from })
         : !this.config.healParty
           ? t('automation.heal.requestPartyOff', { from })
-          : this.config.healPartyWith.trim().length === 0 && !this.config.autoChoose
+          : this.config.healPartyWith.trim().length === 0 && !this.config.autoChooseHeal
             ? t('automation.heal.requestNoSpell', { from })
             : null;
     if (refusal !== null) {
@@ -245,9 +237,10 @@ export class AutoHeal {
     if (!this.enabled || this.config.healBelow <= 0) return;
     this.forgetStaleRequests();
     if (state.phase !== 'in-game' || !this.hasMana(state)) return;
+    if (this.config.autoChooseHeal && this.planned(state)) return;
 
     const self = this.config.heal.trim();
-    if (self.length > 0 || this.config.autoChoose) {
+    if (self.length > 0 || this.config.autoChooseHeal) {
       const fraction = this.selfFraction(state);
       if (this.wants(SELF, fraction, state.inCombat)) {
         const { hp, hpMax } = state.vitals;
@@ -260,13 +253,12 @@ export class AutoHeal {
     }
 
     const party = this.config.healPartyWith.trim();
-    if (!this.config.healParty || (party.length === 0 && !this.config.autoChoose)) return;
+    if (!this.config.healParty || (party.length === 0 && !this.config.autoChooseHeal)) return;
     // Those who asked first: their own word is the freshest figure there is,
     // and a listing that lags keeps a member low for a round after the heal.
     const asking = (member: PartyMember): number =>
       this.asked.has(member.name.toLowerCase()) ? 0 : 1;
-    for (const member of [...state.party.members].sort((a, b) => asking(a) - asking(b))) {
-      if (state.name === member.name) continue;
+    for (const member of joinedMembers(state).sort((a, b) => asking(a) - asking(b))) {
       const key = member.name.toLowerCase();
       const asked = this.asked.has(key);
       /*
@@ -294,24 +286,125 @@ export class AutoHeal {
        * healed must not stand in front of one that can.
        */
       if (spell.length === 0) continue;
-      const reason =
-        asked || member.health === null
-          ? t('automation.heal.reasonRequested', { memberName: member.name })
-          : t('automation.heal.reasonParty', {
-              memberName: member.name,
-              percent: Math.round(member.health * 100)
-            });
-      // Spent when the cast leaves, and by nothing else: one held back by the
-      // cooldown, the purse or the queue is still owed until it lapses.
-      this.cast(
-        spell,
-        member.name,
-        state,
-        reason,
-        asked ? () => this.asked.delete(key) : undefined
-      );
+      this.healMember(spell, member.name, member.health, asked, state);
       return;
     }
+  }
+
+  /**
+   * Under *Auto Choose Best Heal*: one heal on the worst hurt, or a party-wide
+   * heal on everybody, whichever `planHeal` weighs higher. False where it has
+   * no answer, and the configured spells decide as they do with the switch
+   * off.
+   *
+   * The lowest bar is served first even without figures: a member whose own
+   * client never answered `@health` has a share and no maximum, so no choice
+   * can be priced for them, and they get the configured spell ahead of a
+   * better-known member who is less hurt. Unknown is the unsafe case.
+   */
+  private planned(state: CharacterState): boolean {
+    const { figured, unfigured } = healTargets(
+      state,
+      this.config.healParty,
+      (key, share) => this.wants(key ?? SELF, share, state.inCombat),
+      (key) => this.asked.has(key)
+    );
+    const wanted = figured.filter((target) => target.wanted);
+    const lowest = Math.min(...wanted.map((target) => target.hp / target.hpMax));
+    // Somebody who asked first, then the lowest share.
+    const worst = [...unfigured].sort(
+      (a, b) => Number(b.asked) - Number(a.asked) || (a.share ?? 0) - (b.share ?? 0)
+    )[0];
+    if (
+      worst !== undefined &&
+      (wanted.length === 0 || worst.asked || (worst.share !== null && worst.share < lowest))
+    ) {
+      const spell = this.spellFor(state, 'party', null, this.config.healPartyWith.trim());
+      if (spell.length === 0) return false;
+      this.healMember(spell, worst.name, worst.share, worst.asked, state);
+      return true;
+    }
+    if (wanted.length === 0) return false;
+
+    const { combat, magery, family } = this.realmClass();
+    const { healTo } = this.config;
+    const plan =
+      state.spellbook === null
+        ? null
+        : planHeal({
+            book: state.spellbook,
+            realm: this.realmSpell,
+            level: state.progress.level,
+            mana: state.vitals.mana,
+            sheet: prowessSheetOf(state, { combat, magery }),
+            family,
+            targets: figured,
+            ceiling: healTo > 0 ? Math.min(1, healTo) : 1,
+            urgency: tuning().spells.healUrgency,
+            nearEnough: tuning().spells.healNearEnough,
+            partyWide: this.config.healParty
+          });
+    if (plan === null) return false;
+
+    if (plan.kind === 'area') {
+      const { cast, reaches } = plan;
+      this.sayOnce('party', `area|${cast.spell.name}`, () => {
+        const params = {
+          spell: cast.spell.name,
+          min: cast.min,
+          max: cast.max,
+          cost: cast.cost ?? '?',
+          count: reaches
+        };
+        return reaches === 1
+          ? t('automation.heal.choseArea.one', params)
+          : t('automation.heal.choseArea.many', params);
+      });
+      // Everybody who asked is reached, figures or none (`FullPartyArea`).
+      const askers = [...this.asked.keys()];
+      const reached = wanted.map((target) => target.name?.toLowerCase() ?? SELF);
+      this.cast(
+        cast.spell.name,
+        null,
+        state,
+        t('automation.heal.reasonArea', { count: reaches }),
+        () => askers.forEach((key) => this.asked.delete(key)),
+        [AREA, ...reached]
+      );
+      return true;
+    }
+
+    const { target, choice } = plan;
+    const deficit = this.deficit(target.hp, target.hpMax) ?? 0;
+    if (target.name === null) {
+      this.sayChoice('self', choice, deficit);
+      this.cast(choice.chosen.spell.name, null, state, t('automation.heal.reasonSelf'));
+      return true;
+    }
+    this.sayChoice('party', choice, deficit);
+    const asked = this.asked.has(target.name.toLowerCase());
+    this.healMember(choice.chosen.spell.name, target.name, target.hp / target.hpMax, asked, state);
+    return true;
+  }
+
+  /**
+   * One heal on a member: said as their request or their share, and a request
+   * spent when the cast leaves and by nothing else, since one held back by the
+   * cooldown, the purse or the queue is still owed until it lapses.
+   */
+  private healMember(
+    spell: string,
+    name: string,
+    share: number | null,
+    asked: boolean,
+    state: CharacterState
+  ): void {
+    const key = name.toLowerCase();
+    const reason =
+      asked || share === null
+        ? t('automation.heal.reasonRequested', { memberName: name })
+        : t('automation.heal.reasonParty', { memberName: name, percent: Math.round(share * 100) });
+    this.cast(spell, name, state, reason, asked ? () => this.asked.delete(key) : undefined);
   }
 
   /**
@@ -344,7 +437,7 @@ export class AutoHeal {
     deficit: number | null,
     configured: string
   ): string {
-    if (!this.config.autoChoose) return configured;
+    if (!this.config.autoChooseHeal) return configured;
     if (deficit === null) {
       this.sayOnce(aim, 'no-figures', () =>
         aim === 'party' ? t('automation.heal.noFiguresParty') : t('automation.heal.noFiguresSelf')
@@ -432,20 +525,7 @@ export class AutoHeal {
       return false;
     }
     const { healTo } = this.config;
-    /*
-     * A different floor in a fight, when one is set.
-     *
-     * MegaMUD's `HpHealAtt%`, and its own documentation says why: a heal cast
-     * at 80% mid-fight is a round spent not hitting anything, and the round is
-     * what the fight is made of. 0 means *use the ordinary floor for both*,
-     * which is what this module did before the field existed — so the default
-     * changes nothing.
-     */
-    const healBelow =
-      inCombat && this.config.healBelowInCombat > 0
-        ? this.config.healBelowInCombat
-        : this.config.healBelow;
-    if (fraction < healBelow) {
+    if (fraction < healFloor(this.config, inCombat)) {
       this.healing.add(key);
       return true;
     }
@@ -467,21 +547,24 @@ export class AutoHeal {
   /**
    * A null target is this character: cast bare, and keyed apart from any name.
    * `onSent` is told when the cast leaves, which is what spends a request.
+   * `keys` are the cooldowns the cast waits on and spends: a party-wide heal
+   * spends everybody's it reached, so neither it nor a single heal lands
+   * again on a bar that has not yet shown the last one.
    */
   private cast(
     spell: string,
     target: string | null,
     state: CharacterState,
     reason: string,
-    onSent?: () => void
+    onSent?: () => void,
+    keys: readonly string[] = [target === null ? SELF : target.toLowerCase()]
   ): void {
-    const key = target === null ? SELF : target.toLowerCase();
     const at = this.now();
-    const last = this.lastCastAt.get(key);
-    if (last !== undefined && at - last < tuning().spells.healCooldownMs) return;
-    // This round's heal or blessing already went: a second is refused, and
-    // the refusal switches the fight off (`CastRound`).
-    if (!this.gate.mayCast()) return;
+    const recent = (key: string): boolean => {
+      const last = this.lastCastAt.get(key);
+      return last !== undefined && at - last < tuning().spells.healCooldownMs;
+    };
+    if (keys.some(recent)) return;
     const found = resolveSpell(spell, state.spellbook, this.realmSpell);
     /*
      * A cast that cannot be paid for is not sent, and no cooldown is spent on
@@ -498,21 +581,20 @@ export class AutoHeal {
      * through to the named form, which is what the configuration asked for.
      */
     const bare = target === null || castsBare(spellTargeting(found.realm?.targets));
-    const taken = this.queue.enqueue({
+    // The cooldown is spent when the cast leaves: a refused enqueue or a
+    // round already cast is *not now*, never a cast (todo 113's rule).
+    this.queue.enqueue({
       command: bare ? word : `${word} ${target}`,
       priority: 'combat',
-      coalesceKey: `heal:${key}`,
+      coalesceKey: `heal:${keys[0]}`,
       expiresAt: at + tuning().spells.healExpiresMs,
-      stillWanted: () => this.gate.mayCast(),
+      stillWanted: () => this.gate.mayCast(found.configured),
+      reason,
       onSent: () => {
+        for (const key of keys) this.lastCastAt.set(key, this.now());
         this.gate.noteCast();
-        this.lastSent = { key, at: this.now() };
         onSent?.();
-      },
-      reason
+      }
     });
-    // A refused enqueue is *not now*, never a cast: the cooldown is for one
-    // that is on its way (todo 113's rule).
-    if (taken) this.lastCastAt.set(key, at);
   }
 }

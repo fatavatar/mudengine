@@ -7,8 +7,13 @@ import { reordered } from '../lib/reorder';
 import { ratio, vitalLevel, type CharacterState, type VitalThresholds } from '@shared/character';
 import type { VitalsUiConfig } from '@shared/config';
 import type { SessionId, SessionSummary } from '@shared/ipc';
-import type { WalkProgress } from '@shared/walk';
-import type { LoopProgress } from '@shared/loops';
+import {
+  isAfflictionHold,
+  walkIsResting,
+  type AfflictionHold,
+  type WalkProgress
+} from '@shared/walk';
+import { loopIsResting, type LoopProgress } from '@shared/loops';
 import { keepFocus } from '../lib/focus';
 import { useTabDrag } from '../hooks/useTabDrag';
 import { t } from '../lib/i18n';
@@ -216,10 +221,7 @@ function attention(
    */
   if (
     view.loop.status === 'running' &&
-    (view.loop.hold === 'retreated' ||
-      view.loop.hold === 'health' ||
-      view.loop.hold === 'mana' ||
-      view.loop.hold === 'resting')
+    (view.loop.hold === 'retreated' || loopIsResting(view.loop.hold))
   ) {
     return { level: 'info', label: t('tabs.tab.markRecovering') };
   }
@@ -262,10 +264,7 @@ function attention(
     // `resting` is the beat a step waits for a rest this client has just asked
     // for (todo 14). Short, but a tab reading `walking` for a character that is
     // sitting down is the thing these branches exist to prevent.
-    (view.walk.hold === 'health' ||
-      view.walk.hold === 'mana' ||
-      view.walk.hold === 'trap' ||
-      view.walk.hold === 'resting')
+    walkIsResting(view.walk.hold)
   ) {
     return { level: 'info', label: t('tabs.tab.markRecovering') };
   }
@@ -302,23 +301,12 @@ function attention(
    * saying the character is moving when it is standing still and blind.
    */
   const afflicted =
-    (view.walk.status === 'walking' &&
-      (view.walk.hold === 'blind' ||
-        view.walk.hold === 'held' ||
-        view.walk.hold === 'poisoned' ||
-        view.walk.hold === 'condition') &&
-      view.walk.hold) ||
-    (view.loop.status === 'running' &&
-      (view.loop.hold === 'blind' ||
-        view.loop.hold === 'held' ||
-        view.loop.hold === 'poisoned' ||
-        view.loop.hold === 'condition') &&
-      view.loop.hold) ||
-    null;
-  if (afflicted === 'blind') return { level: 'warn', label: t('tabs.tab.markBlind') };
-  if (afflicted === 'held') return { level: 'warn', label: t('tabs.tab.markHeld') };
-  if (afflicted === 'poisoned') return { level: 'warn', label: t('tabs.tab.markPoisoned') };
-  if (afflicted === 'condition') return { level: 'warn', label: t('tabs.tab.markCondition') };
+    view.walk.status === 'walking' && isAfflictionHold(view.walk.hold)
+      ? view.walk.hold
+      : view.loop.status === 'running' && isAfflictionHold(view.loop.hold)
+        ? view.loop.hold
+        : null;
+  if (afflicted !== null) return { level: 'warn', label: afflictionMark(afflicted) };
   if (view.walk.status === 'walking') return { level: 'info', label: t('tabs.tab.markWalking') };
   if (view.loop.status === 'running') return { level: 'info', label: t('tabs.tab.markLooping') };
 
@@ -352,6 +340,24 @@ function restingLabel(restTo: number): string {
   if (restTo <= 0) return t('tabs.tab.markResting');
   if (restTo >= 1) return t('tabs.tab.markRestingToFull');
   return t('tabs.tab.markRestingTo', { percent: Math.round(restTo * 100) });
+}
+
+/** The condition a walk or a lap is waiting out, as the tab names it. */
+function afflictionMark(hold: AfflictionHold): string {
+  switch (hold) {
+    case 'blind':
+      return t('tabs.tab.markBlind');
+    case 'held':
+      return t('tabs.tab.markHeld');
+    case 'poisoned':
+      return t('tabs.tab.markPoisoned');
+    case 'confused':
+      return t('tabs.tab.markConfused');
+    default: {
+      const unreachable: never = hold;
+      return unreachable;
+    }
+  }
 }
 
 /** One line for what this character is doing, or nothing when it is just playing. */

@@ -2,6 +2,7 @@ import { memo } from 'react';
 
 import BentoCard, { type CardChrome } from './BentoCard';
 import {
+  ratio,
   vitalLevel,
   type CharacterState,
   type PartyActivity,
@@ -11,13 +12,15 @@ import type { VitalsUiConfig } from '@shared/config';
 import { keepFocus } from '../lib/focus';
 import { t } from '../lib/i18n';
 import { isKnownPlayer, isSelf, PlayerName } from '../lib/players';
-import { playerKey } from '@shared/players';
+import { playerKey, type PlayerRegistry } from '@shared/players';
 import type { PopoverAnchor } from '../lib/popover';
 import { levelWord, meterValue } from '../lib/vitals';
 import { tuning } from '../lib/tuning';
 
 export interface PartyCardProps extends CardChrome {
   character: CharacterState;
+  /** The registry, pushed apart from the character: which names are people. */
+  players: PlayerRegistry;
   thresholds: VitalsUiConfig;
   /** A member's name clicked: the Player flyout on them, beside the row. */
   onSelect?(name: string, anchor: PopoverAnchor): void;
@@ -135,13 +138,17 @@ function Bar({
  */
 function PartyCard({
   character,
+  players,
   thresholds,
   onSelect,
   subject = null,
   ask,
   ...chrome
 }: PartyCardProps) {
-  const { party } = character;
+  const party = {
+    ...character.party,
+    members: character.party.members.map((m) => ownRow(character, m))
+  };
   const hurt = party.members.filter(
     (member) => vitalLevel(member.health, 1, thresholds.hp) === 'critical'
   ).length;
@@ -227,7 +234,7 @@ function PartyCard({
                           This character's own row stays text: its numbers are on
                           the Vitals card. */}
                       <span className="party-name" data-leader={isHead(member)}>
-                        {onSelect && isKnownPlayer(character, member.name) ? (
+                        {onSelect && isKnownPlayer(players, character, member.name) ? (
                           <PlayerName
                             className="name"
                             name={member.name}
@@ -254,9 +261,7 @@ function PartyCard({
                           shown where the person deciding to help can see it. */}
                       {fightingWord(character, member.name) !== null && (
                         <span className="chip quiet party-fighting">
-                          {t('cards.party.fighting', {
-                            target: fightingWord(character, member.name) ?? ''
-                          })}
+                          {fightingWord(character, member.name)}
                         </span>
                       )}
                       {/* `follow <name>` is how a leader is made on this realm;
@@ -322,14 +327,42 @@ function PartyCard({
   );
 }
 
-/** The monster a member was last seen fighting, or null once the sighting is stale. */
+/**
+ * This character's own row, from its prompt: the prompt repaints every few
+ * hundred milliseconds and the party list is only as fresh as the last `par`.
+ * Health and mana need the stat sheet's maxima to be a fraction, so each keeps
+ * the party list's figure until one is known; resting is the prompt's once a
+ * prompt has been read.
+ */
+function ownRow(character: CharacterState, member: PartyMember): PartyMember {
+  if (!isSelf(character, member.name)) return member;
+  const { hp, hpMax, mana, manaMax, resting, meditating } = character.vitals;
+  const health = ratio(hp, hpMax);
+  const magic = ratio(mana, manaMax);
+  const activity: PartyActivity | null = resting
+    ? { state: 'resting' }
+    : meditating
+      ? { state: 'meditating' }
+      : null;
+  return {
+    ...member,
+    health: health ?? member.health,
+    mana: magic ?? member.mana,
+    activity: character.lastStatusAt === null ? member.activity : activity,
+    vitals: hp === null || hpMax === null ? member.vitals : { hp, hpMax, mana, manaMax }
+  };
+}
+
+/** What a member was last seen fighting, as the chip says it, or null once the sighting is stale. */
 function fightingWord(character: CharacterState, name: string): string | null {
   const key = Object.keys(character.party.engaged).find(
     (entry) => entry.toLowerCase() === name.toLowerCase()
   );
   const seen = key === undefined ? undefined : character.party.engaged[key];
   if (!seen || Date.now() - seen.at > tuning().fightingFreshMs) return null;
-  return seen.target;
+  return seen.kind === 'room'
+    ? t('cards.party.fightingRoom')
+    : t('cards.party.fighting', { target: seen.target });
 }
 
 export default memo(PartyCard);

@@ -1,10 +1,5 @@
 import Popup, { type MenuAnchor } from './Popup';
-import {
-  hidesWhenEmpty,
-  HIDES_WHEN_EMPTY,
-  type CardId,
-  type CardSettings
-} from '../hooks/useCardLayout';
+import { hidesWhenEmpty, HIDES_WHEN_EMPTY, type CardId, type CardSettings } from '../lib/cards';
 import { t } from '../lib/i18n';
 import { themesOfAppearance, THEMES, type Appearance, type ThemeId } from '@shared/themes';
 import { DEFAULT_MAP_DENSITY } from '@shared/map';
@@ -238,7 +233,7 @@ export default function CardSettingsPopup({
             is where the picker is asked for. Stored only where it differs from
             the shipped answer, the rule the stamp above states.
           */}
-          <label className="card-settings-check">
+          <label className="card-settings-check" data-setting="talkChannels">
             <input
               checked={value.talkChannels ?? false}
               onChange={(event) => {

@@ -1,7 +1,10 @@
 import { memo } from 'react';
 
 import BentoCard, { type CardChrome } from './BentoCard';
+import FightOutlook from './FightOutlook';
+import RowPeaceChip from './RowPeaceChip';
 import type { CharacterState, TargetHealth } from '@shared/character';
+import type { PlayerRegistry } from '@shared/players';
 import type { RoomVerdict } from '@shared/verdict';
 import { woundBandFor } from '@shared/wounds';
 import { keepFocus } from '../lib/focus';
@@ -13,6 +16,8 @@ import { tuning } from '../lib/tuning';
 
 export interface CombatCardProps extends CardChrome {
   character: CharacterState;
+  /** The registry, pushed apart from the character: which attackers are people. */
+  players: PlayerRegistry;
   /** The room appraised — and its fight run — pushed on change beside the character. */
   verdict: RoomVerdict;
   /** A monster's name clicked: the realm's answer, beside it. */
@@ -33,15 +38,17 @@ export interface CombatCardProps extends CardChrome {
 function Combatant({
   name,
   character,
+  players,
   inspect,
   onSelect
 }: {
   name: string;
   character: CharacterState;
+  players: PlayerRegistry;
   inspect?: CombatCardProps['inspect'];
   onSelect?: CombatCardProps['onSelect'];
 }) {
-  if (onSelect && isKnownPlayer(character, name)) {
+  if (onSelect && isKnownPlayer(players, character, name)) {
     return <PlayerName className="name" name={name} onSelect={onSelect} />;
   }
   if (!inspect) return <span className="name">{name}</span>;
@@ -252,7 +259,14 @@ function SurvivalMeter({ verdict, hp }: { verdict: RoomVerdict; hp: number | nul
   );
 }
 
-function CombatCard({ character, verdict, inspect, onSelect, ...chrome }: CombatCardProps) {
+function CombatCard({
+  character,
+  players,
+  verdict,
+  inspect,
+  onSelect,
+  ...chrome
+}: CombatCardProps) {
   const { combat } = character;
   const outnumbered = combat.attackers.length > 1;
 
@@ -283,7 +297,10 @@ function CombatCard({ character, verdict, inspect, onSelect, ...chrome }: Combat
             answers is asked on the way in, and only where the room holds
             something the realm could weigh. */}
         {verdict.monsters.length > 0 && (
-          <SurvivalMeter hp={character.vitals.hp} verdict={verdict} />
+          <>
+            <SurvivalMeter hp={character.vitals.hp} verdict={verdict} />
+            <FightOutlook verdict={verdict} />
+          </>
         )}
         {!combat.engaged && combat.attackers.length === 0 ? (
           <div className="empty">{t('cards.combat.empty')}</div>
@@ -301,10 +318,12 @@ function CombatCard({ character, verdict, inspect, onSelect, ...chrome }: Combat
                 <div className="combat-name">
                   <Combatant
                     character={character}
+                    players={players}
                     inspect={inspect}
                     name={combat.health.name}
                     onSelect={onSelect}
                   />
+                  <RowPeaceChip character={character} name={combat.health.name} verdict={verdict} />
                   <Provenance health={combat.health} />
                 </div>
                 <TargetMeter health={combat.health} />
@@ -396,10 +415,12 @@ function CombatCard({ character, verdict, inspect, onSelect, ...chrome }: Combat
                       <span key={name}>
                         <Combatant
                           character={character}
+                          players={players}
                           inspect={inspect}
                           name={name}
                           onSelect={onSelect}
                         />
+                        <RowPeaceChip character={character} name={name} verdict={verdict} />
                         {index < combat.attackers.length - 1 && ', '}
                       </span>
                     ))}

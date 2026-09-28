@@ -127,23 +127,92 @@ describe('who says a hang-up is charged', () => {
   });
 });
 
-/* What a realm calls its coins reaches every character playing there. */
-describe('a realm’s coin names', () => {
-  it('are the character’s connection’s, from the realm it plays', () => {
-    const config = {
-      servers: [
-        {
-          name: 'Skinny Inc',
-          host: 'bbs.thelucks.org',
-          port: 2424,
-          coins: { runic: 'Krabby Patties' }
-        }
-      ]
-    };
-    expect(resolve({ server: 'Skinny Inc' }, config).config.connection.coins).toEqual({
-      runic: 'Krabby Patties'
-    });
-    expect(resolve({ server: 'GreaterMUD (local)' }).config.connection.coins).toEqual({});
+/*
+ * The teleport below the retreat, literally: the character, then its realm, then
+ * the options file (todo 813). Each realm spells it its own way.
+ */
+describe('who says what the last-ditch teleport sends', () => {
+  const realm = (fleeGoto?: string, global = '') => ({
+    servers: [
+      {
+        name: 'Bearfather',
+        host: 'bbs.bearfather.net',
+        port: 23,
+        ...(fleeGoto === undefined ? {} : { fleeGoto })
+      }
+    ],
+    automation: { safety: { fleeGoto: { enabled: true, command: global } } }
+  });
+  const command = (raw: Record<string, unknown>, config: unknown): string =>
+    resolve({ server: 'Bearfather', ...raw }, config).config.automation.safety.fleeGoto.command;
+  const own = (value: string) => ({ automation: { safety: { fleeGoto: { command: value } } } });
+
+  it('takes the realm’s where the character states none, over the options file', () => {
+    expect(command({}, realm('sys go 1 297', 'sys goto silvermere'))).toBe('sys go 1 297');
+    expect(command(own(''), realm('sys go 1 297'))).toBe('sys go 1 297');
+  });
+
+  it('takes the character’s over its realm', () => {
+    expect(command(own('sys goto silvermere'), realm('sys go 1 297'))).toBe('sys goto silvermere');
+  });
+
+  it('falls to the options file where neither states one, and that ships empty', () => {
+    expect(command({}, realm(undefined, 'sys go 1 297'))).toBe('sys go 1 297');
+    expect(
+      resolve({ server: 'GreaterMUD (local)' }).config.automation.safety.fleeGoto.command
+    ).toBe('');
+  });
+
+  it('reads one off an address spelled out inline', () => {
+    const inline = { server: { host: 'bbs.test', port: 23, fleeGoto: 'sys goto silvermere' } };
+    expect(resolve(inline).config.automation.safety.fleeGoto.command).toBe('sys goto silvermere');
+  });
+});
+
+/* The realm's word for where am I: the character, then its realm, then `rm` (todo 811). */
+describe('who says how the realm is asked where you stand', () => {
+  const realm = (locate?: string) => ({
+    servers: [
+      {
+        name: 'Bearfather',
+        host: 'bbs.bearfather.net',
+        port: 23,
+        ...(locate === undefined ? {} : { locate })
+      }
+    ]
+  });
+  const locate = (raw: Record<string, unknown>, config: unknown) =>
+    resolve({ server: 'Bearfather', ...raw }, config).locate;
+
+  it('takes the realm’s word where the character states none', () => {
+    expect(locate({}, realm('none'))).toBe('none');
+    expect(locate({}, realm('rm'))).toBe('rm');
+  });
+
+  it('is `rm` where neither says, which is what every realm was asked before', () => {
+    expect(locate({}, realm())).toBe('rm');
+  });
+
+  it('takes the character over its realm, as its own login script does', () => {
+    expect(locate({ locate: 'rm' }, realm('none'))).toBe('rm');
+    expect(locate({ locate: 'none' }, realm('rm'))).toBe('none');
+  });
+
+  it('reads a word it does not know as unstated, so the realm answers', () => {
+    // `sys-status` is the fork's, held (todo 811): not a value this client has.
+    expect(locate({ locate: 'sys-status' }, realm('none'))).toBe('none');
+    expect(locate({}, realm('sys-status'))).toBe('rm');
+  });
+
+  it('reads one off an address spelled out inline', () => {
+    const inline = { server: { host: 'bbs.test', port: 23, locate: 'none' } };
+    expect(resolve(inline).locate).toBe('none');
+  });
+
+  it('keeps the key out of the options the character runs under', () => {
+    expect(resolve({ server: 'Bearfather', locate: 'none' }, realm()).config).not.toHaveProperty(
+      'locate'
+    );
   });
 });
 
@@ -189,25 +258,6 @@ describe('resolveProfile', () => {
     const login = resolve({ server: 'GreaterMUD (local)' }).config.connection.login;
     expect(login.enabled).toBe(false);
     expect(login.username).toBe('');
-  });
-
-  /*
-   * On the server, same as the menu script: every character on one BBS gets
-   * the same answer to which word asks it where it is standing.
-   */
-  it("carries the server's own locate setting to every character on it", () => {
-    const withLocate = {
-      servers: [
-        { name: 'WorldGroup Realm', host: 'bbs.thelucks.org', port: 2424, locate: 'sys-status' }
-      ]
-    };
-    expect(resolve({ server: 'WorldGroup Realm' }, withLocate).config.connection.locate).toBe(
-      'sys-status'
-    );
-  });
-
-  it('defaults to rm when the server states no locate setting', () => {
-    expect(resolve({ server: 'GreaterMUD (local)' }).config.connection.locate).toBe('rm');
   });
 
   it('lets two characters state the same account and differ by slot', () => {
@@ -319,57 +369,115 @@ describe('resolveProfile', () => {
 
 /*
  * The one `automation:` list that is merged across scopes instead of being
- * replaced by the overlay: the monster rows, laid field by field. The options
- * file's rows meet the character's here; the realm's imported table goes
- * under both when a session is configured (`withRealmMonsters`).
+ * replaced by the overlay. The realm's half cannot ride on `overlay` at all —
+ * a realm's settings are not part of `config` — so this is the seam where the
+ * three lists actually meet, and the place a mistake in it would show.
  */
-describe('the monster rows, across global and character', () => {
-  const realm = { name: 'GreaterMUD (local)', host: 'gmud-tgs', port: 2427, encoding: 'cp437' };
-  const withGlobal: Record<string, unknown> = {
+describe('the mob priority list, across global, realm and character', () => {
+  const realm = {
+    name: 'GreaterMUD (local)',
+    host: 'gmud-tgs',
+    port: 2427,
+    encoding: 'cp437',
+    mobRules: [{ mob: 'sewer rat', treat: 'last' }]
+  };
+  const withRealm: Record<string, unknown> = {
     servers: [realm],
-    automation: {
-      combat: { monsters: [{ mob: 'red dragon', priority: 'last', relationship: 'avoid' }] }
-    }
+    automation: { combat: { mobRules: [{ mob: 'red dragon', treat: 'last' }] } }
   };
 
-  const rows = (profile: { config: { automation: { combat: { monsters: unknown } } } }) =>
-    profile.config.automation.combat.monsters;
+  const rules = (profile: { config: { automation: { combat: { mobRules: unknown } } } }) =>
+    profile.config.automation.combat.mobRules;
 
-  it('keeps the global rows for a character that states none', () => {
-    const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withGlobal);
-    expect(rows(profile)).toEqual([{ mob: 'red dragon', priority: 'last', relationship: 'avoid' }]);
+  it('keeps a monster only the realm names', () => {
+    const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withRealm);
+    expect(rules(profile)).toContainEqual({ mob: 'sewer rat', treat: 'last' });
+  });
+
+  it('keeps the global rows beside the realm’s', () => {
+    const profile = resolve({ name: 'Thorn', server: 'GreaterMUD (local)' }, withRealm);
+    expect(rules(profile)).toContainEqual({ mob: 'red dragon', treat: 'last' });
   });
 
   /*
-   * The case `overlay` alone gets wrong: a character stating its own rows
-   * would otherwise replace the global ones wholesale.
+   * The case `overlay` alone gets wrong: a character stating its own list would
+   * otherwise replace the global one wholesale and lose the realm's entirely.
    */
-  it('keeps both scopes’ rows when the character states its own', () => {
+  it('keeps every scope’s rows when the character states its own', () => {
     const profile = resolve(
       {
         name: 'Thorn',
         server: 'GreaterMUD (local)',
-        automation: { combat: { monsters: [{ mob: 'gnoll shaman', priority: 'first' }] } }
+        automation: { combat: { mobRules: [{ mob: 'gnoll shaman', treat: 'first' }] } }
       },
-      withGlobal
+      withRealm
     );
-    expect(rows(profile)).toEqual([
-      { mob: 'red dragon', priority: 'last', relationship: 'avoid' },
-      { mob: 'gnoll shaman', priority: 'first' }
-    ]);
+    expect(rules(profile)).toEqual(
+      expect.arrayContaining([
+        { mob: 'gnoll shaman', treat: 'first' },
+        { mob: 'sewer rat', treat: 'last' },
+        { mob: 'red dragon', treat: 'last' }
+      ])
+    );
   });
 
-  it('lets the character’s field win and keeps the rest of the global row', () => {
+  it('lets the character’s row win over the realm’s for one monster', () => {
     const profile = resolve(
       {
         name: 'Thorn',
         server: 'GreaterMUD (local)',
-        automation: { combat: { monsters: [{ mob: 'red dragon', priority: 'first' }] } }
+        automation: { combat: { mobRules: [{ mob: 'sewer rat', treat: 'first' }] } }
       },
-      withGlobal
+      withRealm
     );
-    expect(rows(profile)).toEqual([
-      { mob: 'red dragon', priority: 'first', relationship: 'avoid' }
-    ]);
+    expect(rules(profile)).toContainEqual({ mob: 'sewer rat', treat: 'first' });
+    expect(rules(profile)).not.toContainEqual({ mob: 'sewer rat', treat: 'last' });
+  });
+
+  it('lets the realm’s row win over the global one', () => {
+    const profile = resolve(
+      { name: 'Thorn', server: 'GreaterMUD (local)' },
+      {
+        servers: [{ ...realm, mobRules: [{ mob: 'red dragon', treat: 'first' }] }],
+        automation: { combat: { mobRules: [{ mob: 'red dragon', treat: 'last' }] } }
+      }
+    );
+    expect(rules(profile)).toEqual([{ mob: 'red dragon', treat: 'first' }]);
+  });
+
+  /*
+   * An inline address names no realm directory, so there is no realm list to
+   * inherit and the global one must survive untouched.
+   */
+  it('keeps the global list for a character that spells its address out inline', () => {
+    const profile = resolve({ name: 'Thorn', server: { host: 'gmud-tgs', port: 2427 } }, withRealm);
+    expect(rules(profile)).toEqual([{ mob: 'red dragon', treat: 'last' }]);
+  });
+});
+
+/* Todo 830: what the realm calls its coins, the character's own over it coin by coin. */
+describe('who says what the realm calls its coins', () => {
+  const realm = (coins?: Record<string, string>) => ({
+    servers: [
+      {
+        name: 'Snakepits',
+        host: 'orohost',
+        port: 2427,
+        ...(coins === undefined ? {} : { coins })
+      }
+    ]
+  });
+  const coins = (raw: Record<string, unknown>, config: unknown) =>
+    resolve({ server: 'Snakepits', ...raw }, config).coins;
+
+  it("takes the realm's names, and none where neither says", () => {
+    expect(coins({}, realm({ runic: 'dime bag' }))).toEqual({ runic: 'dime bag' });
+    expect(coins({}, realm())).toEqual({});
+  });
+
+  it('takes the character over its realm, coin by coin', () => {
+    expect(
+      coins({ coins: { runic: 'krabby patty' } }, realm({ runic: 'dime bag', gold: 'doubloon' }))
+    ).toEqual({ runic: 'krabby patty', gold: 'doubloon' });
   });
 });

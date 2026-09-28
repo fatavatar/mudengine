@@ -4,10 +4,13 @@ import {
   asCoinNames,
   chargedInCopper,
   coinReader,
+  coinsInCopper,
   COPPER_PER,
   counterPriceInCopper,
+  currencyOf,
   currencyOfCode,
-  quotedInCopper
+  quotedInCopper,
+  takeCoins
 } from '../coins';
 
 /*
@@ -37,6 +40,20 @@ describe('the coin ladder', () => {
         quotedInCopper('51 platinum pieces')! +
         quotedInCopper('118 gold crowns')!
     ).toBe(65_521_800);
+  });
+});
+
+/* MajorMUD's training receipt, bearfather's wire (todo 745). */
+describe('coinsInCopper', () => {
+  it('sums each part up the ladder, and reads nothing as zero', () => {
+    expect(coinsInCopper(['5 silver nobles'])).toBe(50);
+    expect(coinsInCopper(['1 gold crown', '5 silver nobles'])).toBe(150);
+    expect(coinsInCopper(['nothing'])).toBe(0);
+  });
+
+  it('is unknown when any part is unreadable, or when nothing was listed', () => {
+    expect(coinsInCopper(['1 gold crown', '3 bronze bits'])).toBeNull();
+    expect(coinsInCopper([])).toBeNull();
   });
 });
 
@@ -93,46 +110,59 @@ describe("a counter's price", () => {
   });
 });
 
-/*
- * A realm that renames a coin: Skinny Inc's runic coin is a Krabby Patty, in
- * the pack, on the floor, in a drop line and in a shop price (2026-09-24).
- */
-describe('a renamed coin', () => {
-  const krabby = coinReader({ runic: 'Krabby Patties' });
-
-  it('is read as the stock coin wherever the realm prints it', () => {
-    expect(krabby.stock('You are carrying 14 Krabby Patties, 65 platinum pieces')).toBe(
-      'You are carrying 14 runic coins, 65 platinum pieces'
-    );
-    expect(krabby.stock('1 Krabby Patties drop to the ground.')).toBe(
-      '1 runic coins drop to the ground.'
-    );
-    expect(krabby.stock('runic key      1        5 Krabby Patties')).toBe(
-      'runic key      1        5 runic coins'
-    );
+/* Coins picked up off the floor (todo 746). */
+describe('takeCoins', () => {
+  it('takes a count off one denomination, floored at none', () => {
+    const floor = currencyOf({ silver: 3, gold: 1 });
+    expect(takeCoins(floor, 'silver', 2)).toMatchObject({ silver: 1, gold: 1, totalCopper: 110 });
+    expect(takeCoins(floor, 'silver', 5)).toMatchObject({ silver: 0, gold: 1 });
   });
 
-  it('takes either number of the name, whichever the setting was written in', () => {
-    const singular = coinReader({ runic: 'Krabby Patty' });
-    expect(singular.stock('14 Krabby Patties')).toBe('14 runic coins');
-    expect(singular.stock('1 krabby patty')).toBe('1 runic coins');
-    expect(coinReader({ gold: 'dime bag' }).stock('3 dime bags')).toBe('3 gold crowns');
+  it('leaves a floor nothing has stated unstated', () => {
+    expect(takeCoins(null, 'silver', 3)).toBeNull();
   });
+});
 
-  it('is asked for by the first word of the realm’s name', () => {
-    expect(krabby.word('runic')).toBe('krabby');
-    expect(krabby.word('gold')).toBe('gold');
-  });
+/* Todo 830: a realm's own words for the coins it renamed, read back to the stock ones. */
+describe('coinReader', () => {
+  const reader = coinReader({ runic: 'dime bag' });
 
-  it('leaves a line alone that names no renamed coin', () => {
-    expect(krabby.stock('You notice a krabby shell here.')).toBe('You notice a krabby shell here.');
-    expect(coinReader({}).stock('14 Krabby Patties')).toBe('14 Krabby Patties');
-  });
-
-  it('keeps only a named denomination from the file', () => {
+  it("reads a capture's renamed coin as the stock one", () => {
+    // captures/024:260, the snakepits realm, where runic coins are dime bags.
     expect(
-      asCoinNames({ runic: '  Krabby   Patties ', gold: '', lead: 'slugs', silver: 3 })
-    ).toEqual({ runic: 'Krabby Patties' });
-    expect(asCoinNames('Krabby Patties')).toEqual({});
+      reader.toStock('You are carrying 4 dime bags, 48 platinum pieces, 30 gold crowns, 5 silver')
+    ).toBe('You are carrying 4 runic coins, 48 platinum pieces, 30 gold crowns, 5 silver');
+    expect(reader.toStock('You picked up 1 dime bag.')).toBe('You picked up 1 runic coin.');
+  });
+
+  it('leaves the stock names and every other word alone', () => {
+    const line = 'You are carrying 2 runic coins, 16 platinum pieces and a dimension door';
+    expect(reader.toStock(line)).toBe(line);
+    expect(coinReader({}).toStock('4 dime bags')).toBe('4 dime bags');
+  });
+
+  it("names a coin by the realm's word to pick it up, and the stock word otherwise", () => {
+    expect(reader.word('runic')).toBe('dime');
+    expect(reader.word('gold')).toBe('gold');
+  });
+
+  it('reads a coins: block, dropping what names no coin', () => {
+    expect(asCoinNames({ runic: ' Dime Bag ', gold: '', silver: 7, lead: 'slug' })).toEqual({
+      runic: 'dime bag'
+    });
+    expect(asCoinNames('nonsense')).toEqual({});
+  });
+});
+
+describe('coinReader, narrowly', () => {
+  it('reads only a name that follows a count, longest name first', () => {
+    const reader = coinReader({ gold: 'crown', silver: 'dime', runic: 'dime bag' });
+    expect(reader.toStock('a crown of thorns (Head)')).toBe('a crown of thorns (Head)');
+    expect(reader.toStock('You have 2 crowns and 3 dime bags.')).toBe(
+      'You have 2 gold crowns and 3 runic coins.'
+    );
+    expect(reader.toStock('5 dimes drop to the ground.')).toBe(
+      '5 silver nobles drop to the ground.'
+    );
   });
 });

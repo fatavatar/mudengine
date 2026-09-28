@@ -30,7 +30,6 @@
 import os from 'node:os';
 import path from 'node:path';
 
-import { Push, Send } from '../../shared/ipc';
 import { asRpcRequest, type RpcOutbound } from '../../shared/rpc';
 import { errorMessage } from '../../shared/values';
 import { platformUserData } from '../app/home';
@@ -40,6 +39,8 @@ import type { Caller, ClientHooks, Handler, Host, Layout, Transport } from './Ho
 import { AccessTokens, resolveAccessPassword, type AccessPassword } from './web/access';
 import { createWebServer, type WebServer } from './web/server';
 import type { WebSocketConnection } from './web/sockets';
+import { TabOutbox } from './web/outbox';
+import { Send } from '../../shared/ipc';
 
 /** The one rail every tab draws. Tabs are numbered from the next id up. */
 export const WEB_RAIL = 1;
@@ -53,16 +54,8 @@ interface Tab {
   readonly connection: WebSocketConnection;
   /** Answered the last ping; cleared when the next one goes out. */
   alive: boolean;
-  /**
-   * Said `clientReady`. Until then the tab is parsing and mounting, its bridge
-   * has no listeners to hand a push to, and what it would be pushed — a
-   * character per combat line, 46 KB each, 70 of them a round in a party
-   * fight — is what fills `maxBufferedBytes` before it reads a byte. The
-   * attach snapshot and `clientReady`'s replay are what it was missing.
-   */
-  ready: boolean;
-  /** The last character sent, per session, as sent: a repeat says nothing. */
-  readonly characters: Map<string, string>;
+  /** What goes to this tab, and when: ready, and the repeats skipped. See `TabOutbox`. */
+  readonly outbox: TabOutbox;
 }
 
 /** `MUDENGINE_PORT`, or the default; `0` asks the system for a free one. */
@@ -192,13 +185,12 @@ export function createWebHost(layout: Layout): Host {
       // never comes.
       console.error(`web: could not serialise a message on ${message.k}: ${errorMessage(error)}`);
       if (message.k === 'reply') {
-        tab.connection.send(
-          JSON.stringify({ k: 'reply', id: message.id, e: errorMessage(error) }),
-          true
-        );
+        tab.connection.send(JSON.stringify({ k: 'reply', id: message.id, e: errorMessage(error) }));
       }
       return;
     }
+    if (!tab.outbox.admits(message, text)) return;
+    // A reply the tab asked for does not count against the cap (todo 836).
     tab.connection.send(text, message.k === 'reply');
   };
 
@@ -219,7 +211,8 @@ export function createWebHost(layout: Layout): Host {
     }
 
     if (request.k === 'send') {
-      if (request.c === Send.clientReady) tab.ready = true;
+      // Ready before the listener runs, so the replay it starts reaches the tab.
+      if (request.c === Send.clientReady) tab.outbox.markReady();
       const listener = listeners.get(request.c);
       if (!listener) {
         say(`web: nothing listens on ${request.c}.`);
@@ -252,7 +245,7 @@ export function createWebHost(layout: Layout): Host {
   const attach = (hooks: ClientHooks, connection: WebSocketConnection, remote: string): void => {
     const id = nextId;
     nextId += 1;
-    const tab: Tab = { id, connection, alive: true, ready: false, characters: new Map() };
+    const tab: Tab = { id, connection, alive: true, outbox: new TabOutbox() };
     tabs.set(id, tab);
     const caller: Caller = {
       windowId: id,
@@ -261,21 +254,7 @@ export function createWebHost(layout: Layout): Host {
     hooks.windows.add({
       id,
       isDestroyed: () => !connection.open,
-      send: (channel, payload) => {
-        if (!tab.ready) return;
-        if (channel !== Push.character) {
-          push(tab, { k: 'push', c: channel, p: payload });
-          return;
-        }
-        // The renderer reads alerts off consecutive states, so none is
-        // coalesced (`publishCharacter`); a state equal to the last one has
-        // no transition in it to lose.
-        const session = (payload as { session: string }).session;
-        const text = JSON.stringify(payload);
-        if (tab.characters.get(session) === text) return;
-        tab.characters.set(session, text);
-        push(tab, { k: 'push', c: channel, p: payload });
-      }
+      send: (channel, payload) => push(tab, { k: 'push', c: channel, p: payload })
     });
     connection.onPong = () => {
       tab.alive = true;

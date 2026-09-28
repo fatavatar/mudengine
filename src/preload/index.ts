@@ -28,6 +28,7 @@ import type { Discovery } from '../shared/memory';
 import type { Find } from '../shared/finds';
 import type { ResetNotice } from '../shared/ipc';
 import type { CharacterState } from '../shared/character';
+import type { PlayerRegistry } from '../shared/players';
 import type { DebugRecord } from '../shared/debug';
 import type { ConfigSnapshot } from '../shared/config';
 import type { InternalConfig } from '../shared/internal';
@@ -39,6 +40,7 @@ import type { QuestRunProgress, QuestWatched, RoomAsk } from '../shared/quests';
 import type {
   ConnectionState,
   ConnectionTarget,
+  LostEnter,
   StreamChunk,
   StreamLine,
   TelnetEvent,
@@ -60,6 +62,8 @@ const api: IpcApi = {
   macro: (session: SessionId, line: string) => ipcRenderer.send(Send.macro, session, line),
   dropMacro: (session: SessionId) => ipcRenderer.send(Send.dropMacro, session),
   resize: (session: SessionId, size: TerminalSize) => ipcRenderer.send(Send.resize, session, size),
+  lostEnter: (session: SessionId, report: LostEnter) =>
+    ipcRenderer.send(Send.lostEnter, session, report),
   diagnostics: (on: boolean) => ipcRenderer.send(Send.diagnostics, on),
   debugFeed: (on: boolean) => ipcRenderer.send(Send.debugFeed, on),
 
@@ -73,6 +77,7 @@ const api: IpcApi = {
   saveDebug: (session) => ipcRenderer.invoke(Invoke.saveDebug, session),
   getCharacter: (session) => ipcRenderer.invoke(Invoke.getCharacter, session),
   routeTo: (session, map, room) => ipcRenderer.invoke(Invoke.routeTo, session, map, room),
+  routeBetween: (session, from, to) => ipcRenderer.invoke(Invoke.routeBetween, session, from, to),
   walkRoute: (session, route, run) => ipcRenderer.invoke(Invoke.walkRoute, session, route, run),
   startMoving: (session, loop, confirmed) =>
     ipcRenderer.invoke(Invoke.startMoving, session, loop, confirmed),
@@ -125,14 +130,6 @@ const api: IpcApi = {
   deleteServer: (name) => ipcRenderer.invoke(Invoke.deleteServer, name),
   settingsSnapshot: () => ipcRenderer.invoke(Invoke.settingsSnapshot),
   chooseRealm: () => ipcRenderer.invoke(Invoke.chooseRealm),
-  loadMessages: (realm) => ipcRenderer.invoke(Invoke.loadMessages, realm),
-  importMessages: (realm, fileName, text) =>
-    ipcRenderer.invoke(Invoke.importMessages, realm, fileName, text),
-  saveMessages: (realm, triggers) => ipcRenderer.invoke(Invoke.saveMessages, realm, triggers),
-  loadMonsters: (realm) => ipcRenderer.invoke(Invoke.loadMonsters, realm),
-  importMonsters: (realm, fileName, monsters) =>
-    ipcRenderer.invoke(Invoke.importMonsters, realm, fileName, monsters),
-  saveMonsters: (realm, monsters) => ipcRenderer.invoke(Invoke.saveMonsters, realm, monsters),
   searchRooms: (session, query) => ipcRenderer.invoke(Invoke.searchRooms, session, query),
   mobNames: (session) => ipcRenderer.invoke(Invoke.mobNames, session),
   worldInfo: (session) => ipcRenderer.invoke(Invoke.worldInfo, session),
@@ -145,6 +142,7 @@ const api: IpcApi = {
   localMap: (session, map, room, radius) =>
     ipcRenderer.invoke(Invoke.localMap, session, map, room, radius),
   roomBrief: (session, map, room) => ipcRenderer.invoke(Invoke.roomBrief, session, map, room),
+  slotGear: (session, slot) => ipcRenderer.invoke(Invoke.slotGear, session, slot),
   huntingGrounds: (session, measure) => ipcRenderer.invoke(Invoke.huntingGrounds, session, measure),
   trainers: (session) => ipcRenderer.invoke(Invoke.trainers, session),
   banks: (session) => ipcRenderer.invoke(Invoke.banks, session),
@@ -170,6 +168,7 @@ const api: IpcApi = {
   onDebug: (handler) => subscribe<Addressed<DebugRecord>>(Push.debug, handler),
   onBlock: (handler) => subscribe<Addressed<Block>>(Push.block, handler),
   onCharacter: (handler) => subscribe<Addressed<CharacterState>>(Push.character, handler),
+  onPlayers: (handler) => subscribe<Addressed<PlayerRegistry>>(Push.players, handler),
   onWalk: (handler) => subscribe<Addressed<WalkProgress>>(Push.walk, handler),
   onLoop: (handler) => subscribe<Addressed<LoopProgress>>(Push.loop, handler),
   onAutomation: (handler) => subscribe<Addressed<AutomationSnapshot>>(Push.automation, handler),

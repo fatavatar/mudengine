@@ -7,6 +7,8 @@ import { RealmLore, realmKey } from '../RealmLore';
 import type { WorldGraph } from '../WorldGraph';
 import { mobNameCandidates } from '../../../shared/mobs';
 import { SpellMessageBook } from '../../../shared/spell-messages';
+import { t } from '../../app/i18n';
+import { complaint } from './complaint';
 
 /** The two rows this realm names. */
 const rows: Record<string, { name: string; hp: number; span?: [number, number] }> = {
@@ -191,7 +193,12 @@ describe('keeping what was learned', () => {
     lore.forRealm('gmud.sqlite', world).observe('grue', { damage: 420, killed: true, at: 2 });
     lore.flush();
 
-    expect(said.join(' ')).toContain('will not parse');
+    expect(said).toContain(
+      t('notices.world.lore.parseSuspended', {
+        fileName: path.basename(file),
+        message: complaint(() => JSON.parse('{ this is not json'))
+      })
+    );
     expect(fs.readFileSync(file, 'utf8')).toBe('{ this is not json');
   });
 
@@ -526,5 +533,61 @@ describe('the effects a realm could not name', () => {
     const effects = realm.spellsFor('gmud.sqlite', shipped).effects;
     effects.causes('You are poisoned!', 'poisoned', 'suspected');
     expect(effects.seen('You are poisoned!')).toBeNull();
+  });
+});
+
+/*
+ * Todo 820: an attack spell the wire answered instantly (`AttackSpells.
+ * noteInstant`) is the realm's fact, kept beside the death sentences, by the
+ * realm's name for the spell, so the misjudged opening is paid once per realm.
+ */
+describe('the attack spells a realm answered instantly', () => {
+  it('persists by the realm’s spell name, per realm, and reads back', () => {
+    const lore = store();
+    lore.forRealm('gmud.sqlite', world).observeInstantSpell('Hold Person ', 7);
+    lore.flush();
+    const file = JSON.parse(fs.readFileSync(path.join(dir, 'mob-lore.json'), 'utf8'));
+    expect(file.instants[realmKey('gmud.sqlite')]).toEqual({ 'hold person': { at: 7 } });
+
+    const again = store();
+    expect(again.forRealm('gmud.sqlite', world).isInstantSpell('hold person')).toBe(true);
+    // The control: a spell never answered instantly is not.
+    expect(again.forRealm('gmud.sqlite', world).isInstantSpell('harm')).toBe(false);
+    // Another realm learned nothing.
+    expect(again.forRealm('paradigm.sqlite', world).isInstantSpell('hold person')).toBe(false);
+  });
+
+  it('does not touch the disk for a spell it already holds', () => {
+    const lore = store();
+    lore.forRealm('gmud.sqlite', world).observeInstantSpell('hold person', 7);
+    lore.flush();
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('"at": 7', '"at": 8'));
+    const again = store();
+    again.forRealm('gmud.sqlite', world).observeInstantSpell('hold person', 9);
+    again.flush();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).instants['gmud.sqlite']).toEqual({
+      'hold person': { at: 8 }
+    });
+  });
+
+  it('forgets a lesson the wire contradicted, on disk too', () => {
+    const lore = store();
+    const realm = lore.forRealm('gmud.sqlite', world);
+    realm.observeInstantSpell('hold person', 7);
+    realm.observeInstantSpell('slow', 7);
+    realm.forgetInstantSpell('Hold Person');
+    lore.flush();
+    const again = store().forRealm('gmud.sqlite', world);
+    expect(again.isInstantSpell('hold person')).toBe(false);
+    // The control: the other lesson stands.
+    expect(again.isInstantSpell('slow')).toBe(true);
+  });
+
+  it('is forgotten by the player’s reset of realm lore, deleting the file', () => {
+    const lore = store();
+    lore.forRealm('gmud.sqlite', world).observeInstantSpell('hold person', 7);
+    lore.flush();
+    fs.rmSync(file);
+    expect(store().forRealm('gmud.sqlite', world).isInstantSpell('hold person')).toBe(false);
   });
 });

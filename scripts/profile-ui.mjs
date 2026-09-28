@@ -7,9 +7,10 @@
  *
  * Stands up a fake host that answers like the realm — server echo, the
  * `ESC[79D ESC[K` prompt repaint, a status line after every event — launches
- * the built app, and drives it through six situations a player is in every
+ * the built app, and drives it through seven situations a player is in every
  * evening: sitting at the prompt, typing a command, typing *while a fight
- * prints*, a listing arriving all at once, and typing into the Talk card's
+ * prints*, a listing arriving all at once, a fight on a realm of 1,200 known
+ * players, and typing into the Talk card's
  * reply box with an evening's backlog behind it — alone, and while a fight
  * prints. For each it records, from inside the window:
  *
@@ -45,6 +46,14 @@ import path from 'node:path';
 import { execSync, spawn, spawnSync } from 'node:child_process';
 
 import { analyse, loadMapper, spread } from './lib/cpuprofile.mjs';
+// The palette row is typed for by its dictionary key, never its wording (run
+// under `scripts/lib/register.mjs`); a key the dictionary lacks throws.
+import { copyOf } from '../src/main/app/copyMatch.ts';
+
+/** The palette's row that shows the Talk card, as the palette labels it. */
+const SHOW_TALK = copyOf('palette.layout.showCardLabel', {
+  cardName: copyOf('cards.talk.title')
+});
 
 const IAC = 255,
   WILL = 251,
@@ -125,6 +134,25 @@ const WHO = [
   '\x1b[0;36m         ===================\x1b[0m',
   '\x1b[0;37m         Rayzor                -  Apprentice S\x1b[0m',
   '\x1b[0;31m         Outlaw   Grimjaw     -  Cutpurse\x1b[0m'
+];
+/*
+ * The `roster` situation's realm: each `who` lists four hundred strangers not
+ * listed before (one listing is capped at `tuning.parse.rosterLines`, 400),
+ * so three asks leave the client knowing 1,200 players, past the 1,000 at
+ * which the registry cost 6.75ms a status line to clone on 2026-09-11 (todo
+ * 730). Null until that situation asks; every other one sees `WHO`.
+ */
+const ROSTER_PAGE = 400;
+let rosterPage = null;
+const strangerName = (i) =>
+  `Q${[2, 1, 0].map((d) => String.fromCharCode(97 + (Math.floor(i / 26 ** d) % 26))).join('')}`;
+const strangers = (page) => [
+  WHO[0],
+  WHO[1],
+  ...Array.from(
+    { length: ROSTER_PAGE },
+    (_, i) => `\x1b[0;37m         ${strangerName(page * ROSTER_PAGE + i).padEnd(22)}-  Apprentice\x1b[0m`
+  )
 ];
 
 /** Every printable byte the host received from the shown character, stamped. */
@@ -219,7 +247,9 @@ class Host {
             : command === 'i'
               ? PACK
               : command === 'sc' || command === 'who'
-                ? WHO
+                ? rosterPage === null
+                  ? WHO
+                  : strangers(rosterPage++)
                 : command === 'exp'
                   ? ['Exp: 1500  Level: 4  Exp needed for next level: 500 (2000)']
                   : command.length > 0
@@ -992,6 +1022,26 @@ await scenario('burst', async () => {
 });
 
 /*
+ * A realm where the client knows 1,200 players, then a fight: every status line
+ * republishes the character, so what that costs the window with a large
+ * registry is what this measures (todo 730). The listings are asked before the
+ * clock starts, so only the fight is timed.
+ */
+if (!only || only.includes('roster')) {
+  rosterPage = 0;
+  for (let ask = 0; ask < 3; ask += 1) {
+    await type('who', 50);
+    await press('\r');
+    await sleep(1500);
+  }
+  log('1,200 players listed');
+}
+await scenario('roster', async () => {
+  await fight(4);
+  await sleep(700);
+});
+
+/*
  * The Talk card, with an evening's backlog behind it and the composer holding
  * the caret. It is put away by default, so it is brought out the way a player
  * brings it out — from the palette — and filled from the host up to
@@ -1020,7 +1070,7 @@ async function openTalk() {
     const el = document.querySelector('.palette input');
     if (!el) return false;
     const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set;
-    set.call(el, 'Show card: Talk');
+    set.call(el, ${JSON.stringify(SHOW_TALK)});
     el.dispatchEvent(new Event('input', { bubbles: true }));
     return true;
   })()`);
@@ -1028,7 +1078,7 @@ async function openTalk() {
   await sleep(250);
   const found = await evaluate(`(() => {
     const row = [...document.querySelectorAll('.palette li')]
-      .find((li) => li.innerText.includes('Show card: Talk'));
+      .find((li) => li.innerText.includes(${JSON.stringify(SHOW_TALK)}));
     if (row) row.click();
     return !!row;
   })()`);

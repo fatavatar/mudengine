@@ -2,12 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandQueue } from '../CommandQueue';
 import { Routines } from '../Routines';
+import { t } from '../../app/i18n';
 import { DEFAULT_CONFIG, type AutomationConfig } from '../../../shared/config';
 import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
 import { SET_STATLINE } from '../../../shared/statline';
+import { DEFAULT_INTERNAL } from '../../../shared/internal';
 
 /** Nothing sends: what matters here is what was *queued* and in which band. */
-function make(overrides: Partial<AutomationConfig> = {}): {
+function make(
+  overrides: Partial<AutomationConfig> = {},
+  ground: { down: boolean } = { down: false }
+): {
   routines: Routines;
   queue: CommandQueue;
   notices: string[];
@@ -25,7 +30,10 @@ function make(overrides: Partial<AutomationConfig> = {}): {
     { send: () => {} }
   );
   return {
-    routines: new Routines(config, queue, { notice: (m) => notices.push(m) }),
+    routines: new Routines(config, queue, {
+      notice: (m) => notices.push(m),
+      onTheGround: () => ground.down
+    }),
     queue,
     notices
   };
@@ -408,7 +416,7 @@ describe('reading the quest counters', () => {
   /*
    * Not on the way in: a complete listing settles *every* counter, so it takes
    * the quest book's own nodes away from the player. The caller is a plan that
-   * crosses a gate written on one (`SessionManager.askCountersFor`).
+   * crosses a gate written on one (`Errands.askCountersFor`).
    */
   it('asks nothing until something needs the counters', () => {
     const { routines, queue } = make();
@@ -681,32 +689,6 @@ describe('asking for the stat sheet to settle a buff ending', () => {
     expect(commandsIn(queue).filter((command) => command === 'st')).toHaveLength(1);
   });
 
-  /*
-   * Deferred rather than dropped (2026-09-23): a cast whose start is being
-   * learned, or a watchdog checking a shield before it recasts, asks inside
-   * the floor of an earlier sheet and nothing asks again after — so the one
-   * question it had to wait on went unanswered.
-   */
-  it('asks once the floor has passed for a question that came inside it', () => {
-    vi.useFakeTimers();
-    try {
-      const { routines, queue } = make();
-      const enqueue = vi.spyOn(queue, 'enqueue');
-      routines.askSheet(Date.now());
-      vi.advanceTimersByTime(5_000);
-      routines.askSheet(Date.now());
-      routines.askSheet(Date.now());
-      expect(enqueue).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(25_000);
-      expect(enqueue).toHaveBeenCalledTimes(2);
-      vi.advanceTimersByTime(60_000);
-      expect(enqueue).toHaveBeenCalledTimes(2);
-      routines.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('asks nothing with automation off', () => {
     const { routines, queue } = make({ enabled: false });
     routines.askSheet(1_000);
@@ -845,122 +827,137 @@ describe('owning the status line', () => {
 });
 
 /*
- * skinny entered the realm on the ground on 2026-09-25, the entry probe's
- * `st` never went out, and every health figure read "unknown, so not low"
- * while he walked a route at 17%. The required facts are asked for until the
- * state has read them.
+ * A character lying mortally wounded is fed no state, so what is asked here
+ * comes from a block ahead of the session's gate or from the idle tick (todo
+ * 760). The two drains stand down on `Grounded.down` and ask once the
+ * character is up; the keep-alive goes on, since it serves the link and the
+ * server's idle clock is the socket's (`TGSSocket.lastDataReceived`, reset by
+ * any byte, refused command or not).
  */
-describe('asking for what has not been read', () => {
-  const read = {
-    ...inRealm,
-    vitals: { ...inRealm.vitals, hp: 100, hpMax: 649 },
-    inventory: { ...inRealm.inventory, listedAt: 1 }
+describe('on the ground', () => {
+  const commandsIn = (queue: CommandQueue): string[] =>
+    queue.snapshot.pending.map((intent) => intent.command);
+  const talk = { ...DEFAULT_CONFIG.automation.talk, lookAtPlayers: true };
+
+  it('drains neither the roster nor the looks on the idle tick, but keeps the link', () => {
+    const ground = { down: false };
+    const { routines, queue } = make(
+      { idle: { enabled: true, afterSeconds: 5, command: '' }, onEnterRealm: [], talk },
+      ground
+    );
+    routines.onCharacter(inRealm);
+    ground.down = true;
+    routines.onRosterUnknown();
+    routines.onPlayersHere(['Durnan']);
+    vi.advanceTimersByTime(6000);
+    expect(commandsIn(queue)).toEqual(['']);
+
+    // Positive control: up again, the next tick drains what waited.
+    ground.down = false;
+    vi.advanceTimersByTime(6000);
+    expect(commandsIn(queue)).toEqual(expect.arrayContaining(['who', 'look durnan']));
+  });
+
+  /*
+   * Exempt, and the exemption is the point: the server answers `par`, `st`
+   * and `pro` on the ground, and each is asked once off a request the
+   * tracker has already handed over, so standing it down would lose it.
+   */
+  it('still asks what the server answers there, once', () => {
+    const { routines, queue } = make({}, { down: true });
+    routines.onPartyChanged();
+    routines.askSheet(1_000);
+    routines.askProfile();
+    expect(commandsIn(queue)).toEqual([DEFAULT_CONFIG.automation.onPartyChange, 'st', 'pro']);
+  });
+});
+
+/*
+ * Todo 835: what entering the realm asked for and never read is asked again,
+ * once the wait is up, and never once any answer has come back.
+ */
+describe('asking again for what entering the realm never read', () => {
+  const block = (type: string) =>
+    ({ type, seq: 1, at: Date.now(), domain: 'status', groups: {} }) as never;
+  const sending = (onEnterRealm: string[]) => {
+    const config: AutomationConfig = {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm
+    };
+    const sent: string[] = [];
+    const queue = new CommandQueue(
+      { ...config, pacing: { window: 8, minGapMs: 0, ackTimeoutMs: 1000 } },
+      { send: (command) => sent.push(command) }
+    );
+    const routines = new Routines(config, queue, { onTheGround: () => false });
+    return { routines, sent };
   };
-  const asked = (enqueue: { mock: { calls: ReadonlyArray<readonly unknown[]> } }): string[] =>
-    enqueue.mock.calls
-      .map(([intent]) => (intent as { command: string }).command)
-      .filter((command) => command === 'st' || command === 'i');
-  const count = (commands: string[], command: string): number =>
-    commands.filter((each) => each === command).length;
+  const RETRY = DEFAULT_INTERNAL.tuning.queue.unreadRetryMs;
 
-  it('asks again past the retry while no listing has come back', () => {
-    const { routines, queue } = make();
-    const enqueue = vi.spyOn(queue, 'enqueue');
+  it('asks a lost st and i again after the wait, and not before', () => {
+    const { routines, sent } = sending(['st', 'i']);
     routines.onCharacter(inRealm);
-    const first = count(asked(enqueue), 'st');
-    expect(first).toBeGreaterThan(0);
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['st', 'i']);
+    vi.advanceTimersByTime(RETRY - 1_000);
     routines.onCharacter(inRealm);
-    expect(count(asked(enqueue), 'st')).toBe(first);
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['st', 'i']);
+    vi.advanceTimersByTime(1_000);
     routines.onCharacter(inRealm);
-    expect(count(asked(enqueue), 'st')).toBe(first + 1);
-    routines.dispose();
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['st', 'i', 'st', 'i']);
   });
 
-  it('asks only for what is still unread', () => {
-    const { routines, queue } = make();
-    const enqueue = vi.spyOn(queue, 'enqueue');
+  it('stops at an answer, whatever the answer says', () => {
+    const { routines, sent } = sending(['st', 'i']);
     routines.onCharacter(inRealm);
-    const before = asked(enqueue);
-    vi.advanceTimersByTime(60_000);
-    // The pack has been listed, the sheet has not.
-    routines.onCharacter({ ...inRealm, inventory: { ...inRealm.inventory, listedAt: 1 } });
-    const after = asked(enqueue).slice(before.length);
-    expect(after).toEqual(['st']);
-    routines.dispose();
+    // An `st` came back, one with no health in it; the pack never did.
+    routines.onBlock(block('player-status'));
+    vi.advanceTimersByTime(RETRY + 500);
+    routines.onCharacter(inRealm);
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['st', 'i', 'i']);
   });
 
-  it('stops once the state has read them', () => {
-    const { routines, queue } = make();
-    const enqueue = vi.spyOn(queue, 'enqueue');
+  it('never sends what entering the realm does not ask for', () => {
+    const { routines, sent } = sending(['who']);
     routines.onCharacter(inRealm);
-    const before = asked(enqueue).length;
-    vi.advanceTimersByTime(60_000);
-    routines.onCharacter(read);
-    expect(asked(enqueue)).toHaveLength(before);
-    routines.dispose();
+    vi.advanceTimersByTime(RETRY * 3);
+    routines.onCharacter(inRealm);
+    vi.advanceTimersByTime(500);
+    expect(sent).toEqual(['who']);
   });
+});
 
-  // A realm whose sheet prints no hit points has answered; asking it for ever
-  // would be a command every half minute spent on the same silence.
-  it('stops once the listing has come back, whatever it said', () => {
-    const { routines, queue } = make();
-    const enqueue = vi.spyOn(queue, 'enqueue');
+describe('asking again, bounded', () => {
+  it('gives up after its tries, and says so', () => {
+    const config: AutomationConfig = {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm: ['st']
+    };
+    const sent: string[] = [];
+    const notices: string[] = [];
+    const queue = new CommandQueue(
+      { ...config, pacing: { window: 8, minGapMs: 0, ackTimeoutMs: 1000 } },
+      { send: (command) => sent.push(command) }
+    );
+    const routines = new Routines(config, queue, {
+      notice: (m) => notices.push(m),
+      onTheGround: () => false
+    });
+    const { unreadRetryMs, unreadRetries } = DEFAULT_INTERNAL.tuning.queue;
     routines.onCharacter(inRealm);
-    routines.onBlock({ type: 'player-status', groups: {}, at: 0 } as never);
-    const before = count(asked(enqueue), 'st');
-    vi.advanceTimersByTime(60_000);
-    routines.onCharacter(inRealm);
-    expect(count(asked(enqueue), 'st')).toBe(before);
-    routines.dispose();
-  });
-
-  /* The entry probe is the first ask; this is the retry, never a second first. */
-  it('adds nothing to the entry probe on the way in', () => {
-    const { routines, queue } = make();
-    const enqueue = vi.spyOn(queue, 'enqueue');
-    routines.onCharacter(inRealm);
-    expect(count(asked(enqueue), 'st')).toBe(1);
-    expect(count(asked(enqueue), 'i')).toBe(1);
-    routines.dispose();
-  });
-
-  /* The player's choice: a probe list without `i` never has `i` added to it. */
-  it('retries only what the player asks on the way in', () => {
-    const { routines, queue } = make({ onEnterRealm: ['st'] });
-    const enqueue = vi.spyOn(queue, 'enqueue');
-    routines.onCharacter(inRealm);
-    vi.advanceTimersByTime(60_000);
-    routines.onCharacter(inRealm);
-    expect(count(asked(enqueue), 'i')).toBe(0);
-    expect(count(asked(enqueue), 'st')).toBe(2);
-    routines.dispose();
-  });
-
-  /* A level clears the maxima; unread again is retried again. */
-  it('retries a fact that was read and is unread again', () => {
-    const { routines, queue } = make();
-    const enqueue = vi.spyOn(queue, 'enqueue');
-    routines.onCharacter(inRealm);
-    routines.onCharacter(read);
-    const before = count(asked(enqueue), 'st');
-    const cleared = { ...read, vitals: { ...read.vitals, hpMax: null } };
-    routines.onCharacter(cleared);
-    expect(count(asked(enqueue), 'st')).toBe(before);
-    vi.advanceTimersByTime(35_000);
-    routines.onCharacter(cleared);
-    expect(count(asked(enqueue), 'st')).toBe(before + 1);
-    routines.dispose();
-  });
-
-  it('asks nothing with automation off', () => {
-    const { routines, queue } = make({ enabled: false });
-    const enqueue = vi.spyOn(queue, 'enqueue');
-    routines.onCharacter(inRealm);
-    vi.advanceTimersByTime(60_000);
-    routines.onCharacter(inRealm);
-    expect(asked(enqueue)).toEqual([]);
-    routines.dispose();
+    for (let n = 0; n < unreadRetries + 3; n += 1) {
+      vi.advanceTimersByTime(unreadRetryMs);
+      routines.onCharacter(inRealm);
+      vi.advanceTimersByTime(500);
+    }
+    expect(sent).toEqual(Array.from({ length: unreadRetries + 1 }, () => 'st'));
+    expect(notices).toContain(t('automation.routines.unreadGaveUp', { commands: 'st' }));
   });
 });

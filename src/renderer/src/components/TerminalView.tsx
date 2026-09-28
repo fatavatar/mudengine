@@ -15,6 +15,8 @@ import { measurePitch } from '../lib/fonts';
 import type { TerminalConfig } from '@shared/config';
 import type { TerminalPalette } from '@shared/themes';
 import type {
+  EnterPlace,
+  LostEnter,
   StreamChunk,
   TerminalAction,
   TerminalActionName,
@@ -22,7 +24,7 @@ import type {
   TerminalSize,
   InlineGlyph
 } from '@shared/types';
-import { consoleWriter, declineQueries, noticeSequence, type ConsoleWriter } from '../lib/console';
+import { consoleWriter, noticeSequence, type ConsoleWriter } from '../lib/console';
 import type { NameIndex, SpanHit } from '../lib/names';
 import type { Box } from '../lib/menu';
 import { anchorRect, type PopoverAnchor } from '../lib/popover';
@@ -30,6 +32,7 @@ import { MARK_GLYPH } from './marks';
 import { GLYPH_CELLS } from '@shared/template';
 import { sliceLines, splitMarks } from '../lib/chunks';
 import { tuning } from '../lib/tuning';
+import { silenceQueries } from '../lib/terminalQueries';
 
 /** The handle the parent uses to drive the terminal once it has mounted. */
 export interface TerminalHandle {
@@ -53,11 +56,20 @@ export interface TerminalHandle {
   search(query: string, direction: 'next' | 'previous'): void;
 }
 
+/** How the lost-Enter notice names each place other than a control. */
+const ENTER_WHERE: Record<Exclude<EnterPlace, 'control'>, () => string> = {
+  console: () => t('terminal.enterWhere.console'),
+  elsewhere: () => t('terminal.enterWhere.elsewhere'),
+  nowhere: () => t('terminal.enterWhere.nowhere')
+};
+
 export interface TerminalViewProps {
   /** Called with each keystroke or pasted run the user produces. */
   onInput(data: string): void;
   /** Called whenever the measured grid changes, for Telnet NAWS. */
   onResize(size: TerminalSize): void;
+  /** A plain Enter this console never sent, for the capture (todo 00). */
+  onLostEnter(report: LostEnter): void;
   /** Registers the handle the parent uses to push output in. */
   onReady(handle: TerminalHandle): void;
   /** Reports match counts as the query changes. */
@@ -84,6 +96,12 @@ export interface TerminalViewProps {
    * a panel, not a realm lookup.
    */
   onSelectGang?(name: string, at: PopoverAnchor): void;
+  /**
+   * A slot word in a listing's parenthesis clicked, `(Head)`: the slot's quick
+   * view, paired with the mount for the reason a person's flyout is — it is a
+   * table to read and click through, and the next line printed must not close it.
+   */
+  onSelectSlot?(slot: string, at: PopoverAnchor): void;
   /**
    * A room's name clicked in the console: the route panel, on that room.
    *
@@ -136,12 +154,14 @@ export interface TerminalViewProps {
 export default function TerminalView({
   onInput,
   onResize,
+  onLostEnter,
   onReady,
   onSearchResult,
   index,
   onInspect,
   onSelectPlayer,
   onSelectGang,
+  onSelectSlot,
   onChooseRoom,
   onAct,
   reportSize = true,
@@ -208,22 +228,26 @@ export default function TerminalView({
   const handlers = useRef({
     onInput,
     onResize,
+    onLostEnter,
     onReady,
     onSearchResult,
     onInspect,
     onSelectPlayer,
     onSelectGang,
+    onSelectSlot,
     onChooseRoom,
     onAct
   });
   handlers.current = {
     onInput,
     onResize,
+    onLostEnter,
     onReady,
     onSearchResult,
     onInspect,
     onSelectPlayer,
     onSelectGang,
+    onSelectSlot,
     onChooseRoom,
     onAct
   };
@@ -365,6 +389,9 @@ export default function TerminalView({
 
     const fit = new FitAddon();
     fitRef.current = fit;
+    // The terminal answers no query a server sends and turns on no reporting
+    // mode: xterm's answer would be typed into the game (todo 832).
+    silenceQueries(term);
     term.loadAddon(fit);
     term.loadAddon(new Unicode11Addon());
     /*
@@ -392,8 +419,6 @@ export default function TerminalView({
      */
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri)));
     term.unicode.activeVersion = '11';
-    // The server's questions are not the player's to answer; see `declineQueries`.
-    declineQueries(term);
 
     /*
      * A name the realm knows becomes clickable, the same way a web address
@@ -469,37 +494,53 @@ export default function TerminalView({
          * has, rather than a second vocabulary.
          */
         const open = (hit: SpanHit, at: PopoverAnchor): void => {
-          if (hit.kind === 'player') {
-            /*
-             * Paired with the mount, not the screen. The realm's answer about
-             * a word closes when the console scrolls, because the word moved;
-             * a person's flyout carries the Access face, which writes to the
-             * options file, and a gate that closes on the next line the game
-             * prints is unusable in a busy room — the reason a popover was
-             * once ruled out for it. The mount is the viewport's parent and
-             * never scrolls, so the panel stays where the name was clicked,
-             * like a right-click menu, until Escape or a click elsewhere.
-             */
-            handlers.current.onSelectPlayer?.(hit.text, { box: anchorRect(at), within: mount });
-          } else if (hit.kind === 'gang') {
-            /*
-             * A gang, paired with the mount for the same reason a person is:
-             * the panel is read and clicked through — a member's name opens
-             * the flyout on *them* — and one that closed on the next line the
-             * game printed would be unusable in a busy room.
-             */
-            handlers.current.onSelectGang?.(hit.text, { box: anchorRect(at), within: mount });
-          } else if (hit.kind === 'room') {
-            /*
-             * A room is the one kind whose answer is not a readout. The realm
-             * knows where it is, and what a person wants from a place they are
-             * not standing in is the way there — so this opens the route panel
-             * the map and the Route face already open, rather than a card
-             * restating a name they just read.
-             */
-            handlers.current.onChooseRoom?.(hit.text);
-          } else {
-            handlers.current.onInspect?.(hit.text, at);
+          switch (hit.kind) {
+            case 'player':
+              /*
+               * Paired with the mount, not the screen. The realm's answer about
+               * a word closes when the console scrolls, because the word moved;
+               * a person's flyout carries the Access face, which writes to the
+               * options file, and a gate that closes on the next line the game
+               * prints is unusable in a busy room — the reason a popover was
+               * once ruled out for it. The mount is the viewport's parent and
+               * never scrolls, so the panel stays where the name was clicked,
+               * like a right-click menu, until Escape or a click elsewhere.
+               */
+              handlers.current.onSelectPlayer?.(hit.text, { box: anchorRect(at), within: mount });
+              return;
+            case 'gang':
+              /*
+               * A gang, paired with the mount for the same reason a person is:
+               * the panel is read and clicked through — a member's name opens
+               * the flyout on *them* — and one that closed on the next line the
+               * game printed would be unusable in a busy room.
+               */
+              handlers.current.onSelectGang?.(hit.text, { box: anchorRect(at), within: mount });
+              return;
+            case 'slot':
+              handlers.current.onSelectSlot?.(hit.text, { box: anchorRect(at), within: mount });
+              return;
+            case 'room':
+              /*
+               * A room is the one kind whose answer is not a readout. The realm
+               * knows where it is, and what a person wants from a place they are
+               * not standing in is the way there — so this opens the route panel
+               * the map and the Route face already open, rather than a card
+               * restating a name they just read.
+               */
+              handlers.current.onChooseRoom?.(hit.text);
+              return;
+            case 'item':
+            case 'mob':
+            case 'spell':
+            case 'race':
+            case 'class':
+              handlers.current.onInspect?.(hit.text, at);
+              return;
+            default: {
+              const unhandled: never = hit.kind;
+              throw new Error(`no panel opens for a ${String(unhandled)}`);
+            }
           }
         };
         const link = (hit: SpanHit, own: Segment, other?: Segment): ILink => {
@@ -680,15 +721,17 @@ export default function TerminalView({
       if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (target !== null && !mount.contains(target) && ownsItsEnter(target)) return;
-      const where =
+      const place: EnterPlace =
         target === null || target === document.body
-          ? t('terminal.enterWhere.nowhere')
+          ? 'nowhere'
           : mount.contains(target)
-            ? t('terminal.enterWhere.console')
+            ? 'console'
             : // Another character's cell; this console's own controls name themselves.
               target.closest('.terminal-cell')?.contains(mount) === false
-              ? t('terminal.enterWhere.elsewhere')
-              : describeElement(target);
+              ? 'elsewhere'
+              : 'control';
+      const control = place === 'control' && target !== null ? describeElement(target) : null;
+      const where = control ?? (place === 'control' ? '' : ENTER_WHERE[place]());
       const code = event.keyCode;
       enterTaken = false;
       if (enterTimer !== null) clearTimeout(enterTimer);
@@ -699,6 +742,8 @@ export default function TerminalView({
           const atLineStart = term.buffer.active.cursorX === 0;
           term.write(noticeSequence(t('terminal.enterNotTaken', { where, code }), atLineStart));
         });
+        // The notice is paint only; the capture is what lines it up with the wire.
+        handlers.current.onLostEnter({ place, control, code });
       }, tuning().enterTakenMs);
     };
     window.addEventListener('keydown', watchEnter, { capture: true });

@@ -5,9 +5,14 @@ import Icon, { type IconName } from './Icon';
 import { keepFocus } from '../lib/focus';
 import { t } from '../lib/i18n';
 import type { CharacterState } from '@shared/character';
-import type { LoopProgress } from '@shared/loops';
+import { loopIsResting, type LoopProgress } from '@shared/loops';
 import { movementOf } from '@shared/movement';
-import type { WalkProgress } from '@shared/walk';
+import {
+  isAfflictionHold,
+  walkIsResting,
+  type AfflictionHold,
+  type WalkProgress
+} from '@shared/walk';
 import { tuning } from '../lib/tuning';
 
 export interface NavigationCardProps extends CardChrome {
@@ -580,16 +585,13 @@ function walkChip(walk: WalkProgress) {
     // `resting` is a rest this client asked for a beat ago and is waiting to
     // land, which is the same word in the same register as the other two: the
     // client waiting for the character to be fit to travel (todo 14).
-    (walk.hold === 'health' ||
-      walk.hold === 'mana' ||
-      walk.hold === 'trap' ||
-      walk.hold === 'resting')
+    walkIsResting(walk.hold)
   ) {
     return <span className="chip info">{t('cards.navigation.loop.statusResting')}</span>;
   }
   /*
    * And the same for a fight, in the same words the loop uses — a route waits
-   * one out and walks on rather than ending (`Walker.holdForFight`), and this
+   * one out and walks on rather than ending (`Holds.holdForFight`), and this
    * chip is the *only* place it is stated: the console is deliberately silent
    * about it, because a line per wandering monster is the chrome talking over
    * the `*Combat Engaged*` the server has already printed in the room.
@@ -602,19 +604,8 @@ function walkChip(walk: WalkProgress) {
    * two holds above: a condition is something somebody may want to come and
    * cure, where resting and fighting are the lap going as planned.
    */
-  if (walk.status === 'walking' && walk.hold === 'blind') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusBlind')}</span>;
-  }
-  if (walk.status === 'walking' && walk.hold === 'held') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusHeld')}</span>;
-  }
-  if (walk.status === 'walking' && walk.hold === 'poisoned') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusPoisoned')}</span>;
-  }
-  // What the realm's message table says is on the character: confused,
-  // losing hit points, or a row that says to wait.
-  if (walk.status === 'walking' && walk.hold === 'condition') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusCondition')}</span>;
+  if (walk.status === 'walking' && isAfflictionHold(walk.hold)) {
+    return <span className="chip warn">{afflictionStatus(walk.hold)}</span>;
   }
   /*
    * A shut door the ladder could not get past this round. `warn`, with the
@@ -700,10 +691,7 @@ function loopChip(loop: LoopProgress) {
   if (loop.status === 'running' && loop.hold === 'fight') {
     return <span className="chip bad">{t('cards.navigation.loop.statusFighting')}</span>;
   }
-  if (
-    loop.status === 'running' &&
-    (loop.hold === 'health' || loop.hold === 'mana' || loop.hold === 'resting')
-  ) {
+  if (loop.status === 'running' && loopIsResting(loop.hold)) {
     return <span className="chip info">{t('cards.navigation.loop.statusResting')}</span>;
   }
   // Ran away and standing still until the fight is over and the health is
@@ -722,17 +710,8 @@ function loopChip(loop: LoopProgress) {
   }
   // Waiting out a stated affliction before the next leg; `warn` for the
   // reason the walk's own chip gives — a condition may want curing.
-  if (loop.status === 'running' && loop.hold === 'blind') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusBlind')}</span>;
-  }
-  if (loop.status === 'running' && loop.hold === 'held') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusHeld')}</span>;
-  }
-  if (loop.status === 'running' && loop.hold === 'poisoned') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusPoisoned')}</span>;
-  }
-  if (loop.status === 'running' && loop.hold === 'condition') {
-    return <span className="chip warn">{t('cards.navigation.loop.statusCondition')}</span>;
+  if (loop.status === 'running' && isAfflictionHold(loop.hold)) {
+    return <span className="chip warn">{afflictionStatus(loop.hold)}</span>;
   }
   if (loop.status === 'running') {
     return <span className="chip on">{t('cards.navigation.loop.statusRunning')}</span>;
@@ -741,6 +720,24 @@ function loopChip(loop: LoopProgress) {
     return <span className="chip">{t('cards.navigation.loop.statusStopped')}</span>;
   }
   return null;
+}
+
+/** The condition a walk or a lap is waiting out, as both chips name it. */
+function afflictionStatus(hold: AfflictionHold): string {
+  switch (hold) {
+    case 'blind':
+      return t('cards.navigation.loop.statusBlind');
+    case 'held':
+      return t('cards.navigation.loop.statusHeld');
+    case 'poisoned':
+      return t('cards.navigation.loop.statusPoisoned');
+    case 'confused':
+      return t('cards.navigation.loop.statusConfused');
+    default: {
+      const unreachable: never = hold;
+      return unreachable;
+    }
+  }
 }
 
 /** `1h 02m` past an hour, `5m 12s` under it. Digits, so it stays in code. */

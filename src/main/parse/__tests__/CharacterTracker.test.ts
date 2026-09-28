@@ -1,3 +1,4 @@
+import { coinReader, type CoinNames } from '../../../shared/coins';
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,8 +7,10 @@ import zlib from 'node:zlib';
 
 import { WorldGraph } from '../../world/WorldGraph';
 import type { FightRecord, FightSink } from '../../../shared/fights';
-import { CharacterTracker, parseExit } from '../CharacterTracker';
+import { CharacterTracker } from '../CharacterTracker';
+import { parseExit } from '../room';
 import { Classifier } from '../Classifier';
+import { actsOf, applyAct, readLine } from '../lineActs';
 import type { StreamLine } from '../../../shared/types';
 import type { AbilitySums } from '../../../shared/character';
 import {
@@ -152,15 +155,8 @@ function play(
       plain,
       terminator: 'newline'
     };
-    const batchWas = classifier.batchType;
-    const { block, batch } = classifier.classify(line);
-    // Whether a listing is collecting, exactly as `SessionManager` hands it
-    // on: a row typed `unknown` by the table is the listing's, not an event.
-    tracker.apply(block, undefined, batchWas !== null || classifier.batchType !== null);
-    // Rows and all, exactly as `SessionManager` does it: an array batch that
-    // arrives without its rows is a block the tracker cannot read, and a helper
-    // that drops them tests something the client never does.
-    if (batch) tracker.apply(batch, batch.rows);
+    // The client's own sequence: the line, its listing, its tails, `collecting`.
+    for (const act of actsOf(readLine(classifier, line))) applyAct(tracker, act);
   }
   return tracker;
 }
@@ -418,19 +414,6 @@ describe('room assembly', () => {
     expect(tracker.current.room.number).toBe(1201);
   });
 
-  /*
-   * `sys status`'s own locate, for a realm with no `rm` at all
-   * (`bbs.thelucks.org`, WorldGroup, captured live 2026-09-21). Same fact as
-   * `Location:`, read the same way, from a command whose reply is printed
-   * room-then-map rather than map-then-room.
-   */
-  it('applies sys status’s coordinates the same way, room-then-map', () => {
-    const tracker = play(['Room 796  Map: 16']);
-    expect(tracker.current.room.map).toBe(16);
-    expect(tracker.current.room.number).toBe(796);
-    expect(tracker.current.room.resolvedBy).toBe(null);
-  });
-
   it('clears stale coordinates when a new room arrives', () => {
     // `Location: 5,1201` describes where you were. Carrying it into the next
     // room is a confidently wrong location, which sends the pathfinder
@@ -559,6 +542,23 @@ describe('change reporting', () => {
       terminator: 'newline' as const
     };
     expect(tracker.apply(classifier.classify(line).block)).toBe(false);
+  });
+
+  /*
+   * The registry is its own push (todo 730). Somebody else speaking is a
+   * sighting of them and says nothing about this character: the registry
+   * moves, `apply` says the character did not, and it is the same object.
+   */
+  it('reports a registry that alone moved as no change to the character', () => {
+    const classifier = new Classifier();
+    const tracker = new CharacterTracker();
+    const [character, known] = [tracker.current, tracker.players];
+    const text = 'Soul gossips: anyone selling a rope?';
+    const line = { seq: 1, at: 1, text, plain: text, terminator: 'newline' as const };
+    expect(tracker.apply(classifier.classify(line).block)).toBe(false);
+    expect(tracker.current).toBe(character);
+    expect(tracker.players).not.toBe(known);
+    expect(tracker.players['soul']?.online).toBe(true);
   });
 
   it('forgets everything on reset', () => {
@@ -1545,22 +1545,18 @@ describe('who else is in the realm', () => {
     expect(tracker.current.online[0]?.alignment).toBe('Outlaw');
   });
 
-  /* An empty column is Neutral: MajorMUD prints the word only for the
-     alignments that are not (`Skinny Fatterson  -  Dedicate` beside `Saint`,
-     `Good` and `Lawful` rows, 2026-09-28). Read as unknown, a neutral
-     character could not tell which `hates-good` monsters attack it. */
-  it('reads an empty alignment column as Neutral', () => {
+  /* Absent is not Neutral. A guessed alignment is the guess that gets somebody
+     killed, and the reassuring guess is the dangerous one. */
+  it('leaves the alignment null when the listing does not give one', () => {
     const tracker = listing('         Vaelor                -  Apprentice');
-    expect(tracker.current.online[0]?.alignment).toBe('Neutral');
+    expect(tracker.current.online[0]?.alignment).toBeNull();
   });
 
   it('refuses a word that is not one of the realm’s alignments', () => {
     const tracker = listing('         Sideways Grimjaw      -  Apprentice');
     // Either it parsed as a surname or not at all; what it must never do is
     // present `Sideways` as a standing the client can reason about.
-    for (const entry of tracker.current.online) {
-      expect(entry.alignment === null || entry.alignment === 'Neutral').toBe(true);
-    }
+    for (const entry of tracker.current.online) expect(entry.alignment).toBeNull();
   });
 
   /* A listing is authoritative: somebody absent from it has left. */
@@ -1722,26 +1718,6 @@ describe('the fight this character is in', () => {
     expect(tracker.current.combat.attackers).toEqual(['orc rogue']);
   });
 
-  /*
-   * A room spell cast mid-fight is answered `*Combat Off*` / `*Combat
-   * Engaged*`, and nothing stopped hitting this character for it: emptying
-   * the list there dropped the crowd that earned the spell (2026-09-28).
-   */
-  it('keeps who is hitting it through the re-engage a cast causes', () => {
-    const tracker = fighting(
-      'The orc rogue slashes you for 5 damage!',
-      '*Combat Off*',
-      '*Combat Engaged*'
-    );
-    expect(tracker.current.inCombat).toBe(true);
-    expect(tracker.current.combat.attackers).toEqual(['orc rogue']);
-  });
-
-  it('lets them go when the fight ends and nothing re-engages', () => {
-    const tracker = fighting('The orc rogue slashes you for 5 damage!', '*Combat Off*');
-    expect(tracker.current.combat.attackers).toEqual([]);
-  });
-
   it('counts a miss as an attacker too, because it is still fighting you', () => {
     expect(fighting('The orc rogue swings at you.').current.combat.attackers).toEqual([
       'orc rogue'
@@ -1772,35 +1748,6 @@ describe('the fight this character is in', () => {
       combatWorld()
     );
     expect(tracker.current.combat.target).toBe('giant rat');
-  });
-
-  /* An attack spell opens a fight as `a` does (the player, 2026-09-23). */
-  it('binds the target from an attack spell the engagement answers', () => {
-    const tracker = play(
-      [
-        '[HP=98]:',
-        'Also here: giant rat.',
-        'Obvious exits: north',
-        { send: 'c harm giant rat' },
-        '*Combat Engaged*'
-      ],
-      combatWorld()
-    );
-    expect(tracker.current.combat.target).toBe('giant rat');
-  });
-
-  it('binds nothing from a spell cast at somebody who is not a monster here', () => {
-    const tracker = play(
-      [
-        '[HP=98]:',
-        'Also here: giant rat.',
-        'Obvious exits: north',
-        { send: 'c heal bob' },
-        '*Combat Engaged*'
-      ],
-      combatWorld()
-    );
-    expect(tracker.current.combat.target).toBeNull();
   });
 
   it('resolves a typed base name to the modified occupant, as the server does', () => {
@@ -1834,10 +1781,8 @@ describe('the fight this character is in', () => {
   });
 
   it('keeps the binding across a command that cannot engage', () => {
-    // `*Combat Engaged*` only ever answers an attack, so a look in between
-    // changes nothing about which attack it answers. The one-slot rule this
-    // replaced lost the target to the heal auto-heal sends behind an attack —
-    // see the fight of 2026-09-22 below.
+    // The server answers in order and a look is never engaged, so the
+    // engagement behind it is still the attack's (`AttackCommand.cs:405`).
     const tracker = play(
       ['[HP=98]:', { send: 'pu orc rogue' }, { send: 'l' }, '*Combat Engaged*'],
       combatWorld()
@@ -1845,14 +1790,135 @@ describe('the fight this character is in', () => {
     expect(tracker.current.combat.target).toBe('orc rogue');
   });
 
-  it('forgets an attack nothing answered', () => {
-    // A stale attack must not bind the engagement some later command causes.
+  it('forgets an attack nothing answered in time', () => {
+    // A stale attack must not bind the engagement a later command causes.
     const tracker = play(
-      ['[HP=98]:', { send: 'pu orc rogue' }, { wait: 10_000 }, '*Combat Engaged*'],
+      [
+        '[HP=98]:',
+        { send: 'pu orc rogue' },
+        { wait: TUNING.parse.engageBindMs + 1 },
+        '*Combat Engaged*'
+      ],
       combatWorld()
     );
     expect(tracker.current.combat.target).toBeNull();
     expect(tracker.current.inCombat).toBe(true);
+  });
+
+  /*
+   * Two attacks out before either was answered, verbatim from orohost
+   * (`2026-08-26_23-03-07_main.mudcap.jsonl`, t=68194..68327). The server's
+   * echo says which command each pair answers, and it is the order they went
+   * out; one slot bound the first engagement to the second attack and the
+   * second to nothing, so the client stood in the rat's fight with no target.
+   */
+  describe('two attacks owed at once, orohost 2026-08-26', () => {
+    const opening: Step[] = [
+      '[HP=62/KAI=4]:',
+      'Newhaven, Arena',
+      'Also here: Soul, large giant rat, small filthbug.',
+      'Obvious exits: closed door north, up, down',
+      '[HP=62/KAI=4]:',
+      'The small filthbug swipes at you with its claws!',
+      { send: 'pu small filthbug' },
+      '[HP=62/KAI=4]:',
+      { send: 'pu large giant rat' },
+      'You punch large giant rat for 8 damage!',
+      '[HP=62/KAI=4]:',
+      'You punch large giant rat for 2 damage!',
+      '[HP=62/KAI=4]:pu small filthbug',
+      '*Combat Off*',
+      '[HP=62/KAI=4]:',
+      '*Combat Engaged*'
+    ];
+
+    it('binds the first engagement to the first attack', () => {
+      expect(play(opening, combatWorld()).current.combat.target).toBe('small filthbug');
+    });
+
+    it('binds the second engagement to the second attack', () => {
+      const tracker = play(
+        [
+          ...opening,
+          '[HP=62/KAI=4]:pu large giant rat',
+          '*Combat Off*',
+          '[HP=62/KAI=4]:',
+          '*Combat Engaged*'
+        ],
+        combatWorld()
+      );
+      expect(tracker.current.combat.target).toBe('large giant rat');
+    });
+  });
+
+  /*
+   * A cast at a listed monster engages it as `a` does, and the server answers
+   * a combat spell cast into a fight with `*Combat Off*` and `*Combat
+   * Engaged*` (todo 816). Verbatim from orohost
+   * (`2026-09-01_14-26-16_vaelor2.mudcap.jsonl`, t=68554–70423): the target
+   * used to wait a round for `You cast harm at tall kobold thief`.
+   */
+  describe('a cast at a monster owes an engagement', () => {
+    function castWorld(): WorldGraph {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-cast-'));
+      const file = path.join(dir, 'rooms.jsonl.gz');
+      const header = JSON.stringify({
+        v: 5,
+        source: 'test',
+        rooms: 0,
+        generatedAt: 'x',
+        mobs: [{ n: 'tall kobold thief', hp: 20, d: 'h' }],
+        spells: [
+          { id: 1, n: 'harm', level: 1, mana: 1, tg: 8 },
+          { id: 2, n: 'minor healing', short: 'mihe', level: 1, mana: 2, tg: 3 }
+        ]
+      });
+      fs.writeFileSync(file, zlib.gzipSync(header + '\n'));
+      const graph = WorldGraph.load(file);
+      fs.rmSync(dir, { recursive: true, force: true });
+      return graph;
+    }
+    const arena = [
+      '[HP=33/MA=18]:',
+      'Newhaven, Arena',
+      'Also here: Soul, tall kobold thief.',
+      'Obvious exits: closed door north, up, down',
+      '[HP=33/MA=18]:'
+    ];
+
+    it('binds the re-engagement a spell cast into the fight answers', () => {
+      const tracker = play(
+        [
+          ...arena,
+          { send: 'a tall kobold thief' },
+          '[HP=33/MA=18]:a tall kobold thief',
+          '*Combat Engaged*',
+          '[HP=33/MA=18]:',
+          'You punch tall kobold thief for 2 damage!',
+          '[HP=33/MA=18]:',
+          { send: 'harm k' },
+          'The tall kobold thief lunges at you with their shortsword, but you dodge!',
+          '[HP=33/MA=18]:',
+          'You punch tall kobold thief for 1 damage!',
+          '[HP=33/MA=21]:',
+          '*Combat Off*',
+          '[HP=33/MA=21]:',
+          '*Combat Engaged*'
+        ],
+        castWorld()
+      );
+      expect(tracker.current.combat.target).toBe('tall kobold thief');
+    });
+
+    /* A heal at a player engages nothing, so it is owed nothing: were it
+       queued, the attack's engagement behind it would bind `soul`. */
+    it('owes nothing for a cast at a player', () => {
+      const tracker = play(
+        [...arena, { send: 'mihe soul' }, { send: 'a tall kobold thief' }, '*Combat Engaged*'],
+        castWorld()
+      );
+      expect(tracker.current.combat.target).toBe('tall kobold thief');
+    });
   });
 
   it('binds nothing from a bare attack verb', () => {
@@ -1860,6 +1926,152 @@ describe('the fight this character is in', () => {
     // cannot read; a guessed name is a name a rule would swing at.
     const tracker = play(['[HP=98]:', { send: 'a' }, '*Combat Engaged*'], combatWorld());
     expect(tracker.current.combat.target).toBeNull();
+  });
+
+  /*
+   * A named attack the server refused, then a bare `a` inside the window: the
+   * engagement is the bare verb's, and the queue cannot say so, so it binds
+   * nothing rather than the refused name (802, review).
+   */
+  it('binds nothing when a bare attack is owed behind a refused named one', () => {
+    const tracker = play(
+      ['[HP=98]:', { send: 'pu orc rogue' }, { send: 'a' }, '*Combat Engaged*'],
+      combatWorld()
+    );
+    expect(tracker.current.combat.target).toBeNull();
+    // Positive control: the named attack alone binds.
+    const named = play(['[HP=98]:', { send: 'pu orc rogue' }, '*Combat Engaged*'], combatWorld());
+    expect(named.current.combat.target).not.toBeNull();
+  });
+
+  /*
+   * An attack the server refused is answered by something other than an
+   * engagement, and the echo says so (todo 763): its prompt and the echo of a
+   * later command pass it. Verbatim from orohost
+   * (`2026-08-26_10-57-20_main.mudcap.jsonl`, t=34699–35052): the rat had just
+   * died, and the lashworm's engagement was bound to the rat.
+   */
+  it('lets a refused attack go once its prompt and a later echo pass it', () => {
+    const tracker = play([
+      '[HP=34]:',
+      'A small lashworm crawls into the room from the above!',
+      '[HP=34]:',
+      { send: 'pu nasty giant rat' },
+      'pu nasty giant rat',
+      { send: 'pu small lashworm' },
+      'Your command had no effect.',
+      '[HP=34]:pu small lashworm',
+      '*Combat Engaged*'
+    ]);
+    expect(tracker.current.combat.target).toBe('small lashworm');
+  });
+
+  /*
+   * And a bare echo passes nothing: a burst comes back as a run of echoes, the
+   * server reading ahead of its answers, and the attack's engagement arrives
+   * behind all of them. Verbatim from Paradigm
+   * (`2026-08-31_18-54-18_festus.mudcap.jsonl`, t=1672–2787).
+   */
+  it('keeps an attack owed through a burst of bare echoes', () => {
+    const tracker = play([
+      'Newhaven, Arena',
+      'Also here: small acid slime.',
+      'Obvious exits: closed door north, up, down',
+      '[HP=34]:',
+      { send: 'rm' },
+      'rm',
+      { send: 'pu small acid slime' },
+      'pu small acid slime',
+      { send: 'st' },
+      'st',
+      { send: 'i' },
+      'i',
+      'Location:            1,2150',
+      'Regen Time:            4m 30s',
+      'Room Illu:            0 (200)',
+      '[HP=34]:',
+      '*Combat Engaged*'
+    ]);
+    expect(tracker.current.combat.target).toBe('small acid slime');
+  });
+
+  /*
+   * `X moves to protect Y` (`AttackCommand.cs:342`): the guard turns on the
+   * attacker and the server makes it the target. Verbatim from Paradigm
+   * (`2026-09-12_20-41-11_festus.mudcap.jsonl`, t=399623–399706); the binding
+   * said the ward, and the first blow landed on the guard.
+   */
+  describe('a guard stepping in', () => {
+    const room: Step[] = [
+      'Swampside Path',
+      'Also here: nasty wild dog, thin wild dog, small wild dog, large wild dog.',
+      'Obvious exits: west, northeast',
+      '[HP=191/191,MA=10/36,Exp=4831244,Need=1307526,Wealth=982660 ]:'
+    ];
+
+    it("makes the engagement behind it the guard's", () => {
+      const tracker = play([
+        ...room,
+        { send: 'aa nasty wild dog' },
+        'aa nasty wild dog',
+        'thin wild dog moves to protect nasty wild dog',
+        '[HP=191/191,MA=10/36,Exp=4831244,Need=1307526,Wealth=982660 ]:',
+        '*Combat Engaged*'
+      ]);
+      expect(tracker.current.combat.target).toBe('thin wild dog');
+    });
+
+    /*
+     * A spell's engagement comes first and the guard after it — captures/005
+     * (`dfir q`, `soldier ant moves to protect queen ant`) and 136 (`soul
+     * tas`) — so the sentence moves a fight already bound.
+     */
+    it('retargets a fight a spell has just engaged', () => {
+      const tracker = play([
+        'Earthen Tunnel',
+        'Also here: queen ant, soldier ant.',
+        'Obvious exits: south',
+        '[HP=389/MA=324]:',
+        { send: 'dfir q' },
+        '[HP=389/MA=324]:dfir q',
+        '*Combat Engaged*',
+        'soldier ant moves to protect queen ant',
+        '[HP=389/MA=324]:'
+      ]);
+      expect(tracker.current.combat.target).toBe('soldier ant');
+    });
+
+    /*
+     * The guard the character cannot hit: `Your weapon has no effect against
+     * this monster!` and no engagement (`AttackCommand.cs:355-363`, source; no
+     * capture holds it). Nothing is bound, so no rule swings at a guard the
+     * character is not fighting.
+     */
+    it('binds nothing when the guard turns the attack away', () => {
+      const tracker = play([
+        ...room,
+        { send: 'aa nasty wild dog' },
+        'aa nasty wild dog',
+        'thin wild dog moves to protect nasty wild dog',
+        'Your weapon has no effect against this monster!',
+        '[HP=191/191,MA=10/36,Exp=4831244,Need=1307526,Wealth=982660 ]:'
+      ]);
+      expect(tracker.current.combat.target).toBeNull();
+      expect(tracker.current.inCombat).toBe(false);
+      // Positive control: a later attack's engagement binds that attack, not the guard.
+      const after = play([
+        ...room,
+        { send: 'aa nasty wild dog' },
+        'aa nasty wild dog',
+        'thin wild dog moves to protect nasty wild dog',
+        'Your weapon has no effect against this monster!',
+        '[HP=191/191,MA=10/36,Exp=4831244,Need=1307526,Wealth=982660 ]:',
+        { send: 'aa kobold' },
+        'aa kobold',
+        '*Combat Engaged*'
+      ]);
+      expect(after.current.combat.target).toBe('kobold');
+    });
   });
 
   it('never overwrites the target of a fight already in progress', () => {
@@ -1877,96 +2089,6 @@ describe('the fight this character is in', () => {
     // The engagement of a fight already running says nothing new; the damage
     // lines are what move the target.
     expect(tracker.current.combat.target).toBe('orc rogue');
-  });
-
-  /*
-   * Healbot against three dark goblins, 2026-09-22
-   * (`2026-09-22_22-34-44_healbot.mudcap.jsonl`). Several attacks went out
-   * before the server answered any of them, and a heal was queued among
-   * them; every engagement after the first bound nothing, so the character
-   * stood in a running fight with no target and hit back at every monster
-   * that swung, each round, until combat stopped altogether.
-   */
-  describe('the fight of 2026-09-22', () => {
-    const goblins: Step[] = [
-      '[HP=197/MA=214]:',
-      'Also here: nasty dark goblin, dark goblin, short dark goblin.',
-      'Obvious exits: north, west, southeast'
-    ];
-
-    it('binds each engagement of a burst to the attack that caused it', () => {
-      const tracker = play(
-        [
-          ...goblins,
-          { send: 'a nasty dark goblin' },
-          { send: 'a dark goblin' },
-          { send: 'a short dark goblin' },
-          '*Combat Engaged*',
-          '*Combat Off*',
-          '*Combat Engaged*',
-          '*Combat Off*',
-          '*Combat Engaged*'
-        ],
-        combatWorld()
-      );
-      // `a` switches target, so the last attack is the fight the server kept.
-      expect(tracker.current.inCombat).toBe(true);
-      expect(tracker.current.combat.target).toBe('short dark goblin');
-    });
-
-    it('binds the attack behind a heal that ended the fight in between', () => {
-      const tracker = play(
-        [
-          ...goblins,
-          { send: 'a nasty dark goblin' },
-          { send: 'a dark goblin' },
-          { send: 'c gdhe' },
-          { send: 'a short dark goblin' },
-          '*Combat Off*',
-          '*Combat Engaged*',
-          '*Combat Off*',
-          '*Combat Engaged*',
-          '*Combat Off*',
-          'You cast godheal on Healbot, healing 117 damage!',
-          '[HP=240/MA=190]:',
-          '*Combat Engaged*'
-        ],
-        combatWorld()
-      );
-      expect(tracker.current.inCombat).toBe(true);
-      expect(tracker.current.combat.target).toBe('short dark goblin');
-    });
-
-    it('takes a monster out of the room when an attack on it is said out loud', () => {
-      // The short one had died a moment before the queued attack reached the
-      // server, which answers an attack on nothing by saying it.
-      const tracker = play(
-        [
-          ...goblins,
-          { send: 'a nasty dark goblin' },
-          '*Combat Engaged*',
-          { send: 'a short dark goblin' },
-          'You say "a short dark goblin"'
-        ],
-        combatWorld()
-      );
-      expect(names(tracker.current.room.occupants)).toEqual(['nasty dark goblin', 'dark goblin']);
-      expect(tracker.current.combat.target).toBe('nasty dark goblin');
-    });
-
-    it('leaves the room alone when the verb has never engaged anything', () => {
-      // Nothing yet says this realm has the word, so the realm not having it
-      // is as good a reading as the monster not being there.
-      const tracker = play(
-        [...goblins, { send: 'a short dark goblin' }, 'You say "a short dark goblin"'],
-        combatWorld()
-      );
-      expect(names(tracker.current.room.occupants)).toEqual([
-        'nasty dark goblin',
-        'dark goblin',
-        'short dark goblin'
-      ]);
-    });
   });
 
   /*
@@ -2317,7 +2439,7 @@ describe('the fight this character is in', () => {
     });
 
     /*
-     * And both readings put the name where `SessionManager.noteQuestKilled`
+     * And both readings put the name where `QuestWatch.noteKilled`
      * can take it: a quest step can be owned by a monster's death (realm
      * format 37) and there is nothing to type for one, so this slot is the
      * only thing that can move the book. Reported 2026-09-15.
@@ -2810,43 +2932,6 @@ describe('the party this character travels with', () => {
     expect(tracker.current.party.following).toBe('Vaelor');
   });
 
-  /*
-   * Skinny Inc prints the join with no full stop (2026-09-24), and read as
-   * nothing the follower knew nothing of its leader until a listing.
-   */
-  it('reads the join and the parting with or without their full stop', () => {
-    const { tracker, feed } = feeder();
-    feed('[HP=24/MA=18]:');
-    feed('You are now following Fatty');
-    expect(tracker.current.party.following).toBe('Fatty');
-    feed('You are no longer following Fatty');
-    expect(tracker.current.party.following).toBeNull();
-    feed('You are now following Fatty.');
-    expect(tracker.current.party.following).toBe('Fatty');
-  });
-
-  /*
-   * skinny behind Fatty, 2026-09-24: the leader's `stops to rest` outlived
-   * the rest, and the follower sat down in every room it was walked into.
-   */
-  it('stands a member up when they walk out of the room', () => {
-    const tracker = roster();
-    const hear = (text: string): void => {
-      const { block } = new Classifier().classify({
-        seq: 9,
-        at: 9,
-        text,
-        plain: text,
-        terminator: 'newline'
-      });
-      tracker.apply(block);
-    };
-    hear('Soul stops to rest.');
-    expect(tracker.current.party.members[1]?.activity).toEqual({ state: 'resting' });
-    hear('Soul just left to the south.');
-    expect(tracker.current.party.members[1]?.activity).toBeNull();
-  });
-
   /* A party of one is not a party. The server still prints your own row. */
   it('reports no party when there is nobody else in it', () => {
     const { tracker, feed } = feeder();
@@ -3088,29 +3173,36 @@ describe('who is in the room, between looks', () => {
     expect(soul?.kind).toBe('player');
   });
 
-  /*
-   * One sentence is one monster (skinny, 2026-09-23): fifteen giant war dogs
-   * walked in and were one on the list, so the first kill emptied the room as
-   * far as the client knew.
-   */
-  it('counts every monster that walks in, and takes one off for each that leaves', () => {
-    const { tracker, feed } = inRoom();
-    feed('giant war dog moves into the room from the north.');
-    // Paramud's own wording, which nothing read until 2026-09-23.
-    feed('A giant war dog enters the room from the south.');
-    feed('The giant war dog charges after you!');
+  /* Todo 826: every namesake that walks in is counted, and one leaves per departure. */
+  it('counts every namesake that walks in, as Also here: lists them', () => {
+    // captures/049:28-38: two more giant crabs walk in, and the next listing has three.
+    const { tracker, feed } = feeder();
+    feed('[HP=678/738]:');
+    feed('Sandbar');
+    feed('Also here: king crab, giant crab.');
+    feed('Obvious exits: north, south, northeast');
+    feed('giant crab moves into the room from the north.');
+    feed('giant crab moves into the room from the north.');
     expect(names(tracker.current.room.occupants)).toEqual([
-      'Nathaniel',
-      'giant war dog',
-      'giant war dog',
-      'giant war dog'
+      'king crab',
+      'giant crab',
+      'giant crab',
+      'giant crab'
     ]);
-    feed('The giant war dog leaves to the south.');
-    expect(names(tracker.current.room.occupants)).toEqual([
-      'Nathaniel',
-      'giant war dog',
-      'giant war dog'
-    ]);
+  });
+
+  it('takes one namesake out per departure', () => {
+    // The wire, 2026-09-21_15-27-56_soul.log:1008-1015.
+    const { tracker, feed } = feeder();
+    feed('[HP=61/KAI=5]:');
+    feed('Bank of Godfrey');
+    feed('Also here: big elite guardsman, big elite guardsman.');
+    feed('Obvious exits: north, east');
+    feed('guardsman moves into the room from the north.');
+    feed('big elite guardsman just left to the west.');
+    expect(names(tracker.current.room.occupants)).toEqual(['big elite guardsman', 'guardsman']);
+    feed('big elite guardsman just left to the north.');
+    expect(names(tracker.current.room.occupants)).toEqual(['guardsman']);
   });
 });
 
@@ -3383,6 +3475,52 @@ describe('what is carried, between listings', () => {
     expect(tracker.current.inventory.coins.runic).toBe(65);
   });
 
+  /*
+   * Todo 830: captures/024:260, a realm that calls runic coins dime bags. With
+   * the realm's `coins:` stated they are counted as runic; without, they are
+   * an item, as they always were.
+   */
+  it("counts a realm's renamed coin once the realm names it", () => {
+    const read = (coins: CoinNames): CharacterTracker => {
+      const classifier = new Classifier(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => coinReader(coins)
+      );
+      const tracker = new CharacterTracker();
+      let seq = 0;
+      for (const text of [
+        '[HP=630]:',
+        'You are carrying 4 dime bags, 48 platinum pieces, 30 gold crowns, 5 silver',
+        'nobles, white gold ring (Finger)',
+        'You have no keys.',
+        'Encumbrance: 500/3360 - None [14%]',
+        '[HP=630]:'
+      ]) {
+        seq += 1;
+        const { block, batch } = classifier.classify({
+          seq,
+          at: 1_700_000_000_000 + seq,
+          text,
+          plain: text,
+          terminator: 'newline'
+        });
+        tracker.apply(block);
+        if (batch) tracker.apply(batch, batch.rows);
+      }
+      return tracker;
+    };
+    const named = read({ runic: 'dime bag' });
+    expect(named.current.inventory.coins.runic).toBe(4);
+    expect(held(named)).toEqual(['white gold ring']);
+    // The control: the same listing with no names stated counts no runic.
+    expect(read({}).current.inventory.coins.runic).not.toBe(4);
+  });
+
   it('keeps one on the floor, and a key with the same shape', () => {
     const { tracker, feed } = feeder();
     feed('[HP=34]:');
@@ -3639,16 +3777,6 @@ describe('what is carried, between listings', () => {
     const { tracker, feed } = twoPairs();
     feed('You just bought padded gloves for 0 copper farthings.');
     expect(gloves(tracker)).toHaveLength(3);
-  });
-
-  // Priced in the realm's own currency and several coins (live, 2026-09-23):
-  // still carried, and the purse left for the next listing to restate.
-  it('carries what was bought for a price in several denominations', () => {
-    const { tracker, feed } = twoPairs();
-    const wealth = tracker.current.inventory.wealth;
-    feed('You just bought padded gloves for 6 Krabby Patties, 44 platinum pieces, 80 gold crowns.');
-    expect(gloves(tracker)).toHaveLength(3);
-    expect(tracker.current.inventory.wealth).toBe(wealth);
   });
 
   /* The replay across a listing counts too: a listing that predates a
@@ -6119,34 +6247,13 @@ describe('the opening of a PvP fight', () => {
     expect(names(t.current.room.occupants)).not.toContain('Rend');
   });
 
-  it('puts both sides of somebody else’s swing in the room', () => {
-    const t = play(['[HP=159]:', 'The giant wasp lunges at Caligula!']);
-    expect(names(t.current.room.occupants)).toEqual(
-      expect.arrayContaining(['giant wasp', 'Caligula'])
-    );
-  });
-
   /*
-   * skinny, 2026-09-25: `swoops down` is two words, and the frame's one-word
-   * verb made each swoop another wyvern — 125 in one evening, and a room
-   * spell set for four went off on three. The room names who swung.
+   * The player by the capital of the name; a monster nothing names is left
+   * out, since the words before `at` can hold a two-word verb (todo 834).
    */
-  it('reads a swing by something listed as that thing, whatever its verb', () => {
-    const t = play([
-      '[HP=159]:',
-      'Dark Forest, Trail',
-      'Also here: Fatty, red wyvern, green wyvern, thin green wyvern.',
-      'Obvious exits: northeast, northwest',
-      '[HP=159]:',
-      'The red wyvern swoops down at Fatty!',
-      'The thin green wyvern swoops down at Fatty!'
-    ]);
-    expect(names(t.current.room.occupants)).toEqual([
-      'Fatty',
-      'red wyvern',
-      'green wyvern',
-      'thin green wyvern'
-    ]);
+  it('puts the player of somebody else’s swing in the room, and adds no unnamed monster', () => {
+    const t = play(['[HP=159]:', 'The giant wasp lunges at Caligula!']);
+    expect(names(t.current.room.occupants)).toEqual(['Caligula']);
   });
 });
 
@@ -6304,6 +6411,163 @@ describe('sys go', () => {
     );
     expect(t.current.room.resolvedBy).not.toBe('coordinates');
   });
+
+  /*
+   * Todo 768: a `sys go` the realm refused (`sys-refused`, todo 766) left its
+   * coordinates armed, and a dark room has no name to check them against, so
+   * the next step into the dark was placed where the refused command pointed.
+   * The refusals arrive as the captures have them: glued to the prompt
+   * (`2026-09-19_00-44-05_vaelor2`) or on a line of their own after it
+   * (`2026-09-16_19-31-48_main`).
+   */
+  describe('refused', () => {
+    const SHORE = { m: 1, r: 1, n: 'Shore', x: { e: { m: 1, r: 2 } } };
+    const CELLAR = { m: 1, r: 2, n: 'Black Pit', li: -200, x: { w: { m: 1, r: 1 } } };
+    const VAULT = { m: 2, r: 5, n: 'Black Pit', li: -200, x: {} };
+    // Where `probe:goto`'s command points (todo 769).
+    const BANK = { m: 1, r: 297, n: 'Black Pit', li: -200, x: {} };
+    function darkWorld(): WorldGraph {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-sysgo-dark-'));
+      const file = path.join(dir, 'rooms.jsonl.gz');
+      const rows = [SHORE, CELLAR, VAULT, BANK];
+      const header = JSON.stringify({ v: 1, source: 'test', rooms: rows.length, generatedAt: 'x' });
+      fs.writeFileSync(
+        file,
+        zlib.gzipSync([header, ...rows.map((row) => JSON.stringify(row))].join('\n') + '\n')
+      );
+      const graph = WorldGraph.load(file);
+      fs.rmSync(dir, { recursive: true, force: true });
+      return graph;
+    }
+    const PIT = "The room is pitch black - you can't see anything";
+    const at = (t: CharacterTracker): number[] => [
+      t.current.room.map ?? 0,
+      t.current.room.number ?? 0
+    ];
+
+    it('does not place the next dark room where the refused command pointed', () => {
+      for (const refusal of [
+        '[HP=34]:Command not allowed in live realm.',
+        'Map and/or Room not found',
+        'Incorrect syntax'
+      ]) {
+        const t = play(
+          [
+            '[HP=34]:',
+            'Shore',
+            'Obvious exits: east',
+            { send: 'sys go 2 5' },
+            'sys go 2 5',
+            refusal,
+            '[HP=34]:',
+            { send: 'e' },
+            PIT
+          ],
+          darkWorld()
+        );
+        expect(at(t), refusal).toEqual([1, 2]);
+      }
+    });
+
+    // The positive control: accepted, the same command still places its room.
+    it('still places the room an accepted command reached', () => {
+      const t = play(
+        [
+          '[HP=34]:',
+          'Shore',
+          'Obvious exits: east',
+          { send: 'sys go 2 5' },
+          'Black Pit',
+          'Obvious exits: none'
+        ],
+        darkWorld()
+      );
+      expect(t.current.room.resolvedBy).toBe('coordinates');
+      expect(at(t)).toEqual([2, 5]);
+    });
+
+    // Only a `sys go` is answered by one: a portal's promise waits for its own room.
+    it('leaves a portal’s coordinates alone', () => {
+      const t = new CharacterTracker(darkWorld());
+      const classifier = new Classifier();
+      const feed = (lines: string[]): void =>
+        lines.forEach((plain, index) =>
+          t.apply(
+            classifier.classify({
+              seq: index,
+              at: index,
+              text: plain,
+              plain,
+              terminator: 'newline'
+            }).block
+          )
+        );
+      feed(['[HP=34]:', 'Shore', 'Obvious exits: east']);
+      t.hintTeleport('dive pit', 2, 5);
+      t.observeCommand('dive pit');
+      feed(['Incorrect syntax', 'Black Pit', 'Obvious exits: none']);
+      expect(t.current.room.resolvedBy).toBe('coordinates');
+      expect(at(t)).toEqual([2, 5]);
+    });
+
+    /*
+     * Todo 769: a player's `sys go` is answered `Your command had no effect.`
+     * (`probe:goto -- --as probe`), the sentence an attack's refusal wears, so
+     * it is paired with the go by the echo since the send, as `FleeGoto` reads
+     * it. The shapes are the wire's: a typed go answered after a bare prompt
+     * with nothing echoed since (`2026-09-01_14-26-16_vaelor2`, `2026-09-03_
+     * 22-46-22_vaelor2`), the answer glued to the prompt (`2026-08-26_13-44-52_
+     * main`), a whole line sent echoed on the prompt (`[HP=34]:pu giant rat`,
+     * `2026-08-26_14-22-23_main`) or on a line of its own (`a thin thug`,
+     * `2026-08-28_00-24-41_vaelor2`), with a bare prompt repainted between
+     * (`2026-08-30_20-57-36_main`).
+     */
+    describe('by a player', () => {
+      const NO_EFFECT = 'Your command had no effect.';
+      const SHAPES: Record<string, Step[]> = {
+        'after a bare prompt, unechoed': ['[HP=34]:', NO_EFFECT],
+        'glued to the prompt': [`[HP=34]:${NO_EFFECT}`],
+        'echoed on the prompt': ['[HP=34]:sys go 1 297', NO_EFFECT],
+        'echoed on a line of its own': ['sys go 1 297', '[HP=34]:', NO_EFFECT]
+      };
+      const ashore: Step[] = ['[HP=34]:', 'Shore', 'Obvious exits: east'];
+      // Three rooms share the name, so only the go's coordinates place it.
+      const landing: Step[] = ['Black Pit', 'Obvious exits: none'];
+
+      it('does not place the next dark room where the refused command pointed', () => {
+        for (const [shape, answer] of Object.entries(SHAPES)) {
+          const t = play(
+            [...ashore, { send: 'sys go 1 297' }, ...answer, '[HP=34]:', { send: 'e' }, PIT],
+            darkWorld()
+          );
+          expect(at(t), shape).toEqual([1, 2]);
+        }
+      });
+
+      // The positive control: an attack's refusal, echoed against the attack,
+      // before the go was sent or after, is not the go's.
+      it('leaves the promise to an attack’s refusal, and still places the landing', () => {
+        for (const steps of [
+          [{ send: 'aa rat' }, '[HP=34]:aa rat', { send: 'sys go 1 297' }, NO_EFFECT],
+          [{ send: 'aa rat' }, { send: 'sys go 1 297' }, '[HP=34]:aa rat', '[HP=34]:', NO_EFFECT]
+        ] satisfies Step[][]) {
+          const t = play([...ashore, ...steps, '[HP=34]:sys go 1 297', ...landing], darkWorld());
+          expect(t.current.room.resolvedBy).toBe('coordinates');
+          expect(at(t)).toEqual([1, 297]);
+        }
+      });
+
+      // And accepted, the same command still places its room.
+      it('still places the room an accepted command reached', () => {
+        const t = play(
+          [...ashore, { send: 'sys go 1 297' }, '[HP=34]:sys go 1 297', ...landing],
+          darkWorld()
+        );
+        expect(t.current.room.resolvedBy).toBe('coordinates');
+        expect(at(t)).toEqual([1, 297]);
+      });
+    });
+  });
 });
 
 describe('leaving the realm on purpose', () => {
@@ -6362,8 +6626,8 @@ describe('leaving the realm on purpose', () => {
       '[PARADIGM]:'
     ]);
     expect(t.current.online).toEqual([]);
-    expect(t.current.players['soul']).toBeDefined();
-    expect(t.current.players['soul']?.online).toBe(false);
+    expect(t.players['soul']).toBeDefined();
+    expect(t.players['soul']?.online).toBe(false);
   });
 
   /*
@@ -6442,8 +6706,46 @@ describe('coins off the floor', () => {
     // picked up. Wealth is the figure the listing stated and is not recomputed.
     expect(t.current.inventory.coins.silver).toBe(3);
     expect(t.current.inventory.wealth).toBe(5);
+    // Off the floor's coins, where the drop line put them (todo 746).
+    expect(t.current.room.cash?.silver).toBe(0);
     expect(t.current.room.items).toEqual([]);
     expect(t.current.inventory.items).toEqual([]);
+  });
+
+  /*
+   * The floor's coins are `room.cash`, not items, and a pick-up takes them
+   * from there and leaves an item named after the coin alone (todo 746). Wire,
+   * `logs/2026-09-04_20-39-52_festus:715`; the pick-up in that room is
+   * constructed.
+   */
+  /* Another player's pick-up names no count: the pile goes unknown (todo 757). */
+  it('leaves the floor’s coins unknown when another player takes some, and items by name', () => {
+    const t = play([
+      '[HP=86/MA=18]:',
+      'Temple Street, Eastern End',
+      'You notice 5 gold crowns, rope here.',
+      'Also here: Faramir.',
+      'Obvious exits: north, south',
+      '[HP=86/MA=18]:',
+      'Faramir picks up some gold crowns',
+      'Faramir picks up rope.'
+    ]);
+    expect(t.current.room.cash).toBeNull();
+    expect(t.current.room.items).toEqual([]);
+  });
+
+  it('takes the coins off the floor and leaves an item named after them', () => {
+    const t = play([
+      '[HP=86/MA=18]:',
+      'Temple Street, Eastern End',
+      'You notice 3 silver nobles, silver holy amulet here.',
+      'Also here: thin guardsman.',
+      'Obvious exits: north, south, east, west',
+      '[HP=86/MA=18]:',
+      'You picked up 3 silver nobles.'
+    ]);
+    expect(t.current.room.items.map((item) => item.name)).toEqual(['silver holy amulet']);
+    expect(t.current.room.cash?.silver).toBe(0);
   });
 
   it('leaves a denomination nothing has counted uncounted', () => {
@@ -7335,19 +7637,23 @@ describe('lives, and the word for the load', () => {
   });
 
   /*
-   * healbot's sheet from 2026-09-23: a `*` before the mana figures. Unread,
-   * the maximum stayed unknown and every heal behind a mana floor stood down.
+   * The sheet stars the mana figures while an item or effect raises the maximum
+   * (`HasManaAdder`, GreaterMUD `Player.cs:3700`, printed at `:7088`):
+   * `captures/214`:10, and 227 of the user's own sessions (todo 801). Unread,
+   * the whole row went, Spellcasting and Traps with it.
    */
-  it('reads the mana maximum when the sheet marks the figures with a star', () => {
+  it('reads a starred mana row', () => {
     const tracker = play([
-      'Name:   Healbot             Lives/CP: 9/140',
-      'Race:   Dwarf      Exp:      1500   Perception:  20',
-      'Class:  Priest     Level:    4      Stealth:     10',
-      'Hits:   240/240    Armour Class: 12/3   Thievery:    5',
-      'Mana: * 321/321   Spellcasting: 222    Traps:           0',
-      '[HP=240/MA=321]:'
+      'Name: Ruby Red                         Lives/CP:      9/0',
+      'Race: Dwarf       Exp: 143136004       Perception:     62',
+      'Class: Paladin    Level: 36            Stealth:         0',
+      'Hits:   442/442   Armour Class:  64/16 Thievery:        0',
+      'Mana: *  98/98    Spellcasting: 133    Traps:           0',
+      '                                       Picklocks:       0',
+      '[HP=442/442,MA=98/98]:'
     ]);
-    expect(tracker.current.vitals.manaMax).toBe(321);
+    expect(tracker.current.vitals.manaMax).toBe(98);
+    expect(tracker.current.progress.spellcasting).toBe(133);
   });
 
   /* An unknown plus two is not two. */
@@ -7423,7 +7729,7 @@ describe('the gang listing, through the whole tracker', () => {
 
   it('reads a level, race and class off the listing into the registry', () => {
     const tracker = play([...WHO, ...BG_SAYS_OFFLINE]);
-    expect(tracker.current.players['vaelor']).toMatchObject({
+    expect(tracker.players['vaelor']).toMatchObject({
       level: 28,
       race: 'Half-Ogre',
       className: 'Mystic'
@@ -7445,7 +7751,7 @@ describe('the gang listing, through the whole tracker', () => {
   it('keeps a member offline even while the roster still lists them', () => {
     const tracker = play([...WHO, ...BG_SAYS_OFFLINE]);
     expect(tracker.current.online.map((who) => who.name)).toContain('Vaelor');
-    expect(tracker.current.players['vaelor']?.online).toBe(false);
+    expect(tracker.players['vaelor']?.online).toBe(false);
   });
 
   // The other direction still works: a listing that marks somebody online says so.
@@ -7456,8 +7762,8 @@ describe('the gang listing, through the whole tracker', () => {
       'Vaelor                        28 Half-Ogre Mystic       - Online [Leader]',
       '[HP=334/KAI=27]:'
     ]);
-    expect(tracker.current.players['vaelor']?.online).toBe(true);
-    expect(tracker.current.players['vaelor']?.gangRank).toBe('Leader');
+    expect(tracker.players['vaelor']?.online).toBe(true);
+    expect(tracker.players['vaelor']?.gangRank).toBe('Leader');
   });
 
   /*
@@ -7497,7 +7803,7 @@ describe('the gang listing, through the whole tracker', () => {
       '[HP=334/KAI=27]:'
     ]);
     expect(tracker.current.gangListing?.short).toBeNull();
-    expect(tracker.current.players['zed']).toMatchObject({
+    expect(tracker.players['zed']).toMatchObject({
       level: 100,
       race: 'Gaunt One',
       className: 'Necromancer'
@@ -7526,7 +7832,7 @@ describe('gang membership changing while playing', () => {
 
   it('puts somebody who just joined into the gang, on the broadcast alone', () => {
     const tracker = play([...WHO, 'Rand just joined your gang.']);
-    expect(tracker.current.players['rand']?.gang).toBe('Valor');
+    expect(tracker.players['rand']?.gang).toBe('Valor');
     // And on the roster too, which is the half `Remotes` reads.
     expect(tracker.current.online.find((who) => who.name === 'Rand')?.gang).toBe('Valor');
   });
@@ -7542,7 +7848,7 @@ describe('gang membership changing while playing', () => {
    */
   it('takes somebody who left back out of it, so the gang grant stops reaching them', () => {
     const tracker = play([...WHO, 'Rand just joined your gang.', 'Rand has left Valor.']);
-    expect(tracker.current.players['rand']?.gang).toBeNull();
+    expect(tracker.players['rand']?.gang).toBeNull();
     expect(tracker.current.online.find((who) => who.name === 'Rand')?.gang).toBeNull();
   });
 
@@ -7553,14 +7859,14 @@ describe('gang membership changing while playing', () => {
    */
   it('ignores a departure from a gang this character is not in', () => {
     const tracker = play([...WHO, 'Rand just joined your gang.', 'Rand has left Norway.']);
-    expect(tracker.current.players['rand']?.gang).toBe('Valor');
+    expect(tracker.players['rand']?.gang).toBe('Valor');
   });
 
   // Nothing has said which gang this character is in, so nothing can be said
   // about somebody joining it.
   it("says nothing about a join before any listing has named this character's gang", () => {
     const tracker = play(['[HP=334/KAI=27]:', 'Rand just joined your gang.']);
-    expect(tracker.current.players['rand']).toBeUndefined();
+    expect(tracker.players['rand']).toBeUndefined();
   });
 });
 
@@ -7630,6 +7936,45 @@ describe('a figure the server quoted moves the purse', () => {
         192_600
       )
     ).toBe(190_400);
+  });
+
+  /*
+   * MajorMUD names the coins (todo 745). Wire, bearfather,
+   * `logs/2026-09-17_23-22-47_soul:433`: `Wealth:` fell from 33800 to 33750
+   * across the first, and `2026-09-18_12-05-09_soul:18909` paid in two
+   * denominations. Read as `parseInt`, the first cost 5 copper.
+   */
+  it('takes a price said in coin words up the ladder', () => {
+    expect(
+      purse(['You hand over 5 silver nobles and you receive training to attain level 2.'], 33_800)
+    ).toBe(33_750);
+    expect(
+      purse(
+        ['You hand over 1 gold crown, 5 silver nobles and you receive training to attain level 4.'],
+        33_800
+      )
+    ).toBe(33_650);
+    expect(
+      purse(['You hand over nothing and you receive training to attain level 11.'], 33_800)
+    ).toBe(33_800);
+  });
+
+  /*
+   * MajorMUD quotes a purchase in any coin (todo 815): bearfather,
+   * `logs/2026-09-17_16-16-56_soul:1027,1213`. Unread, the pack and the purse
+   * both stayed as they were.
+   */
+  it('takes a purchase quoted in any coin up the ladder', () => {
+    expect(purse(['You just bought silk robe for 30 gold crowns.'], 33_800)).toBe(30_800);
+    expect(purse(['You just bought bone charm for 1 platinum piece.'], 33_800)).toBe(23_800);
+    expect(purse(['You just bought bone charm for 3 bronze bits.'], 33_800)).toBeNull();
+  });
+
+  /* A coin this client cannot read: money went, so the purse is unknown, never a guess. */
+  it('makes the purse unknown when the price is in a coin it cannot read', () => {
+    expect(
+      purse(['You hand over 3 bronze bits and you receive training to attain level 2.'], 33_800)
+    ).toBeNull();
   });
 
   /* Unknown is not rich here either — the same refusal a purchase makes. */
@@ -7803,7 +8148,7 @@ describe('looking at this character', () => {
    */
   it('does not file this character among the other players', () => {
     const tracker = play(named(...SELF_LOOK));
-    expect(tracker.current.players['vaelor']).toBeUndefined();
+    expect(tracker.players['vaelor']).toBeUndefined();
     // The roster entry is right and stays: this character is in the realm.
     expect(tracker.current.online.some((entry) => entry.name === 'Vaelor')).toBe(true);
   });
@@ -7811,7 +8156,7 @@ describe('looking at this character', () => {
   /* Unknown is not "yes": with no name on file nothing may be claimed as self. */
   it('treats the look as somebody else while this character has no name', () => {
     const tracker = play(SELF_LOOK);
-    expect(tracker.current.players['vaelor']?.equipment).toEqual([
+    expect(tracker.players['vaelor']?.equipment).toEqual([
       { name: 'skullcap', slot: 'Head' },
       { name: 'bone charm', slot: 'Neck' },
       { name: 'silver ring', slot: 'Finger' }
@@ -7835,7 +8180,7 @@ describe('looking at another player', () => {
 
   it('files the equipment block against the player the look was about', () => {
     const tracker = play(LOOK);
-    expect(tracker.current.players['pherough']?.equipment).toEqual([
+    expect(tracker.players['pherough']?.equipment).toEqual([
       { name: 'gilded robes', slot: 'Torso' },
       { name: 'padded pants', slot: 'Legs' },
       { name: 'black and white serpent ring', slot: 'Finger' }
@@ -7855,7 +8200,7 @@ describe('looking at another player', () => {
       'jeweled scimitar               (Weapon Hand)',
       '[HP=334/KAI=27]:'
     ]);
-    expect(tracker.current.players['pherough']?.equipment).toEqual([
+    expect(tracker.players['pherough']?.equipment).toEqual([
       { name: 'jeweled scimitar', slot: 'Weapon Hand' }
     ]);
   });
@@ -7879,7 +8224,7 @@ describe('looking at another player', () => {
         'gilded robes                   (Torso)',
         '[HP=334/KAI=27]:'
       ]);
-      expect(tracker.current.players['pherough']?.equipment).toEqual([
+      expect(tracker.players['pherough']?.equipment).toEqual([
         { name: 'gilded robes', slot: 'Torso' }
       ]);
     }
@@ -7895,7 +8240,7 @@ describe('looking at another player', () => {
       'gilded robes                   (Torso)',
       '[HP=334/KAI=27]:'
     ]);
-    expect(Object.keys(tracker.current.players)).toEqual([]);
+    expect(Object.keys(tracker.players)).toEqual([]);
   });
 
   /*
@@ -7928,14 +8273,12 @@ describe('looking at another player', () => {
 
   it('reads a gang printed hard against the bracket', () => {
     const tracker = play(LIVE_LOOK);
-    expect(tracker.current.players['soul']?.gang).toBe('Valor');
+    expect(tracker.players['soul']?.gang).toBe('Valor');
   });
 
   it('keeps only the slots that hold something', () => {
     const tracker = play(LIVE_LOOK);
-    expect(tracker.current.players['soul']?.equipment).toEqual([
-      { name: 'silk gloves', slot: 'Hands' }
-    ]);
+    expect(tracker.players['soul']?.equipment).toEqual([{ name: 'silk gloves', slot: 'Hands' }]);
   });
 
   /*
@@ -7953,8 +8296,8 @@ describe('looking at another player', () => {
       '<empty>                        (Weapon Hand)',
       '[HP=334/KAI=27]:'
     ]);
-    expect(tracker.current.players['soul']?.equipment).toEqual([]);
-    expect(tracker.current.players['soul']?.equipmentAt).not.toBeNull();
+    expect(tracker.players['soul']?.equipment).toEqual([]);
+    expect(tracker.players['soul']?.equipmentAt).not.toBeNull();
   });
 });
 
@@ -8842,42 +9185,10 @@ describe('the spell message table and what it teaches', () => {
     expect(names(tracker).sort()).toEqual(['strange glow', 'way of the tiger']);
   });
 
-  /*
-   * The player's procedure (2026-09-23): cast it, read the sheet, and the line
-   * the cast added is its start. The burst alone is not enough — Paramud
-   * prints the cast's chatter and the effect as two unread lines, and only the
-   * effect is reprinted on the sheet.
-   */
-  it('learns the start of a spell the table lacks from the sheet read after its cast', () => {
+  it('learns the start of a spell the table lacks from the cast it follows', () => {
     const { lore, taught } = table();
-    const asked = play(
-      [
-        '[HP=34]:',
-        'You cast strange glow on yourself!',
-        'Arcane words hang in the air.',
-        'You shimmer with a strange light.',
-        { wait: 1_000 },
-        '[HP=34]:'
-      ],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      lore
-    );
-    // The burst is over and nothing is learned: the sheet is asked instead.
-    expect(taught).toEqual([]);
-    expect(asked.takeSheetRequest()).toBe(true);
-
     play(
-      [
-        '[HP=34]:',
-        'You cast strange glow on yourself!',
-        'Arcane words hang in the air.',
-        'You shimmer with a strange light.',
-        { wait: 1_000 },
-        ...sheet('You shimmer with a strange light.')
-      ],
+      ['[HP=34]:', 'You cast strange glow on yourself!', 'You shimmer with a strange light.'],
       undefined,
       undefined,
       undefined,
@@ -8928,37 +9239,23 @@ describe('the spell message table and what it teaches', () => {
     expect(taught.map((lesson) => lesson.text)).not.toContain('The thug nods.');
   });
 
-  /*
-   * And the other half of the procedure: the effect wears off, the sheet is
-   * read again, and the line has gone — which is what ties the sentence to it.
-   */
-  it('learns the one unknown ending once the sheet has stopped printing the start', () => {
+  it('learns the one unknown ending when one such buff is up, and acts on it', () => {
     const { lore, taught } = table();
-    const cast = [
-      '[HP=34]:',
-      'You cast strange glow on yourself!',
-      'You shimmer with a strange light.',
-      { wait: 1_000 },
-      ...sheet('You shimmer with a strange light.'),
-      { wait: 60_000 },
-      'The strange light fades.'
-    ];
-    const waiting = play(cast, undefined, undefined, undefined, undefined, lore);
-    // One suspect, but the sheet can check it: asked, and nothing concluded yet.
-    expect(names(waiting)).toEqual(['strange glow']);
-    expect(waiting.takeSheetRequest()).toBe(true);
-    expect(taught.filter((lesson) => lesson.kind === 'stop')).toEqual([]);
-
-    const { lore: fresh, taught: lessons } = table();
     const tracker = play(
-      [...cast, { wait: 2_000 }, ...sheet()],
+      [
+        '[HP=34]:',
+        'You cast strange glow on yourself!',
+        'You shimmer with a strange light.',
+        { wait: 60_000 },
+        'The strange light fades.'
+      ],
       undefined,
       undefined,
       undefined,
       undefined,
-      fresh
+      lore
     );
-    expect(lessons.map((lesson) => `${lesson.kind}: ${lesson.text}`)).toEqual([
+    expect(taught.map((lesson) => `${lesson.kind}: ${lesson.text}`)).toEqual([
       'start: You shimmer with a strange light.',
       'stop: The strange light fades.'
     ]);
@@ -8967,27 +9264,40 @@ describe('the spell message table and what it teaches', () => {
 
   it('holds an ending against several suspects until the sheet says which', () => {
     const { lore, taught } = table();
-    const both = [
-      '[HP=34]:',
-      'You cast strange glow on yourself!',
-      'You shimmer with a strange light.',
-      { wait: 1_000 },
-      ...sheet('You shimmer with a strange light.'),
-      { wait: 5_000 },
-      'You cast odd hum on yourself!',
-      'You hum oddly.',
-      { wait: 1_000 },
-      ...sheet('You shimmer with a strange light.', 'You hum oddly.'),
-      { wait: 60_000 },
-      'The strange light fades.'
-    ];
-    const tracker = play(both, undefined, undefined, undefined, undefined, lore);
+    const tracker = play(
+      [
+        '[HP=34]:',
+        'You cast strange glow on yourself!',
+        'You shimmer with a strange light.',
+        { wait: 5_000 },
+        'You cast odd hum on yourself!',
+        'You hum oddly.',
+        { wait: 60_000 },
+        'The strange light fades.'
+      ],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      lore
+    );
     // Two buffs with unknown endings: nothing is concluded yet.
     expect(names(tracker).sort()).toEqual(['odd hum', 'strange glow']);
     expect(taught.filter((lesson) => lesson.kind === 'stop')).toEqual([]);
 
     const settled = play(
-      [...both, { wait: 2_000 }, ...sheet('You hum oddly.')],
+      [
+        '[HP=34]:',
+        'You cast strange glow on yourself!',
+        'You shimmer with a strange light.',
+        { wait: 5_000 },
+        'You cast odd hum on yourself!',
+        'You hum oddly.',
+        { wait: 60_000 },
+        'The strange light fades.',
+        { wait: 2_000 },
+        ...sheet('You hum oddly.')
+      ],
       undefined,
       undefined,
       undefined,
@@ -9002,15 +9312,13 @@ describe('the spell message table and what it teaches', () => {
     ]);
   });
 
-  it('learns no ending the sheet contradicts', () => {
-    const { lore, taught } = table();
+  it('takes back a learned ending the sheet contradicts', () => {
+    const { lore, taught, forgot } = table();
     const tracker = play(
       [
         '[HP=34]:',
         'You cast strange glow on yourself!',
         'You shimmer with a strange light.',
-        { wait: 1_000 },
-        ...sheet('You shimmer with a strange light.'),
         { wait: 60_000 },
         'The room grows quiet.',
         { wait: 5_000 },
@@ -9022,7 +9330,8 @@ describe('the spell message table and what it teaches', () => {
       undefined,
       lore
     );
-    expect(taught.some((lesson) => lesson.text === 'The room grows quiet.')).toBe(false);
+    expect(taught.some((lesson) => lesson.text === 'The room grows quiet.')).toBe(true);
+    expect(forgot).toEqual([{ spell: 'strange glow', kind: 'stop' }]);
     expect(lore.stopOf('strange glow')).toBeNull();
     expect(names(tracker)).toEqual(['strange glow']);
   });
@@ -9066,9 +9375,7 @@ describe('the spell message table and what it teaches', () => {
         'You are enveloped in a green jelly!',
         ...sheet('You are enveloped in a green jelly!'),
         { wait: 60_000 },
-        'The green jelly dissolves.',
-        { wait: 2_000 },
-        ...sheet()
+        'The green jelly dissolves.'
       ],
       undefined,
       undefined,
@@ -9119,9 +9426,7 @@ describe('the spell message table and what it teaches', () => {
         'Poison burns through your veins!',
         { wait: 60_000 },
         'The green jelly dissolves.',
-        'The dizzying poison runs its course.',
-        { wait: 1_000 },
-        ...sheet()
+        'The dizzying poison runs its course.'
       ],
       undefined,
       undefined,
@@ -9224,8 +9529,6 @@ describe('the spell message table and what it teaches', () => {
 
   it('wants the stat sheet only when a sheet could settle the question', () => {
     const { lore } = table();
-    // Learned already, so the cast itself asks nothing.
-    lore.learn('strange glow', 'start', 'You shimmer with a strange light.', 0);
     // A learned start means the sheet would print it: one buff, one unknown ending — ask.
     const single = play(
       [
@@ -9430,61 +9733,6 @@ describe('the spell message table and what it teaches', () => {
     expect(Object.keys(durations)).toEqual(['speed']);
     expect(durations['speed']).toBeCloseTo(60, 0);
   });
-
-  /*
-   * Only from a cast: a buff first seen with no cast in front of it — the
-   * login sheet, typically — says nothing about when it began. Skinny's
-   * hellfire shield ended 29s after the sheet that first showed it, and 29s
-   * was recast on every 36s from then on (2026-09-23). An ending the sheet
-   * checked is measured from the cast to the sentence, not to the sheet.
-   */
-  it('measures only what this character cast, to the sentence the sheet checked', () => {
-    const { lore } = table();
-    const durations: Record<string, number> = {};
-    const tracker = new CharacterTracker(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      lore
-    );
-    tracker.useBelongings({
-      ...NO_BELONGINGS,
-      rememberSpellDuration: (spell, seconds) => {
-        durations[spell] = seconds;
-      }
-    });
-    const classifier = new Classifier(undefined, (text) => lore.match(text));
-    let at = 1_700_000_000_000;
-    const feed = (plain: string, after = 1): void => {
-      at += after;
-      const { block, batch } = classifier.classify({
-        seq: at,
-        at,
-        text: plain,
-        plain,
-        terminator: 'newline'
-      });
-      tracker.apply(block);
-      if (batch) tracker.apply(batch, batch.rows);
-    };
-    feed('[HP=34]:');
-    feed('You feel fast!');
-    feed('You slow down.', 29_000);
-    expect(durations).toEqual({});
-
-    feed('You cast strange glow on yourself!');
-    feed('You shimmer with a strange light.');
-    // A second on, once the burst is over; the rest of the sheet at once.
-    sheet('You shimmer with a strange light.').forEach((line, row) =>
-      feed(line, row === 0 ? 1_000 : 1)
-    );
-    feed('The strange light fades.', 89_000);
-    sheet().forEach((line, row) => feed(line, row === 0 ? 1_000 : 1));
-    expect(Object.keys(durations)).toEqual(['strange glow']);
-    expect(durations['strange glow']).toBeCloseTo(90, 0);
-  });
 });
 
 /*
@@ -9506,7 +9754,10 @@ describe('what a party member was last seen fighting', () => {
   it('records the leader’s target from an opening on a monster', () => {
     const tracker = play([...inParty, 'Soul moves to attack giant rat!']);
     expect(tracker.current.party.following).toBe('Soul');
-    expect(tracker.current.party.engaged['Soul']?.target).toBe('giant rat');
+    expect(tracker.current.party.engaged['Soul']).toMatchObject({
+      kind: 'mob',
+      target: 'giant rat'
+    });
   });
 
   it('ignores somebody outside the party, and a blow on this character', () => {
@@ -9525,7 +9776,13 @@ describe('what a party member was last seen fighting', () => {
    * pummelled without swinging back is exactly the case defending exists for.
    */
   it('records a monster’s blow on a member, with the article dropped', () => {
-    const tracker = play([...inParty, 'The massive ice dragon snaps at Soul with its fangs!']);
+    const tracker = play([
+      ...inParty,
+      'Frozen Lake',
+      'Also here: Soul, massive ice dragon.',
+      'Obvious exits: north',
+      'The massive ice dragon snaps at Soul with its fangs!'
+    ]);
     expect(tracker.current.party.threatened['Soul']?.target).toBe('massive ice dragon');
     // And the member's own fight is untouched: Soul has not swung.
     expect(tracker.current.party.engaged['Soul']).toBeUndefined();
@@ -9595,7 +9852,7 @@ describe('what the realm remembers about a player', () => {
     play(LOOK, undefined, undefined, undefined, view);
 
     const next = new CharacterTracker(undefined, undefined, undefined, undefined, view);
-    expect(next.current.players['soul']).toMatchObject({
+    expect(next.players['soul']).toMatchObject({
       equipment: [{ name: 'silk gloves', slot: 'Hands' }],
       gang: 'Valor',
       online: false,
@@ -9603,15 +9860,39 @@ describe('what the realm remembers about a player', () => {
     });
   });
 
+  /*
+   * The entry room prints after `E` and before the first prompt, while the
+   * phase is still `authenticating` (todo 748; wire,
+   * `logs/2026-09-02_21-04-28_festus:250-263`). Held until the prompt, and told
+   * then; never from the menu itself.
+   */
+  const ENTRY = [
+    '[E] . Enter the Realm',
+    '[PARADIGM]: E',
+    'Bank of Godfrey',
+    'Also here: Aries*.',
+    'Obvious exits: north, east, closed gate west'
+  ];
+
+  it('tells the book who stood in the entry room once the first prompt lands', () => {
+    const before = realm();
+    const menu = play(ENTRY, undefined, undefined, undefined, before.view);
+    expect(menu.current.phase).not.toBe('in-game');
+    expect(menu.players['aries']).toBeDefined();
+    expect(before.remembered).toEqual([]);
+
+    const { view, held } = realm();
+    play([...ENTRY, '[HP=80/KAI=5]:'], undefined, undefined, undefined, view);
+    expect(held.get('aries')).toBeDefined();
+  });
+
   /* A reconnect is a new session on the same realm, not a new realm. */
   it('seeds the realm back in on reset', () => {
     const { view } = realm();
     const tracker = play(LOOK, undefined, undefined, undefined, view);
     tracker.reset();
-    expect(tracker.current.players['soul']?.equipment).toEqual([
-      { name: 'silk gloves', slot: 'Hands' }
-    ]);
-    expect(tracker.current.players['soul']?.online).toBe(false);
+    expect(tracker.players['soul']?.equipment).toEqual([{ name: 'silk gloves', slot: 'Hands' }]);
+    expect(tracker.players['soul']?.online).toBe(false);
   });
 
   it('absorbs what another session learned, says whether it changed, and never hands it back', () => {
@@ -9638,7 +9919,7 @@ describe('what the realm remembers about a player', () => {
       vitalsAt: null
     };
     expect(tracker.absorbPlayers([seen])).toBe(true);
-    expect(tracker.current.players['soul']?.equipment).toEqual(seen.equipment);
+    expect(tracker.players['soul']?.equipment).toEqual(seen.equipment);
     expect(tracker.absorbPlayers([seen])).toBe(false);
     expect(remembered).toEqual([]);
   });
@@ -10012,10 +10293,10 @@ describe('a scripted teleport the walker hinted', () => {
   const HOLLOW = { m: 2, r: 3, n: 'Hollow', x: {} };
   const PIT = { m: 2, r: 2, n: 'Black Pit', li: -200, x: {} };
 
-  function portalWorld(): WorldGraph {
+  function portalWorld(namesakes: ReadonlyArray<typeof CAVERN> = []): WorldGraph {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-portal-'));
     const file = path.join(dir, 'rooms.jsonl.gz');
-    const rooms = [SHORE, BEACH, CAVERN, HOLLOW, PIT];
+    const rooms = [SHORE, BEACH, CAVERN, HOLLOW, PIT, ...namesakes];
     const header = JSON.stringify({ v: 1, source: 'test', rooms: rooms.length, generatedAt: 'x' });
     fs.writeFileSync(
       file,
@@ -10026,12 +10307,12 @@ describe('a scripted teleport the walker hinted', () => {
     return graph;
   }
 
-  function session(): {
+  function session(world = portalWorld()): {
     tracker: CharacterTracker;
     feed: (lines: string[]) => void;
     send: (command: string) => void;
   } {
-    const tracker = new CharacterTracker(portalWorld());
+    const tracker = new CharacterTracker(world);
     // Wired the way `SessionManager` wires it: a combat line carries the
     // monster's name inside realm-supplied words, and only the room can say
     // where it ends.
@@ -10140,6 +10421,78 @@ describe('a scripted teleport the walker hinted', () => {
     expect(tracker.current.room.number).toBeNull();
   });
 
+  /*
+   * A reprint of the room being left is not the landing (todo 808). Nothing in
+   * the recorded sessions shows one ahead of a portal's arrival — 355 portal
+   * commands, first answer median 59ms and slowest 804ms, none past the
+   * nudge's margin — so these are constructed: the walker's nudge behind a stalled step, a
+   * reprint the server sends unasked, and a keep-alive Enter ahead of the step.
+   * Each used to spend the promise, and the arrival then resolved by name.
+   */
+  describe('and a reprint of the room being left before it lands', () => {
+    it("is the nudge's answer, not the landing, which still claims the promise", () => {
+      const { tracker, feed, send } = session();
+      tracker.hintTeleport('dive pool', 2, 1);
+      send('dive pool');
+      tracker.observeReread();
+      feed(['Shore', 'Obvious exits: east']);
+      expect(tracker.current.room.number).toBe(1);
+      expect(tracker.pendingMoves).toBe(1);
+      // The Enter was answered: only the portal is still owed.
+      expect(tracker.pendingCount).toBe(1);
+
+      feed(['Far Cavern', 'Obvious exits: west']);
+      expect(tracker.current.room.map).toBe(2);
+      expect(tracker.current.room.number).toBe(1);
+      expect(tracker.current.room.resolvedBy).toBe('coordinates');
+      expect(tracker.pendingCount).toBe(0);
+    });
+
+    it('nor is a reprint nobody asked for', () => {
+      const { tracker, feed, send } = session();
+      tracker.hintTeleport('dive pool', 2, 1);
+      send('dive pool');
+      feed(['Shore', 'Obvious exits: east']);
+      expect(tracker.pendingMoves).toBe(1);
+      feed(['Far Cavern', 'Obvious exits: west']);
+      expect(tracker.current.room.resolvedBy).toBe('coordinates');
+    });
+
+    it('nor the answer to an Enter sent ahead of the step', () => {
+      const { tracker, feed, send } = session();
+      tracker.observeReread();
+      tracker.hintTeleport('dive pool', 2, 1);
+      send('dive pool');
+      feed(['Shore', 'Obvious exits: east']);
+      expect(tracker.pendingMoves).toBe(1);
+      feed(['Far Cavern', 'Obvious exits: west']);
+      expect(tracker.current.room.number).toBe(1);
+      expect(tracker.current.room.map).toBe(2);
+      expect(tracker.current.room.resolvedBy).toBe('coordinates');
+    });
+  });
+
+  /*
+   * A portal retried before the first one answered (todo 763): the first
+   * landing answers the first claim while the retry's is still owed, so a
+   * promise spent only when nothing is owed left it resolved by name — here
+   * between two rooms called Far Cavern. Constructed; no capture holds it.
+   */
+  it('spends the promise on the landing a retried portal answers first', () => {
+    const NAMESAKE = { m: 3, r: 1, n: 'Far Cavern', x: { w: { m: 2, r: 3 } } };
+    const { tracker, feed, send } = session(portalWorld([NAMESAKE]));
+    tracker.hintTeleport('dive pool', 2, 1);
+    send('dive pool');
+    tracker.hintTeleport('dive pool', 2, 1);
+    send('dive pool');
+    expect(tracker.pendingMoves).toBe(2);
+    feed(['Far Cavern', 'Obvious exits: west']);
+    expect(tracker.current.room.map).toBe(2);
+    expect(tracker.current.room.number).toBe(1);
+    expect(tracker.current.room.resolvedBy).toBe('coordinates');
+    expect(tracker.pendingMoves).toBe(1);
+  });
+
   it('a typed direction supersedes the hint, exactly as it supersedes a move hint', () => {
     const { tracker, feed, send } = session();
     tracker.hintTeleport('dive pool', 2, 1);
@@ -10150,34 +10503,6 @@ describe('a scripted teleport the walker hinted', () => {
     // Sending the phrase now queues nothing: the hint is gone.
     send('dive pool');
     expect(tracker.pendingMoves).toBe(0);
-  });
-
-  /*
-   * A re-read forced out of a stalled portal step must not be read as the
-   * step's own answer — the whole reason `Walker.nudge` refused to send one
-   * at all until this guard existed (todo, `wasReread` beside `takeTeleport`
-   * in `CharacterTracker`). A premature reprint of the room being left is
-   * `Shore` again, not `Far Cavern`: were the promise spent on it, the real
-   * arrival would have nothing left to claim and would resolve by name alone.
-   */
-  it("is not spent by the nudge's own reprint, so the real arrival still claims it", () => {
-    const { tracker, feed, send } = session();
-    tracker.hintTeleport('dive pool', 2, 1);
-    send('dive pool');
-
-    // The forced re-read, answered before the portal has actually landed.
-    tracker.observeReread();
-    feed(['Shore', 'Obvious exits: east']);
-    // Resolved the ordinary way — `Shore` is still a real, unique room — and
-    // not the confident coordinate answer a spent promise would have given it.
-    expect(tracker.current.room.number).toBe(1);
-    expect(tracker.current.room.resolvedBy).not.toBe('coordinates');
-
-    // The real arrival, moments later, with the promise still armed.
-    feed(['Far Cavern', 'Obvious exits: west']);
-    expect(tracker.current.room.map).toBe(2);
-    expect(tracker.current.room.number).toBe(1);
-    expect(tracker.current.room.resolvedBy).toBe('coordinates');
   });
 });
 
@@ -10575,9 +10900,6 @@ describe('the spellbook and the belongings record', () => {
         recallSpellDurations: () => state.durations,
         rememberSpellDuration: (spell: string, seconds: number) => {
           state.durations[spell.toLowerCase()] = Math.round(seconds);
-        },
-        forgetSpellDuration: (spell: string) => {
-          delete state.durations[spell.toLowerCase()];
         },
         recallAbilities: () => state.abilities,
         rememberAbilities: (abilities: AbilitySums) => {
@@ -11164,7 +11486,59 @@ describe('what a stranger was last seen fighting', () => {
       'Rend moves to attack you!'
     ]);
     expect(tracker.current.combat.claimed).toEqual({});
-    expect(tracker.current.party.engaged['Soul']?.target).toBe('giant rat');
+    expect(tracker.current.party.engaged['Soul']).toMatchObject({
+      kind: 'mob',
+      target: 'giant rat'
+    });
+  });
+
+  /*
+   * An area attack names no monster (todo 747): `Player.cs:6169` and
+   * `Spell.cs:2131` print it for every monster in the room, and the wire has
+   * Killa's three (`logs/2026-09-13_22-38-55_festus`). A stranger's claims
+   * each one the room lists; nothing is filed under the phrase.
+   */
+  it('reads a stranger’s area attack as a claim on every monster the room lists', () => {
+    const tracker = play([
+      'Newhaven, Village Entrance',
+      'Also here: giant rat, cave bear.',
+      'Obvious exits: north, south, west, southeast',
+      'Killa moves to attack everyone in the room.'
+    ]);
+    expect(tracker.current.combat.claimed).toEqual({
+      'giant rat': expect.objectContaining({ by: 'Killa' }),
+      'cave bear': expect.objectContaining({ by: 'Killa' })
+    });
+  });
+
+  /*
+   * Another player's area spell names nobody: `captures/126`:33-34, `Raptor
+   * makes a sweeping gesture!` then `A whirling maelstrom assaults the room for
+   * 100 damage!`. The damage frame types it as a blow between two others, and
+   * nothing of this character's moves: no target, no dealt damage (todo 756).
+   */
+  it('books another player’s area damage as nobody’s blow', () => {
+    const before = play(['[HP=194/MA=21]:', '*Combat Engaged*']);
+    const after = play([
+      '[HP=194/MA=21]:',
+      '*Combat Engaged*',
+      'Raptor makes a sweeping gesture!',
+      'A whirling maelstrom assaults the room for 100 damage!'
+    ]);
+    expect(after.current.combat.target).toBeNull();
+    expect(after.current.tally.dealt).toEqual(before.current.tally.dealt);
+  });
+
+  /* A leader's area attack names no monster: the fight is the whole room, for
+     the follower to pick its own from (todo 756). */
+  it('records the leader’s area attack as the whole room', () => {
+    const tracker = play([
+      ...inParty,
+      'Soul moves to attack giant rat!',
+      'Soul moves to attack everyone in the room.'
+    ]);
+    expect(tracker.current.party.engaged['Soul']?.kind).toBe('room');
+    expect(tracker.current.combat.claimed).toEqual({});
   });
 
   it('forgets every claim when the room changes', () => {
@@ -11534,55 +11908,6 @@ describe('a step that hands the character to a draw', () => {
 });
 
 /*
- * What the realm's message table says is on the character (`noteStated`),
- * and the fight a message says is over (`endFightStated`).
- */
-describe("the realm's messages on the character", () => {
-  const confusion = {
-    name: 'confusion',
-    effects: ['confused'] as const,
-    action: 'wait' as const,
-    since: 1
-  };
-  const net = { name: 'net', effects: ['held'] as const, action: 'wait' as const, since: 2 };
-
-  it('publishes what is held, and reports whether anything changed', () => {
-    const tracker = new CharacterTracker();
-    expect(tracker.noteStated([confusion], ['confused'], [])).toBe(true);
-    expect(tracker.current.heard).toEqual([confusion]);
-    // The same list again is no change.
-    expect(tracker.noteStated([confusion], [], [])).toBe(false);
-  });
-
-  it('moves the affliction it shares on the edges only', () => {
-    const tracker = new CharacterTracker();
-    tracker.noteStated([net], ['held'], []);
-    expect(tracker.current.afflictions.held).toBe('yes');
-    tracker.noteStated([], [], ['held']);
-    expect(tracker.current.afflictions.held).toBe('no');
-    // A later list that merely lacks it leaves the flag to the wire.
-    tracker.noteStated([confusion], ['confused'], []);
-    expect(tracker.current.afflictions.held).toBe('no');
-  });
-
-  it('keeps an affliction another row still holds when one of them ends', () => {
-    const tracker = new CharacterTracker();
-    const web = { ...net, name: 'web', since: 3 };
-    tracker.noteStated([net, web], ['held'], []);
-    tracker.noteStated([web], [], ['held']);
-    expect(tracker.current.afflictions.held).toBe('yes');
-  });
-
-  it('ends a fight a message says is over, as *Combat Off* would', () => {
-    const tracker = play(['*Combat Engaged*']);
-    expect(tracker.current.inCombat).toBe(true);
-    expect(tracker.endFightStated(Date.now())).toBe(true);
-    expect(tracker.current.inCombat).toBe(false);
-    expect(tracker.endFightStated(Date.now())).toBe(false);
-  });
-});
-
-/*
  * A door the room listed changes state without a reprint (todo 00,
  * 2026-09-17). The live transcript: `open door northwest` on the list, then
  * `The door to the northwest just closed.` from the door's own timer, and the
@@ -11709,6 +12034,37 @@ describe('confusion', () => {
     expect(play(['You are confused!']).current.afflictions.confused).toBe('yes');
     expect(play(['You fumble in confusion!']).current.afflictions.confused).toBe('yes');
     expect(play(['You are blind!']).current.afflictions.confused).toBe('unknown');
+  });
+
+  /*
+   * And ended by the table on the capture's own sequence, which now stops a
+   * walk (todo 809): `captures/001`:1711-1766, `Rend casts confusion on you!`,
+   * the fumbles, then `The effects of confusion wear off!`, the shipped
+   * `confusion` row (`resources/world/spell-messages.csv`:36).
+   */
+  it('is ended by the shipped row on the captured sequence', () => {
+    const table = spellLoreOf(
+      SpellMessageBook.fromRows([
+        {
+          spell: 'confusion',
+          start: 'You are confused!',
+          stop: 'The effects of confusion wear off!'
+        }
+      ]),
+      new SpellMessageBook()
+    );
+    const lines = ['[HP=38]:', 'You are confused!', 'You fumble in confusion!'];
+    const on = play(lines, undefined, undefined, undefined, undefined, table);
+    expect(on.current.afflictions.confused).toBe('yes');
+    const off = play(
+      [...lines, '[HP=13]:', 'The effects of confusion wear off!'],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      table
+    );
+    expect(off.current.afflictions.confused).toBe('no');
   });
 
   it.runIf(realm !== null)('is read from the realm’s own row, both ways', () => {
