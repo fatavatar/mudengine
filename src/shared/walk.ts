@@ -170,7 +170,7 @@ export type WalkHold =
   | 'condition'
   /**
    * A text-exit relay's reinvite sweep, standing the route still until every
-   * relayed-to member is seen in the room, `catchUpWaitMinutes` elapses, or
+   * relayed-to member is seen in the room, `catchUpWaitSeconds` elapses, or
    * the leader overrides — see `Walker.startCatchupWait`.
    */
   | 'catchup'

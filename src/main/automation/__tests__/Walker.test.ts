@@ -5926,24 +5926,24 @@ describe('a text-exit party relay', () => {
     expect(sent).toEqual(['invite Pip', '.@join', 'e']);
   });
 
-  it('resumes on its own once catchUpWaitMinutes elapses, with no confirmation', async () => {
+  it('resumes on its own once catchUpWaitSeconds elapses, with no confirmation', async () => {
     const { begin, push, walker: w } = trackedWalker();
     begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     expect(w.progress.hold).toBe('catchup');
-    await vi.advanceTimersByTimeAsync(config.party.catchUpWaitMinutes * 60_000);
+    await vi.advanceTimersByTimeAsync(config.party.catchUpWaitSeconds * 1000);
     expect(w.progress.hold).toBeNull();
     expect(sent).toEqual(['invite Pip', '.@join', 'e']);
   });
 
-  it('skips the wait entirely at catchUpWaitMinutes: 0, but still invites and @joins', () => {
+  it('skips the wait entirely at catchUpWaitSeconds: 0, but still invites and @joins', () => {
     const {
       begin,
       push,
       walker: w
     } = trackedWalker({
-      party: { ...config.party, catchUpWaitMinutes: 0 }
+      party: { ...config.party, catchUpWaitSeconds: 0 }
     });
     begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;

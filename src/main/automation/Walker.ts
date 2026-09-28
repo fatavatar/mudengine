@@ -631,9 +631,10 @@ export class Walker {
    */
   private catchupWait: { waiting: Set<string>; wasLeaving: boolean; step: RouteStep } | null = null;
   /**
-   * `catchupWait`'s own clock, minutes rather than `holdTimer`'s beat — see
-   * `startCatchupWait`. Folded into `clearTimer()` rather than kept as a
-   * second cleanup call, the way `holdTimer` already is.
+   * `catchupWait`'s own clock, a fixed span of seconds rather than
+   * `holdTimer`'s repeating beat — see `startCatchupWait`. Folded into
+   * `clearTimer()` rather than kept as a second cleanup call, the way
+   * `holdTimer` already is.
    */
   private catchupTimer: NodeJS.Timeout | null = null;
   /**
@@ -4371,10 +4372,10 @@ export class Walker {
       priority: 'movement',
       reason: t('automation.walk.reasonJoinCall')
     });
-    const minutes = this.config.party.catchUpWaitMinutes;
+    const seconds = this.config.party.catchUpWaitSeconds;
     // 0 means skip the wait entirely — the opposite of `waitNoLongerMinutes`'s
     // "0 means forever" — so the invites above still go out, but nothing holds.
-    if (minutes <= 0) return false;
+    if (seconds <= 0) return false;
     this.catchupWait = {
       waiting: new Set(missing.map((name) => name.toLowerCase())),
       wasLeaving,
@@ -4382,7 +4383,7 @@ export class Walker {
     };
     this.hold = 'catchup';
     this.publish();
-    this.catchupTimer = setTimeout(() => this.endCatchupWait(), minutes * 60_000);
+    this.catchupTimer = setTimeout(() => this.endCatchupWait(), seconds * 1000);
     this.catchupTimer.unref?.();
     return true;
   }

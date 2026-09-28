@@ -8937,7 +8937,7 @@ export class SessionManager {
    *
    * The leader's own override for the party relay's catch-up wait — the
    * third way out CONTEXT.md's glossary names, beside everybody arriving and
-   * `catchUpWaitMinutes` running out. See `Walker.endCatchupWait` and ADR
+   * `catchUpWaitSeconds` running out. See `Walker.endCatchupWait` and ADR
    * 0002. A no-op when nothing is waiting.
    */
   endCatchUpWait(): void {

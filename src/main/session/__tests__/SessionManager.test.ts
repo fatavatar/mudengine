@@ -4608,7 +4608,7 @@ describe('a party relay crossing a text exit', () => {
 
   it('re-invites whoever fell behind, says @join, and holds movement until they are seen', async () => {
     const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 2 }));
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 2 }));
     const lines = wire(socket);
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
@@ -4627,9 +4627,9 @@ describe('a party relay crossing a text exit', () => {
     await until(() => manager!.walker.progress.hold === null);
   });
 
-  it('resumes on its own once catchUpWaitMinutes elapses, with nobody chased further', async () => {
+  it('resumes on its own once catchUpWaitSeconds elapses, with nobody chased further', async () => {
     const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 1 }));
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 1 }));
     const lines = wire(socket);
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
@@ -4638,7 +4638,7 @@ describe('a party relay crossing a text exit', () => {
     const timers = vi.spyOn(globalThis, 'setTimeout');
     socket.write('Sewer\r\nObvious exits: up\r\n');
     await until(() => manager!.walker.progress.hold === 'catchup');
-    const giveUp = timers.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    const giveUp = timers.mock.calls.find(([, delay]) => delay === 1000)?.[0];
     timers.mockRestore();
     expect(giveUp).toBeTypeOf('function');
     (giveUp as () => void)();
@@ -4646,9 +4646,9 @@ describe('a party relay crossing a text exit', () => {
     expect(manager!.walker.progress.hold).toBeNull();
   });
 
-  it('skips the wait entirely at catchUpWaitMinutes: 0, though it still invites and @joins', async () => {
+  it('skips the wait entirely at catchUpWaitSeconds: 0, though it still invites and @joins', async () => {
     const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 0 }));
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 0 }));
     const lines = wire(socket);
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
@@ -4662,7 +4662,7 @@ describe('a party relay crossing a text exit', () => {
 
   it('lets the leader override the wait early, resuming movement at once', async () => {
     const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 5 }));
+    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 5 }));
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
     socket.write('Sewer\r\nObvious exits: up\r\n');

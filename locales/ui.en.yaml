@@ -3907,9 +3907,9 @@ settings:
       order, recast on wear-off events with a clock behind them.
     catchUpWaitHint:
       Leading, crossing a text exit says @party and re-invites anyone it left behind — this is how
-      long the route then holds movement, and only movement, for them to catch up. 0 skips the wait
-      entirely, the opposite of Wait No Longer Than's 0.
-    catchUpWaitLabel: Catch Up Wait (minutes)
+      many seconds the route then holds movement, and only movement, for them to catch up. 0 skips
+      the wait entirely, the opposite of Wait No Longer Than's 0. Capped at 2 minutes.
+    catchUpWaitLabel: Catch Up Wait (seconds)
     defendHint:
       Swing at a monster seen attacking any party member, while it is still in the room. The fight came to the
       party, so it fires whatever Attack Target Selection says. Never a player.
