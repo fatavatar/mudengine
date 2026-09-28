@@ -5866,7 +5866,7 @@ describe('a text-exit party relay', () => {
 
   it('re-invites whoever the crossing left behind, and says @join once', () => {
     const { begin, push } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip']));
+    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     expect(sent).toEqual(['invite Pip', '.@join']);
@@ -5874,9 +5874,9 @@ describe('a text-exit party relay', () => {
 
   it('invites nobody and holds nothing when everybody crossed', () => {
     const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip']));
+    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
-    push(leading(1, 2, ['Pip']));
+    push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
     expect(sent).toEqual([]);
     expect(w.progress.hold).toBeNull();
   });
@@ -5889,9 +5889,22 @@ describe('a text-exit party relay', () => {
     expect(sent).toEqual([]);
   });
 
+  /*
+   * Physical presence gates the snapshot itself, not only the arrival side:
+   * a party member who is nowhere near the leader was never a candidate to
+   * begin with, whatever the roster says.
+   */
+  it('does not chase a party member who was never standing with the leader', () => {
+    const { begin, push } = trackedWalker();
+    begin(PORTAL, leading(1, 1, ['Pip']));
+    sent.length = 0;
+    push(leading(1, 2, []));
+    expect(sent).toEqual([]);
+  });
+
   it('holds movement — only movement — until the missing member is seen', () => {
     const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip']));
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     expect(w.progress.hold).toBe('catchup');
@@ -5905,7 +5918,7 @@ describe('a text-exit party relay', () => {
 
   it('lets movement go the instant the missing member is seen in the room', () => {
     const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip']));
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     push(leading(1, 2, [], {}, occupants('Pip')));
@@ -5915,7 +5928,7 @@ describe('a text-exit party relay', () => {
 
   it('resumes on its own once catchUpWaitMinutes elapses, with no confirmation', async () => {
     const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip']));
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     expect(w.progress.hold).toBe('catchup');
@@ -5932,7 +5945,7 @@ describe('a text-exit party relay', () => {
     } = trackedWalker({
       party: { ...config.party, catchUpWaitMinutes: 0 }
     });
-    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip']));
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     expect(w.progress.hold).toBeNull();
@@ -5941,7 +5954,7 @@ describe('a text-exit party relay', () => {
 
   it('lets the leader override the wait early, resuming movement at once', () => {
     const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip']));
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
     expect(w.progress.hold).toBe('catchup');
@@ -5972,10 +5985,10 @@ describe('a text-exit party relay', () => {
       ]
     };
     const { begin, push, walker: w } = trackedWalker();
-    begin(TWO_PORTALS, leading(1, 1, ['Pip']));
+    begin(TWO_PORTALS, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     // First crossing: Pip is right there, so nothing is held.
-    push(leading(1, 2, ['Pip']));
+    push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
     expect(sent).toEqual(['.@party go second portal', 'go second portal']);
     expect(w.progress.hold).toBeNull();
     sent.length = 0;

@@ -4314,16 +4314,32 @@ export class Walker {
         reason: t('automation.walk.reasonSneak')
       });
     }
-    // Taken now, right before the move reaches the wire, rather than at
-    // arrival: anyone who had already left the party by this moment is
-    // simply not in it, which is what keeps a voluntary departure out of the
-    // reinvite sweep below without this having to know *why* they left.
-    this.catchupSnapshot = others.map((member) => member.name);
+    /*
+     * Physical presence, not the roster — measured live (2026-09-28): a
+     * follower whose own client fails to replay the exit gets told *You are
+     * no longer following Ishi* directly, but the **leader** is never sent
+     * the mirror sentence (`party-left`'s other half) for this. `state.party
+     * .members` on this side is therefore stale for exactly the case this
+     * exists to catch, and a snapshot taken from it never sees anyone
+     * missing. `state.room.occupants` is the fact this client actually gets
+     * told, on both sides of the crossing — see `startCatchupWait`.
+     *
+     * Taken now, right before the move reaches the wire, rather than at
+     * arrival: anyone not standing here with the leader this moment — having
+     * left the party, wandered off, or never been in the room at all — is
+     * simply not a candidate, which is what keeps a voluntary departure out
+     * of the reinvite sweep below without this having to know *why* they
+     * are not here.
+     */
+    const present = new Set(state.room.occupants.map((occupant) => occupant.name.toLowerCase()));
+    this.catchupSnapshot = others
+      .filter((member) => present.has(member.name.toLowerCase()))
+      .map((member) => member.name);
   }
 
   /**
    * Once a text-exit crossing lands: invite whoever `relayTextExit`'s
-   * snapshot named but the fresh roster does not, say `@join` so their
+   * snapshot named but the new room does not hold, say `@join` so their
    * clients can accept it unattended, and hold movement — only movement — for
    * whoever is still missing. Returns whether a wait was actually taken;
    * `wasLeaving`/`step` are only kept for that case, to resume through
@@ -4338,8 +4354,10 @@ export class Walker {
     wasLeaving: boolean,
     step: RouteStep
   ): boolean {
-    const current = new Set(state.party.members.map((member) => member.name.toLowerCase()));
-    const missing = before.filter((name) => !current.has(name.toLowerCase()));
+    // Physical presence in the new room, not the roster — see the comment on
+    // `relayTextExit`'s own snapshot for why the roster cannot be trusted here.
+    const here = new Set(state.room.occupants.map((occupant) => occupant.name.toLowerCase()));
+    const missing = before.filter((name) => !here.has(name.toLowerCase()));
     if (missing.length === 0) return false;
     for (const name of missing) {
       this.queue.enqueue({

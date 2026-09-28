@@ -4572,14 +4572,23 @@ describe('a party relay crossing a text exit', () => {
       '[HP=100/MA=50]:'
     ].join('\r\n') + PROMPT_REPAINT;
 
-  /** Connected, named, placed at Rat Lair (1/3), leading Pip. */
+  /**
+   * Connected, named, placed at Rat Lair (1/3), leading Pip — who is
+   * standing right there, not merely on the roster. Measured live
+   * (2026-09-28): the leader is never told a follower stopped following —
+   * only the follower's own client hears that — so `room.occupants`, not
+   * `party.members`, is what the reinvite sweep can actually see on either
+   * side of the crossing. See `relayTextExit`'s own comment.
+   */
   async function atTheCrossing(world: WorldGraph, config: AutomationConfig): Promise<net.Socket> {
     manager = new SessionManager(collect().sink, world, config);
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
     const socket = await client();
     socket.write('Welcome back, Vaelor!\r\n');
     socket.write('Health: 100/100 [100%]\r\n');
-    socket.write('Location:            1,3\r\nRat Lair\r\nObvious exits: south\r\n');
+    socket.write(
+      'Location:            1,3\r\nRat Lair\r\nAlso here: Pip.\r\nObvious exits: south\r\n'
+    );
     await until(() => manager!.character.room.number === 3);
     socket.write(partyListing);
     await until(() => manager!.character.party.members.length === 2);
@@ -4605,8 +4614,7 @@ describe('a party relay crossing a text exit', () => {
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
     await until(() => lines().includes('go manhole'));
 
-    // Pip did not replay the exit: gone from the roster before the room lands.
-    socket.write('Pip is no longer following you.\r\n');
+    // Pip did not replay the exit: absent from the new room's own listing.
     socket.write('Sewer\r\nObvious exits: up\r\n');
     await until(() => manager!.character.room.number === 4);
 
@@ -4628,7 +4636,6 @@ describe('a party relay crossing a text exit', () => {
     await until(() => lines().includes('go manhole'));
 
     const timers = vi.spyOn(globalThis, 'setTimeout');
-    socket.write('Pip is no longer following you.\r\n');
     socket.write('Sewer\r\nObvious exits: up\r\n');
     await until(() => manager!.walker.progress.hold === 'catchup');
     const giveUp = timers.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
@@ -4646,7 +4653,6 @@ describe('a party relay crossing a text exit', () => {
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
     await until(() => lines().includes('go manhole'));
-    socket.write('Pip is no longer following you.\r\n');
     socket.write('Sewer\r\nObvious exits: up\r\n');
     await until(() => manager!.character.room.number === 4);
 
@@ -4659,7 +4665,6 @@ describe('a party relay crossing a text exit', () => {
     const socket = await atTheCrossing(world, relayConfig({ catchUpWaitMinutes: 5 }));
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
-    socket.write('Pip is no longer following you.\r\n');
     socket.write('Sewer\r\nObvious exits: up\r\n');
     await until(() => manager!.walker.progress.hold === 'catchup');
 
