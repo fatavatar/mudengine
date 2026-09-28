@@ -3498,7 +3498,8 @@ settings:
     restNextDoor: Rest Next Door to a Lair
     restNextDoorHint:
       A room that makes monsters on a short clock is not a resting place. Looks into a neighbour the
-      realm holds no lair in, steps there only if it is empty, rests, and steps back.
+      realm holds no lair in, steps there only if it is empty, rests, and steps back. Never while
+      following, since a follower rests where the party is.
     restingNote: One pair for both, because nothing rests while a loop is marching — a separate
       pause figure under the resting floor left the character walking while it was too hurt to sit
       down. Resting is a state the character is in, and only moving, attacking and casting break
