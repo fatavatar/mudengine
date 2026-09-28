@@ -118,6 +118,12 @@ export class RestAway {
     }
 
     if (!wantsRest || here === null) return 'not-mine';
+    /*
+     * A follower rests where the party is. Where to stand is the leader's to
+     * choose: skinny, following Fatty, peeked north out of the Crimson Tunnel
+     * lair and rested alone next door while Fatty rested in it (2026-09-28).
+     */
+    if (state.party.following !== null) return 'not-mine';
     const clock = this.planner.lairClock(here);
     if (clock === null || clock > tuning().rest.lairClockMaxSeconds) return 'not-mine';
     if (this.allowedIn === here) return 'rest-here';
