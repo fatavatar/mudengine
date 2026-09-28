@@ -2019,10 +2019,10 @@ export class CharacterTracker {
         return afflicted(s, 'held', 'no');
       case 'user-confused':
         return afflicted(s, 'confused', 'yes');
-      // A command thrown away is the one proof of confusion that needs no
-      // table: `CheckConfusion` prints it only on a hit.
+      // A command thrown away proves confusion (`CheckConfusion` prints it only
+      // on a hit); one the realm states in its own words (`stated`) does not.
       case 'command-fumbled':
-        return afflicted(s, 'confused', 'yes');
+        return g['stated'] === undefined ? afflicted(s, 'confused', 'yes') : null;
 
       /*
        * A cast confirmation naming this character as the recipient is the one

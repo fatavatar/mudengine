@@ -5809,6 +5809,38 @@ describe('a command this realm has no word for', () => {
   });
 
   /*
+   * An attack spoken back after it has engaged names a monster that is gone,
+   * not a word the realm lacks: healbot's `a short dark goblin` reached the
+   * server after its goblin died, and retiring `a` ended fighting for good
+   * (2026-09-22).
+   */
+  it('keeps an attack word the realm has engaged on', async () => {
+    const { sink, notices } = collect();
+    manager = build(sink);
+    await manager.connect(dial());
+    const socket = await client();
+    socket.write('[HP=100/MA=50]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.phase === 'in-game');
+
+    const wire: Buffer[] = [];
+    socket.on('data', (chunk) => wire.push(chunk));
+    const attack = async (): Promise<void> => {
+      const before = Buffer.concat(wire).toString().split('a short dark goblin').length;
+      manager!.queue.enqueue({ command: 'a short dark goblin', priority: 'user' });
+      await until(
+        () => Buffer.concat(wire).toString().split('a short dark goblin').length > before
+      );
+    };
+    await attack();
+    socket.write('[HP=100/MA=50]:a short dark goblin\r\n*Combat Engaged*\r\n');
+    await attack();
+    socket.write('You say "a short dark goblin"\r\n');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(notices.some((line) => line.includes('"a short dark goblin"'))).toBe(false);
+    expect(manager.queue.enqueue({ command: 'a goblin', priority: 'probe' })).toBe(true);
+  });
+
+  /*
    * How the MajorMUD lineage actually refuses it — measured on
    * bbs.bearfather.net 2026-09-05, where `rm` came back `Your command had no
    * effect.` privately rather than being spoken in the room. The sentence

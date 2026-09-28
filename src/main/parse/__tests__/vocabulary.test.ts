@@ -282,12 +282,15 @@ describe('every condition is readable in both directions', () => {
     poisoned: 'user-poison-ends',
     diseased: 'user-disease-ends',
     held: 'user-held-ends',
-    confused: null
+    confused: null,
+    // No sentence in the server's code: only the realm states it (`effects`).
+    hurting: null
   };
 
   it('states an onset sentence for each of the five', () => {
     const conditions = AFFLICTION_ONSETS.map((onset) => onset.condition).sort();
-    expect(conditions).toEqual((Object.keys(ENDINGS) as (keyof Afflictions)[]).sort());
+    const coded = (Object.keys(ENDINGS) as (keyof Afflictions)[]).filter((c) => c !== 'hurting');
+    expect(conditions).toEqual(coded.sort());
   });
 
   it('puts every onset in the rule table, so the sentence is actually matched', () => {

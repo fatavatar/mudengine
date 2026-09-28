@@ -6,6 +6,7 @@ import type { Intent } from '../../automation/CommandQueue';
 import { FleeGoto } from '../FleeGoto';
 import { blockOf } from '../../../shared/__tests__/blocks';
 import type { BlockType } from '../../../shared/blocks';
+import { REREAD_ROOM } from '../../../shared/commands';
 import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
 import { DEFAULT_CONFIG, type AutomationConfig } from '../../../shared/config';
 import { DEFAULT_INTERNAL } from '../../../shared/internal';
@@ -50,7 +51,13 @@ function settings(
 function rig(config: AutomationConfig = settings()) {
   const tracker = { current: fighting(15), pendingMoves: 0 };
   const sent: Intent[] = [];
-  const queue = { enqueue: vi.fn((intent: Intent) => sent.push(intent) > 0) };
+  /** The Enters behind a teleport that went, apart from the teleports. */
+  const looks: Intent[] = [];
+  const queue = {
+    enqueue: vi.fn((intent: Intent) =>
+      intent.command === REREAD_ROOM ? looks.push(intent) > 0 : sent.push(intent) > 0
+    )
+  };
   const travel = {
     escapeUnanswered: false,
     teleportSent: vi.fn(),
@@ -80,7 +87,10 @@ function rig(config: AutomationConfig = settings()) {
   const reconfigure = (next: AutomationConfig): void => {
     current = next;
   };
-  return { flee, tracker, sent, travel, noteSafety, grounded, notice, leave, answer, reconfigure };
+  return {
+    ...{ flee, tracker, sent, looks, travel, noteSafety, grounded },
+    ...{ notice, leave, answer, reconfigure }
+  };
 }
 
 describe('FleeGoto', () => {
@@ -109,6 +119,15 @@ describe('FleeGoto', () => {
     // Once: the next status line does not send it again while it is unanswered.
     flee.consider(tracker.current);
     expect(sent).toHaveLength(1);
+  });
+
+  /* `sys goto` prints no room: an Enter behind it reprints where it landed. */
+  it('asks for the room once the teleport has gone', () => {
+    const { flee, tracker, looks, leave } = rig();
+    flee.consider(tracker.current);
+    expect(looks).toHaveLength(0);
+    leave();
+    expect(looks).toEqual([expect.objectContaining({ priority: 'emergency' })]);
   });
 
   it('sends nothing above its floor, nor on an unknown figure, nor out of a fight', () => {

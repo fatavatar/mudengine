@@ -1271,7 +1271,7 @@ export const RULES: Rule[] = [
   {
     type: 'mob-arrives-room',
     pattern:
-      /^(?:(?:A|An|The) )?(?<line>.+?) (?:in(?:to)? the room from|in from) (?:the )?(?<direction>[\w ]+)[.!]$/,
+      /^(?:(?:A|An|The) )?(?<line>.+?) (?:(?:in(?:to)?|enters) the room from|in from) (?:the )?(?<direction>[\w ]+)[.!]$/,
     outsideDescription: true
   },
   /*
@@ -1350,14 +1350,19 @@ export const RULES: Rule[] = [
    * statement of the state.
    */
   { type: 'party-following', pattern: /^You are (?:already )?following (?<leader>\w+)\.$/ },
+  /*
+   * The join and the parting take their full stop optionally: Skinny Inc
+   * prints `You are now following Fatty` bare (2026-09-24), and unread, the
+   * follower never knew whom it followed.
+   */
   {
     type: 'party-joined',
-    pattern: /^(?:(?<player>\w+) started to follow you|You are now following (?<leader>\w+))\.$/
+    pattern: /^(?:(?<player>\w+) started to follow you|You are now following (?<leader>\w+))\.?$/
   },
   {
     type: 'party-left',
     pattern:
-      /^(?:(?<player>\w+) is no longer following you|You are no longer following (?<leader>\w+))\.$/
+      /^(?:(?<player>\w+) is no longer following you|You are no longer following (?<leader>\w+))\.?$/
   },
   /*
    * `uninvite <name>`, captured live (2026-08-28). The offer is withdrawn before
@@ -1511,6 +1516,11 @@ export const RULES: Rule[] = [
    * wall and not a door. It consumes the pending move like the other two, and
    * carries no barrier because nothing the client can send opens it.
    */
+  /* The same refusal in Skinny Inc's words (2026-09-23): a closed door, gate or portcullis. */
+  {
+    type: 'direction-failed',
+    pattern: /^There is a closed (?<barrier>door|gate|portcullis) in that direction!/
+  },
   { type: 'direction-failed', pattern: /^You may not go through this exit!/ },
   /*
    * `You have progressed too far to go through this exit!` — the same gate seen

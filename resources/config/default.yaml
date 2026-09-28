@@ -154,6 +154,13 @@ connection:
 # name. The client reads the realm's word as that coin, counts it and picks
 # it up by it (`get dime`). A character may state its own, coin by coin.
 #
+# Its `effects:` list says what the realm's own sentences mean where its data
+# does not: `{ name, starts, ends, means }`, `means` naming any of blind,
+# poisoned, diseased, held, confused, hurting (losing health, which a walk
+# waits out) or fumble (the command just sent was lost, and goes again). Its
+# `rules:` answer its sentences (see `rules` below). MegaMUD's Messages table
+# is converted into both.
+#
 # The settings screen writes them, and `resources/servers/` ships Paradigm's
 # six -- four game realms on port 2323 and two test realms on 2324, differing
 # only in the realm number their `login:` script answers with. There is

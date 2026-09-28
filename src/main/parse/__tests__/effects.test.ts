@@ -325,7 +325,14 @@ describe('an effect the realm states', () => {
         starts: 'You are afraid',
         ends: 'The effects of fear wear off',
         means: ['held']
-      }
+      },
+      {
+        name: 'burning',
+        starts: 'You are on fire',
+        ends: 'The flames die down',
+        means: ['hurting']
+      },
+      { name: 'Retch', starts: 'You retch uncontrollably!', ends: '', means: ['fumble'] }
     ]
   );
 
@@ -354,5 +361,29 @@ describe('an effect the realm states', () => {
     expect(log).toEqual(['shiftHeldMove']);
     const free = effects.expired(held, { spells: 'fear' }, T + 5000) ?? held;
     expect(free.afflictions.held).toBe('no');
+  });
+
+  /* MegaMUD's *Losing HP*: the walk waits it out (`afflictionHolding`). */
+  it('marks the character losing health until its ending', () => {
+    const effects = new EffectTracker({
+      world,
+      spellLore: stated,
+      claims: { shiftHeldMove: () => true },
+      belongings: () => ({ rememberSpellDuration: () => {} })
+    });
+    const hurt = effects.onset(character(), onset('You are on fire', 'burning', T)) ?? character();
+    expect(hurt.afflictions.hurting).toBe('yes');
+    const healed = effects.expired(hurt, { spells: 'burning' }, T + 5000) ?? hurt;
+    expect(healed.afflictions.hurting).toBe('no');
+  });
+
+  /* MegaMUD's *Last action failed*: a fumble in the realm's words, nothing lasting. */
+  it('reads a stated fumble as the command lost, and as no effect', () => {
+    expect(stated.match('You retch uncontrollably!')).toEqual({
+      starts: [],
+      stops: [],
+      fumbles: true
+    });
+    expect(stated.means?.('Retch')).toEqual([]);
   });
 });

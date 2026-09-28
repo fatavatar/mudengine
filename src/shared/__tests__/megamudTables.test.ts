@@ -48,6 +48,15 @@ describe('a Messages table as rules and effects', () => {
       endsWith: 'The acid dries up',
       effects: ['losing-hp']
     },
+    {
+      name: 'acid rain',
+      match: 'You are drenched in acid',
+      endsWith: 'The acid dries up',
+      effects: ['losing-hp']
+    },
+    { name: 'Retch', match: 'You retch uncontrollably!', effects: ['action-failed'] },
+    { name: 'Rakshasha', match: 'The illusion vanishes in a flash!', effects: ['ends-combat'] },
+    { name: 'pool', match: 'You feel soothed', endsWith: 'The calm fades', effects: ['hp-regen'] },
     { name: 'blizzard', match: '{target} is frozen', endsWith: 'The ice melts', effects: ['held'] },
     { name: 'desert damage', match: 'You suffer in the desert heat', action: 'run' },
     { name: 'acid hits', match: 'Acid sears {target} for {dmg} damage!', endsWith: '' }
@@ -64,11 +73,13 @@ describe('a Messages table as rules and effects', () => {
         when: { line: '{target} steps onto the side-path.' },
         then: 'go path'
       },
-      { name: 'off', enabled: false, when: { line: 'Something' }, then: 'x' }
+      { name: 'off', enabled: false, when: { line: 'Something' }, then: 'x' },
+      // A fight the realm ended without `*Combat Off*`: a look at what is left.
+      { name: 'Rakshasha', when: { line: 'The illusion vanishes in a flash!' }, then: '' }
     ]);
   });
 
-  it('makes a lasting row an effect, `wait` and "cannot attack" meaning held', () => {
+  it('makes a lasting row an effect: held, losing health, a lost command, names unique', () => {
     expect(effects).toEqual([
       {
         name: 'fear',
@@ -78,12 +89,25 @@ describe('a Messages table as rules and effects', () => {
       },
       { name: 'weakness', starts: 'You feel weak', ends: 'You feel stronger', means: ['held'] },
       { name: 'sleep', starts: 'You are lulled to sleep', ends: 'You awaken', means: ['held'] },
-      { name: 'acid rain', starts: 'You are covered in acid', ends: 'The acid dries up', means: [] }
+      {
+        name: 'acid rain',
+        starts: 'You are covered in acid',
+        ends: 'The acid dries up',
+        means: ['hurting']
+      },
+      {
+        name: 'acid rain 2',
+        starts: 'You are drenched in acid',
+        ends: 'The acid dries up',
+        means: ['hurting']
+      },
+      { name: 'Retch', starts: 'You retch uncontrollably!', ends: '', means: ['fumble'] }
     ]);
   });
 
   it('names what it cannot carry, and carries nothing for an inert row', () => {
     expect(dropped).toEqual([
+      { name: 'pool', why: 'regen' },
       { name: 'blizzard', why: 'names-somebody' },
       { name: 'desert damage', why: 'run' }
     ]);

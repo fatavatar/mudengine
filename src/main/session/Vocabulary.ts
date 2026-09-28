@@ -13,7 +13,12 @@ import type { WorldGraph } from '../world/WorldGraph';
 import type { Errands } from './Errands';
 import { t } from '../app/i18n';
 import type { Block } from '../../shared/blocks';
-import { commandOf, GREATERMUD_ONLY, type CommandName } from '../../shared/commands';
+import {
+  ATTACK_COMMANDS,
+  commandOf,
+  GREATERMUD_ONLY,
+  type CommandName
+} from '../../shared/commands';
 import { coinReader, type CoinNames, type CoinReader } from '../../shared/coins';
 import { locateCommand } from '../../shared/locate';
 import { UNSTATED_REALM_WORDS, type RealmWords } from '../../shared/profiles';
@@ -106,6 +111,14 @@ export class Vocabulary {
   private readonly unavailable = new Set<CommandName>();
   /** The words already spoken about, so a refusal is said once and not per ask. */
   private readonly saidUnavailable = new Set<CommandName>();
+  /**
+   * Attack words `*Combat Engaged*` has answered on this connection, which the
+   * realm plainly has. Spoken back after that (`You say "a short dark
+   * goblin"`), it is the monster that is gone, not the word: the attack left a
+   * moment before its goblin died, and read as a missing word it retired the
+   * attack verb and healbot never fought again (2026-09-22).
+   */
+  private readonly engaged = new Set<CommandName>();
 
   constructor(
     parts: VocabularyParts,
@@ -150,6 +163,7 @@ export class Vocabulary {
   forgetRealm(): void {
     this.unavailable.clear();
     this.saidUnavailable.clear();
+    this.engaged.clear();
     this.serverFamily = null;
     this.errands.forgetFitness();
     this.familyStated = false;
@@ -177,7 +191,7 @@ export class Vocabulary {
    */
   noteWordMissing(spoken: string | undefined): void {
     const name = commandOf(spoken ?? '');
-    if (name === null || this.unavailable.has(name)) return;
+    if (name === null || this.unavailable.has(name) || this.engaged.has(name)) return;
     this.retire(name, spoken ?? name);
   }
 
@@ -283,6 +297,10 @@ export class Vocabulary {
    * client does not pick. It says which is which and lets both stand.
    */
   noteFamily(block: Block, answering: string | null = null): void {
+    // And an attack word the realm engaged on is one it has (`engaged`).
+    const engaged = block.type === 'combat-status' && block.groups['status'] === 'Engaged';
+    const attack = engaged ? commandOf(answering ?? '') : null;
+    if (attack !== null && ATTACK_COMMANDS.has(attack)) this.engaged.add(attack);
     if (this.serverFamily !== null) return;
     const reading = familyToldBy(block, answering);
     if (reading === null) return;

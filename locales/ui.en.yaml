@@ -414,6 +414,7 @@ notices:
       pauseOrRandom: a response with a pause or a random pick
       run: running away, which a rule cannot do
       preAttack: a pre-attack spell, which a monster rule does not carry
+      regen: faster regeneration, which was only ever shown
     drainStated:
       one: '"automation.spells.drain", "areaDrain", "drainBelow" and "drainTo" were added to
         {fileList}, turned off. When set, a drain spell replaces your attack spell while your
@@ -970,6 +971,7 @@ tabs:
     markHeld: held
     markPoisoned: poisoned
     markConfused: confused
+    markHurting: losing health
     markShopping: shopping
     markResting: resting
     markRestingTo: resting to {percent}%
@@ -2063,6 +2065,7 @@ cards:
       statusHeld: held
       statusPoisoned: poisoned
       statusConfused: confused
+      statusHurting: losing health
       statusOffline: offline
       statusResting: resting
       statusRunning: running
@@ -2979,7 +2982,7 @@ cards:
       earned: Earned
       level: Level
       toLevel: To level
-    # The four conditions the wire states, named where one is up. Only a
+    # The conditions the wire states, named where one is up. Only a
     # stated `yes` is drawn: unknown is not a condition, and `no` is the
     # ordinary state of a character.
     afflicted:
@@ -2987,6 +2990,7 @@ cards:
       confused: confused
       diseased: diseased
       held: held
+      hurting: losing health
       poisoned: poisoned
     level:
       caution: low
@@ -4359,6 +4363,7 @@ session:
     # The last-ditch teleport (todo 813): {command} is the realm's own, literally.
     teleporting: 'Teleporting out with {command}: {why}.'
     teleportReason: 'safety: teleport, {why}'
+    teleportLookReason: 'safety: where the teleport landed'
     teleportRefused: 'The game refused {command}: {answer}'
     teleportNot: 'Not teleporting: {why}, but {refused}.'
     teleportUnstated: no teleport command is stated for this realm or character
@@ -4669,6 +4674,7 @@ automation:
     reasonArrivalUnplaced: 'auto-combat: something arrived that the world data could not place'
     reasonRefresh: 'auto-combat: re-reading the room'
     reasonRoundAreaSpell: 'auto-combat: the room is crowded enough for the area spell'
+    reasonBreakEmpty: 'auto-combat: {spell} is being cast into an empty room'
     # Todo 816: the server repeats the spell each round; spent, the round changes to {verb}.
     reasonRoundMelee: 'auto-combat: {spell} is used up or out of reach, back to {verb}'
     reasonRoundSpell: 'auto-combat: attack spell'
@@ -5213,6 +5219,7 @@ automation:
     holdingHeld: Held fast; waiting here until you can move again.
     holdingPoisoned: Poisoned; waiting here until it runs its course.
     holdingConfused: Confused; waiting here until your head clears.
+    holdingHurting: Losing health; waiting here until it stops.
     afflictionResumed: The condition has passed; walking on.
     holdingDark: Too dark to tell where this is; waiting for a light.
     lightResumed: The room can be read again; walking on.

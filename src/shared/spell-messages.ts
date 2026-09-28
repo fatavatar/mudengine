@@ -198,6 +198,8 @@ export interface SpellMessageHit {
   starts: readonly string[];
   /** Spells this sentence ends, lower-cased, in file order. */
   stops: readonly string[];
+  /** The realm threw the last command away, in its own words (a stated `fumble`). */
+  fumbles?: true;
 }
 
 /** The lower-cased, trimmed key every spell name is stored under. */
@@ -454,7 +456,7 @@ export interface SpellLore {
   /** What this realm has worked out about the effects it cannot name. */
   readonly effects: EffectLedger;
   /** The conditions a realm states an effect turns on (`withStatedEffects`); absent, none. */
-  means?(spell: string): readonly EffectMeaning[];
+  means?(spell: string): readonly (keyof Afflictions)[];
 }
 
 /** A lore that knows no sentence and learns none. The zero-data client. */
@@ -509,10 +511,22 @@ export function spellLoreOf(
   };
 }
 
-/** A condition an effect can turn on, as a realm states it. */
-export type EffectMeaning = keyof Afflictions;
+/**
+ * What a realm states a sentence means: a condition it turns on, or `fumble`
+ * — the command before it was thrown away (MegaMUD's *last action failed*: a
+ * fear, a retch, a trap sprung in the hand), sent again as a fumble's is.
+ */
+export type EffectMeaning = keyof Afflictions | 'fumble';
 
-const MEANINGS: readonly EffectMeaning[] = ['blind', 'poisoned', 'diseased', 'held', 'confused'];
+const MEANINGS: readonly EffectMeaning[] = [
+  'blind',
+  'poisoned',
+  'diseased',
+  'held',
+  'confused',
+  'hurting',
+  'fumble'
+];
 
 /**
  * An effect a realm states: the sentence it lands with, the one it ends with,
@@ -558,11 +572,19 @@ export function normalizeStatedEffects(value: unknown): StatedEffect[] {
 export function withStatedEffects(lore: SpellLore, effects: readonly StatedEffect[]): SpellLore {
   if (effects.length === 0) return lore;
   const book = new SpellMessageBook();
-  const meanings = new Map<string, readonly EffectMeaning[]>();
+  const fumbles = new SpellMessageBook();
+  const meanings = new Map<string, readonly (keyof Afflictions)[]>();
   for (const effect of effects) {
+    if (effect.means.includes('fumble')) {
+      fumbles.add(effect.name, 'start', effect.starts);
+      continue;
+    }
     book.add(effect.name, 'start', effect.starts);
     if (effect.ends.length > 0) book.add(effect.name, 'stop', effect.ends);
-    meanings.set(spellKey(effect.name), effect.means);
+    meanings.set(
+      spellKey(effect.name),
+      effect.means.filter((meaning) => meaning !== 'fumble')
+    );
   }
   const merge = (a: SpellMessageHit | null, b: SpellMessageHit | null): SpellMessageHit | null =>
     a === null
@@ -575,7 +597,10 @@ export function withStatedEffects(lore: SpellLore, effects: readonly StatedEffec
           };
   return {
     ...lore,
-    match: (text) => merge(lore.match(text), book.match(text)),
+    match: (text) =>
+      fumbles.match(text) !== null
+        ? { starts: [], stops: [], fumbles: true }
+        : merge(lore.match(text), book.match(text)),
     startOf: (spell) => lore.startOf(spell) ?? book.startOf(spell),
     stopOf: (spell) => lore.stopOf(spell) ?? book.stopOf(spell),
     means: (spell) => meanings.get(spellKey(spell)) ?? lore.means?.(spell) ?? []

@@ -4052,6 +4052,23 @@ describe('draining when hurt', () => {
     expect(sent).toEqual(['pclo', 'nsto']);
   });
 
+  /* The server casts a room spell on into an empty room, and the rooms after it. */
+  it('breaks a room spell the room has emptied under', () => {
+    const auto = make(rounds(), true, spells({ areaAttack: 'pclo', areaMinMana: 0 }));
+    round(auto, 90, 3);
+    const empty = { ...block('spell-ineffective'), text: 'Your spell has no effect in this room!' };
+    auto.onBlock(empty);
+    drain();
+    expect(sent).toEqual(['pclo', 'break']);
+    // An immune monster is not an empty room: nothing is broken.
+    const auto2 = make(rounds(), true, spells({ areaAttack: 'pclo', areaMinMana: 0 }));
+    sent.length = 0;
+    round(auto2, 90, 3);
+    auto2.onBlock({ ...block('spell-ineffective', { target: 'giant rat' }), text: 'x' });
+    drain();
+    expect(sent).toEqual(['pclo']);
+  });
+
   it('keeps the room spell in a crowd when no room drain is set', () => {
     const auto = make(rounds(), true, spells({ areaAttack: 'pclo', areaMinMana: 0 }));
     round(auto, 40, 3);

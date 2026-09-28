@@ -8569,7 +8569,8 @@ describe('what the server has said is wrong with the character', () => {
       poisoned: 'yes',
       diseased: 'unknown',
       held: 'yes',
-      confused: 'unknown'
+      confused: 'unknown',
+      hurting: 'unknown'
     });
     const later = play([
       '[HP=34]:',
@@ -8583,7 +8584,8 @@ describe('what the server has said is wrong with the character', () => {
       poisoned: 'no',
       diseased: 'unknown',
       held: 'no',
-      confused: 'unknown'
+      confused: 'unknown',
+      hurting: 'unknown'
     });
   });
 

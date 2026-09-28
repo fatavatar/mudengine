@@ -19,6 +19,7 @@ import type { Grounded } from './Grounded';
 import type { Publisher } from './Publisher';
 import type { Travel } from './Travel';
 import { healthFraction, percentText } from '../../shared/automation';
+import { REREAD_ROOM } from '../../shared/commands';
 import type { Block, BlockType } from '../../shared/blocks';
 import type { CharacterState } from '../../shared/character';
 import type { AutomationConfig } from '../../shared/config';
@@ -183,6 +184,19 @@ export class FleeGoto implements SessionModule {
       onSent: () => {
         awaiting.sent = true;
         awaiting.deadline = Date.now() + tuning().session.retreatPatienceMs;
+        /*
+         * And an Enter behind it: `sys goto` moves the character without
+         * printing where it landed, so the room on screen stayed the one it
+         * fled and the landing was never read (2026-09-22). The reprint is
+         * the landing; a refused teleport reprints the room it stayed in.
+         */
+        this.queue.enqueue({
+          command: REREAD_ROOM,
+          priority: 'emergency',
+          coalesceKey: 'escape:teleport-look',
+          reason: t('session.safety.teleportLookReason'),
+          stillWanted: () => this.awaiting === awaiting
+        });
       }
     });
   }

@@ -22,7 +22,7 @@ import type { MobPriorityBand, MobRule } from './mobRules';
 import { MOB_PRIORITIES } from './mobRules';
 
 /** Why a row could not be carried: the migration's note says each in words. */
-export type DroppedWhy = 'names-somebody' | 'pause-or-random' | 'run' | 'pre-attack';
+export type DroppedWhy = 'names-somebody' | 'pause-or-random' | 'run' | 'pre-attack' | 'regen';
 
 /** What a converter could not carry, and why, for the note that reports it. */
 export interface Dropped {
@@ -54,10 +54,21 @@ export function commandsOf(response: string): string[] | null {
   return parts;
 }
 
+/** A namer that makes each name unique by counting it: `plague`, `plague 2`. */
+function uniqueNames(): (name: string) => string {
+  const used = new Map<string, number>();
+  return (name) => {
+    const seen = (used.get(name.toLowerCase()) ?? 0) + 1;
+    used.set(name.toLowerCase(), seen);
+    return seen === 1 ? name : `${name} ${seen}`;
+  };
+}
+
 /**
  * A `messages.yaml` table as rules and stated effects. Names are made unique,
- * because a rule list keeps the first of two rules with one name and MegaMUD's
- * table repeats them (`acid hits` twice).
+ * each list its own, because a list keeps the first of two rows with one name
+ * and MegaMUD's table repeats them (`acid hits` twice, `trap disarm` eleven
+ * times).
  */
 export function fromMessages(rows: unknown): {
   rules: RuleRow[];
@@ -67,12 +78,8 @@ export function fromMessages(rows: unknown): {
   const rules: RuleRow[] = [];
   const effects: StatedEffect[] = [];
   const dropped: Dropped[] = [];
-  const used = new Map<string, number>();
-  const unique = (name: string): string => {
-    const seen = (used.get(name.toLowerCase()) ?? 0) + 1;
-    used.set(name.toLowerCase(), seen);
-    return seen === 1 ? name : `${name} ${seen}`;
-  };
+  const ruleName = uniqueNames();
+  const effectName = uniqueNames();
 
   for (const raw of Array.isArray(rows) ? rows : []) {
     if (raw === null || typeof raw !== 'object') continue;
@@ -87,18 +94,29 @@ export function fromMessages(rows: unknown): {
     const enabled = row['enabled'] !== false;
 
     const means = new Set<EffectMeaning>(MEANINGS.filter((meaning) => marks.includes(meaning)));
-    // Standing still until it ends is what `wait` and "cannot attack" ask for.
+    // Standing still until it ends is what `wait` and "cannot attack" ask for,
+    // and what MegaMUD does while hit points drain away (rest until it stops).
     if (action === 'wait' || marks.includes('no-attack')) means.add('held');
-    const lasts = ends.length > 0 && (marks.length > 0 || action === 'wait');
-    if (lasts && enabled) {
+    if (marks.includes('losing-hp')) means.add('hurting');
+    // "Last action failed" with nothing lasting: the moment a command was lost.
+    if (marks.includes('action-failed') && ends.length === 0) means.add('fumble');
+    const lasts = ends.length > 0 || means.has('fumble');
+    if (lasts && means.size > 0 && enabled) {
       if (match.includes('{') || ends.includes('{')) {
         dropped.push({ name, why: 'names-somebody' });
       } else {
-        effects.push({ name, starts: match, ends, means: [...means] });
+        effects.push({ name: effectName(name), starts: match, ends, means: [...means] });
       }
+    } else if (lasts && enabled && marks.some((mark) => mark.endsWith('-regen'))) {
+      // Faster regeneration was only ever shown, on the old Vitals card.
+      dropped.push({ name, why: 'regen' });
     }
 
-    const answer = action === 'look' ? [''] : response.length > 0 ? commandsOf(response) : [];
+    // A fight the realm ended without `*Combat Off*` (turned to stone, an
+    // illusion gone): a look at what is left, where the row says nothing else.
+    const ended = marks.includes('ends-combat') && response.length === 0;
+    const answer =
+      action === 'look' || ended ? [''] : response.length > 0 ? commandsOf(response) : [];
     if (answer === null) {
       dropped.push({ name, why: 'pause-or-random' });
       continue;
@@ -107,7 +125,7 @@ export function fromMessages(rows: unknown): {
     if (answer.length === 0) continue;
     const chase = row['chase'] === true;
     rules.push({
-      name: unique(name),
+      name: ruleName(name),
       // A chase row was never matched (the client cannot yet follow through a
       // special exit), and a disabled one was switched off by the player.
       ...(enabled && !chase ? {} : { enabled: false as const }),

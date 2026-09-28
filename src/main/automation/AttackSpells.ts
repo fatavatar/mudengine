@@ -675,6 +675,20 @@ export class AttackSpells {
   }
 
   /** The spell the server is repeating, while it is one. */
+  /**
+   * `Your spell has no effect in this room!` while a room spell repeats: the
+   * room is empty, and the server goes on casting it here and into every room
+   * after until told to stop (skinny, 2026-09-23). MegaMUD answers it with
+   * `break`. The spell, for the caller to send that; null for anything else.
+   */
+  emptied(block: Block): string | null {
+    const cast = this.repeated;
+    if (block.type !== 'spell-ineffective' || !/in this room!$/.test(block.text)) return null;
+    if (cast === null || !cast.area) return null;
+    this.fightEnded();
+    return cast.spell;
+  }
+
   private get repeated(): Extract<Action, { kind: 'spell' }> | null {
     return this.repeating?.kind === 'spell' ? this.repeating : null;
   }

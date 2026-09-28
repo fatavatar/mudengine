@@ -3,7 +3,7 @@ import { coinReader, STOCK_COIN } from '../../../shared/coins';
 import { parseCoinEntry } from '../inventory';
 import { describe, expect, it } from 'vitest';
 
-import { SpellMessageBook, spellLoreOf } from '../../../shared/spell-messages';
+import { SpellMessageBook, spellLoreOf, withStatedEffects } from '../../../shared/spell-messages';
 import { ActionBook, parseActionsCsv } from '../../../shared/actions';
 import { DeathBook } from '../../../shared/death-messages';
 import { Classifier, foregroundCodes, looksLikeRoomName, tailAfterPrompt } from '../Classifier';
@@ -284,6 +284,10 @@ describe('combat', () => {
      */
     const creep = expectType('A giant rat creeps in the room from the above!', 'mob-arrives-room');
     expect(creep).toMatchObject({ attacker: 'giant rat', direction: 'above' });
+
+    // Skinny Inc's own verb, where the frame is the verb (2026-09-23).
+    const enters = expectType('A giant rat enters the room from the south.', 'mob-arrives-room');
+    expect(enters).toMatchObject({ attacker: 'giant rat', direction: 'south' });
   });
 
   it('reads combat state and experience', () => {
@@ -571,6 +575,10 @@ describe('conversation, movement, items', () => {
     expectType('There is no exit in that direction!', 'direction-failed');
     expect(expectType('The door is closed!', 'direction-failed')['barrier']).toBe('door');
     expect(expectType('The gate is closed!', 'direction-failed')['barrier']).toBe('gate');
+    // Skinny Inc's words for the same refusal.
+    expect(
+      expectType('There is a closed door in that direction!', 'direction-failed')['barrier']
+    ).toBe('door');
     // `l n` at a shut door (Door.cs:98): a look's refusal, not the move's.
     expectType('The door is closed in that direction!', 'peek-failed');
     // A refused *look* is not a refused move: the walker acts on the other one.
@@ -1842,6 +1850,12 @@ describe('the cheap eight', () => {
     const incoming = expectType('Soul has invited you to follow him.', 'party-invited');
     expect(incoming['leader']).toBe('Soul');
     expect(incoming['player']).toBeUndefined();
+  });
+
+  // Skinny Inc prints the join and the parting with no full stop (2026-09-24).
+  it('reads a follow joined and left without its full stop', () => {
+    expect(expectType('You are now following Fatty', 'party-joined')['leader']).toBe('Fatty');
+    expect(expectType('You are no longer following Fatty', 'party-left')['leader']).toBe('Fatty');
   });
 
   // `uninvite soul`, captured live: the offer withdrawn before it was accepted.
@@ -3194,6 +3208,23 @@ describe("the server's message table", () => {
    * command was thrown away (todo 05). The character's own line is the
    * fumble; the room's line is somebody else's and stays explained.
    */
+  /* A realm's own fumble sentence (`effects`, `means: [fumble]`): marked stated. */
+  it('reads a fumble the realm states as a fumbled command, marked as stated', () => {
+    const lore = withStatedEffects(spellLoreOf(new SpellMessageBook(), new SpellMessageBook()), [
+      {
+        name: 'Winch failed',
+        starts: 'You heave on the winch, but it does not budge.',
+        ends: '',
+        means: ['fumble']
+      }
+    ]);
+    const block = new Classifier(NAMES, (text) => lore.match(text)).classify(
+      line('You heave on the winch, but it does not budge.')
+    ).block;
+    expect(block.type).toBe('command-fumbled');
+    expect(block.groups['stated']).toBe('fumble');
+  });
+
   it("reads the character's line of a confusion row as a fumbled command", () => {
     const rows = MessageBook.fromRows(
       parseMessagesCsv(

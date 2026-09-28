@@ -6999,7 +6999,8 @@ function theMegamudTablesBecameRules(home: Home, note: (message: string) => void
       'names-somebody': t('notices.migration.megamudDropped.namesSomebody'),
       'pause-or-random': t('notices.migration.megamudDropped.pauseOrRandom'),
       run: t('notices.migration.megamudDropped.run'),
-      'pre-attack': t('notices.migration.megamudDropped.preAttack')
+      'pre-attack': t('notices.migration.megamudDropped.preAttack'),
+      regen: t('notices.migration.megamudDropped.regen')
     } satisfies Record<Dropped['why'], string>;
     const list = dropped.map((row) => `${row.name} (${why[row.why]})`).join('; ');
     note(t('notices.migration.megamudDropped.list', { realm: id, list }));

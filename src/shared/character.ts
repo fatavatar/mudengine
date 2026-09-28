@@ -93,6 +93,13 @@ export interface Afflictions {
    * the fumble itself, which proves it.
    */
   confused: Affliction;
+  /**
+   * Losing health to something lasting — fire, acid, a bleeding wound, a
+   * plague. No sentence in the server's code says it; the realm states it as
+   * message data (MegaMUD's *Losing HP*, carried into `server.yaml`'s
+   * `effects`), and a walk waits it out, as MegaMUD rests until it stops.
+   */
+  hurting: Affliction;
 }
 
 export const NO_AFFLICTIONS: Afflictions = {
@@ -100,7 +107,8 @@ export const NO_AFFLICTIONS: Afflictions = {
   poisoned: 'unknown',
   diseased: 'unknown',
   held: 'unknown',
-  confused: 'unknown'
+  confused: 'unknown',
+  hurting: 'unknown'
 };
 
 /**

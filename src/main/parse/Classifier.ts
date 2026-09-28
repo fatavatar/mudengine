@@ -709,6 +709,12 @@ export class Classifier {
     }
     const hit = this.spells(text);
     if (!hit) return block;
+    // A fumble the realm states in its own words: marked, since it says
+    // nothing of confusion (a trap sprung in the hand, the winch that held).
+    if (hit.fumbles === true) {
+      const confidence = Math.max(block.confidence, tuning().parse.baseConfidence);
+      return this.build(line, 'command-fumbled', { stated: 'fumble' }, text, confidence);
+    }
     const begins = hit.starts.length > 0;
     const ends = hit.stops.length > 0;
     if (begins === ends) return block;
