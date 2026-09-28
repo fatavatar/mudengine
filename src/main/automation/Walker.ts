@@ -4273,19 +4273,27 @@ export class Walker {
    * nobody to tell. Skipped for every step but a `Text:` exit — a follower
    * already sees `X leaves north` unaided.
    *
-   * **`requirement.kind === 'text'`, not `direction === 'portal'`.** The two
-   * sound alike and are not: `'portal'` is `PortalExit`'s own direction, a
-   * room-script teleport resolved by coordinates rather than an exit
-   * (`dive pool`) — measured live against this exact edge (`haven()`'s
-   * `1/3 → 1/4`, `Text: go manhole`), whose route step keeps its cardinal
-   * `direction: 'd'` and carries the phrase in `requirement.commands`
-   * instead. `kind === 'text'` is what both shapes share, per `PortalExit`'s
-   * own comment ("the route step's command is the phrase, exactly as a
-   * `Text:` exit's is"), and is the one that actually distinguishes a typed
-   * phrase from a bare direction on the wire.
+   * **`requirement.commands`, not `requirement.kind` and not
+   * `direction === 'portal'`.** Neither of the other two is the right test.
+   * `direction === 'portal'` is `PortalExit`'s own direction — a room-script
+   * teleport resolved by coordinates rather than an exit (`dive pool`) — and
+   * misses an ordinary `Text:` exit sitting on a cardinal slot entirely:
+   * measured live against `haven()`'s own `1/3 → 1/4`, `Text: go manhole`,
+   * whose route step keeps `direction: 'd'`. `requirement.kind === 'text'`
+   * is closer but still wrong: `WorldGraph.linkPortals` prices a *gated*
+   * room-script portal (`go portal` behind a `minlevel`/`maxlevel`) as
+   * `kind: 'level'` — "a level gate prices and blocks exactly as an exit's
+   * `Level:` does" — while still handing the phrase over as
+   * `requirement.commands`, exactly as an ungated one does. Reported live
+   * (2026-09-28): a leader crossing a level-gated `go portal` got no relay,
+   * no reinvite and no wait, because `kind` had become `'level'` on a step
+   * that still needed the phrase, not the bare direction, to cross. Testing
+   * for the phrase itself — `requirement.commands`, non-empty — is what
+   * `Requirement.commands`'s own doc comment already promises: "Commands
+   * that traverse this exit instead of the bare direction."
    */
   private relayTextExit(step: RouteStep, state: CharacterState): void {
-    if (step.requirement?.kind !== 'text' || state.party.following !== null) return;
+    if (!step.requirement?.commands?.length || state.party.following !== null) return;
     const others = this.partyOthers(state);
     if (others.length === 0) return;
     const wasSneaking = state.stealth === 'sneaking';

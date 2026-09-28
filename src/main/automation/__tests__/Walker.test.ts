@@ -5799,6 +5799,39 @@ describe('a text-exit party relay', () => {
     expect(sent).toEqual(['.@party go crimson portal', 'go crimson portal']);
   });
 
+  /*
+   * Reported live (2026-09-28): a level-gated `go portal` relayed nothing.
+   * `WorldGraph.linkPortals` prices a gated room-script portal as
+   * `requirement.kind: 'level'`, not `'text'`, even though the step still
+   * needs the phrase — see `relayTextExit`'s own comment on why the test is
+   * `requirement.commands`, not `kind`.
+   */
+  it('says @party before a level-gated portal too, kind: level and all', () => {
+    const GATED_PORTAL: Route = {
+      cost: 1,
+      blocked: false,
+      steps: [
+        {
+          from: '1/1',
+          to: '1/2',
+          direction: 'portal',
+          command: 'go portal',
+          name: 'Beyond',
+          requirement: {
+            kind: 'level',
+            raw: 'go portal; minlevel 10',
+            commands: ['go portal'],
+            minLevel: 10
+          },
+          dark: false
+        }
+      ]
+    };
+    const { begin } = trackedWalker();
+    begin(GATED_PORTAL, leading(1, 1, ['Pip']));
+    expect(sent).toEqual(['.@party go portal', 'go portal']);
+  });
+
   it('says nothing for a cardinal direction', () => {
     const { begin } = trackedWalker();
     begin(ROUTE, leading(1, 1, ['Pip']));
