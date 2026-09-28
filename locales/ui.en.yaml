@@ -400,6 +400,20 @@ notices:
     training: '"automation.train" was added to {file}, turned off. At a trainer with unspent CPs, it
       opens the stat screen and buys the stats set under Training, cheapest first. Nothing is spent
       until you turn it on and raise a stat.'
+    forkSettings:
+      one: 'The party pacing, Auto-Teleport and monster settings in {fileList} were renamed to this
+        version''s names, keeping their values.'
+      many: 'The party pacing, Auto-Teleport and monster settings in {count} files ({fileList}) were
+        renamed to this version''s names, keeping their values.'
+    megamudTables: 'The MegaMUD tables imported for {realm} are now its own rules: {rules} rules,
+      {effects} effects and {mobRules} monster rules were written into its server.yaml. The old
+      table files were kept beside it, renamed .converted.'
+    megamudDropped:
+      list: 'Some rows of {realm}''s MegaMUD tables could not be carried over: {list}.'
+      namesSomebody: a lasting effect whose sentence names somebody
+      pauseOrRandom: a response with a pause or a random pick
+      run: running away, which a rule cannot do
+      preAttack: a pre-attack spell, which a monster rule does not carry
     drainStated:
       one: '"automation.spells.drain", "areaDrain", "drainBelow" and "drainTo" were added to
         {fileList}, turned off. When set, a drain spell replaces your attack spell while your

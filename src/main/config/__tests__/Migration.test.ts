@@ -6503,3 +6503,100 @@ describe('the party settings are stated', () => {
     expect(fs.readFileSync(profile, 'utf8')).toBe(text);
   });
 });
+
+/*
+ * The fork's settings and tables under upstream's names (2026-09-28): values
+ * carried, never reset, and a realm's MegaMUD tables as its own rules.
+ */
+describe('the fork’s settings and tables, merged with upstream', () => {
+  const character = (body: string): string => {
+    const scope = home.profile('skinny');
+    fs.mkdirSync(scope.dir, { recursive: true });
+    fs.writeFileSync(scope.file, body, 'utf8');
+    return scope.file;
+  };
+  const automationOf = (file: string): Record<string, Record<string, unknown>> =>
+    parse(fs.readFileSync(file, 'utf8'))['automation'] as Record<string, Record<string, unknown>>;
+
+  it('renames the party keys, turns the goto destination into a command, and folds the monster rows', () => {
+    const file = character(
+      [
+        'server: Skinny Inc',
+        'automation:',
+        '  party:',
+        '    parEverySeconds: 10',
+        '    ignoreWaitWhenLeading: true',
+        '  safety:',
+        '    fleeGoto:',
+        '      enabled: true',
+        '      destination: sil',
+        '  combat:',
+        '    mobRules:',
+        '      - { mob: vashti, treat: last }',
+        '    monsters:',
+        '      - mob: adult red dragon',
+        '        attack: { spell: srip, max: 10 }',
+        '      - mob: vashti',
+        '        attack: { spell: srip, max: 0 }',
+        '      - { mob: storm giant, relationship: enemy, notHostile: true }',
+        ''
+      ].join('\n')
+    );
+    migrate();
+    const { party, safety, combat } = automationOf(file);
+    expect(party).toMatchObject({ parSeconds: 10, ignoreWait: true });
+    expect(party).not.toHaveProperty('parEverySeconds');
+    expect(safety!['fleeGoto']).toEqual({ enabled: true, command: 'sys goto sil' });
+    expect(combat).not.toHaveProperty('monsters');
+    // The row the file already stated wins; the rest are carried whole.
+    expect(combat!['mobRules']).toEqual([
+      { mob: 'vashti', treat: 'last' },
+      { mob: 'adult red dragon', treat: 'default', cast: { spell: 'srip', times: 10 } },
+      { mob: 'storm giant', treat: 'default', notHostile: true }
+    ]);
+    const text = fs.readFileSync(file, 'utf8');
+    migrate();
+    expect(fs.readFileSync(file, 'utf8')).toBe(text);
+  });
+
+  it('turns a realm’s tables into its own rules, effects and monster rules, once', () => {
+    const scope = home.server('skinny-inc');
+    fs.mkdirSync(scope.dir, { recursive: true });
+    fs.writeFileSync(scope.file, 'name: Skinny Inc\nhost: bbs\nport: 2424\n', 'utf8');
+    const messages = path.join(scope.dir, 'messages.yaml');
+    const monsters = path.join(scope.dir, 'monsters.yaml');
+    fs.writeFileSync(
+      messages,
+      [
+        'messages:',
+        '  - { name: Promo, match: Check out the website, response: "^M" }',
+        '  - { name: fear, match: You are afraid, endsWith: The effects of fear wear off, effects: [held] }',
+        '  - { name: desert damage, match: You suffer in the desert heat, action: run }',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+    fs.writeFileSync(monsters, 'monsters:\n  - { mob: hooded man, relationship: avoid }\n', 'utf8');
+    migrate();
+    const server = parse(fs.readFileSync(scope.file, 'utf8')) as Record<string, unknown>;
+    expect(server['rules']).toEqual([
+      { name: 'Promo', when: { line: 'Check out the website' }, then: '' }
+    ]);
+    expect(server['effects']).toEqual([
+      {
+        name: 'fear',
+        starts: 'You are afraid',
+        ends: 'The effects of fear wear off',
+        means: ['held']
+      }
+    ]);
+    expect(server['mobRules']).toEqual([{ mob: 'hooded man', treat: 'never' }]);
+    expect(fs.existsSync(messages)).toBe(false);
+    expect(fs.existsSync(`${messages}.converted`)).toBe(true);
+    expect(said.some((m) => m.includes('1 rules, 1 effects and 1 monster rules'))).toBe(true);
+    expect(said.some((m) => m.includes('desert damage'))).toBe(true);
+    const text = fs.readFileSync(scope.file, 'utf8');
+    migrate();
+    expect(fs.readFileSync(scope.file, 'utf8')).toBe(text);
+  });
+});

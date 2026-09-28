@@ -258,7 +258,17 @@ export function stanceHere(
  * narrowest scope's row is already in front and anything behind it is the
  * broader scope it overrode.
  */
-export function normalizeMobRules(value: unknown): MobRule[] {
+/** The most rows a list keeps: past this it is not a list somebody typed. */
+export const MOB_RULES_MOST = 64;
+
+/**
+ * The most a realm's own list keeps (`server.yaml`): an imported MegaMUD
+ * *Monsters* table speaks for the realm's monsters, 510 of them on
+ * skinny-inc, out of 1,500 the realm names (2026-09-28).
+ */
+export const REALM_MOB_RULES_MOST = 2000;
+
+export function normalizeMobRules(value: unknown, most = MOB_RULES_MOST): MobRule[] {
   const rows: MobRule[] = [];
   if (!Array.isArray(value)) return rows;
   const seen = new Set<string>();
@@ -270,7 +280,7 @@ export function normalizeMobRules(value: unknown): MobRule[] {
     if (!MOB_TREATMENTS.includes(treat)) continue;
     seen.add(mob);
     rows.push(isStance(treat) ? { mob, treat } : { mob, treat, ...fightingOf(entry) });
-    if (rows.length >= 64) break;
+    if (rows.length >= most) break;
   }
   return rows;
 }

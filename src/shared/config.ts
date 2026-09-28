@@ -53,7 +53,7 @@ import {
 } from './notifications';
 import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
 import type { ConnectionTarget, StreamEncoding } from './types';
-import { normalizeMobRules, type MobRule } from './mobRules';
+import { normalizeMobRules, REALM_MOB_RULES_MOST, type MobRule } from './mobRules';
 // A value import, and safe: `commands.ts` imports nothing from `shared/`, so
 // there is no cycle for a bundler to resolve the wrong way round.
 import { REREAD_ROOM } from './commands';
@@ -3432,7 +3432,7 @@ function normalizeServer(value: unknown): Server | null {
      * reported.
      */
     database: str(value['database'], ''),
-    mobRules: normalizeMobRules(value['mobRules']),
+    mobRules: normalizeMobRules(value['mobRules'], REALM_MOB_RULES_MOST),
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
     locate: asLocateWord(value['locate']) ?? DEFAULT_LOCATE,
     coins: asCoinNames(value['coins']),

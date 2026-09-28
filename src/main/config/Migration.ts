@@ -60,6 +60,8 @@ import { discoveryKey, type Discovery } from '../../shared/memory';
 import { realmKey } from '../world/RealmLore';
 import type { ShippedWorld } from '../../shared/worlds';
 import { CONDITION_WAIT_KEYS } from '../../shared/walk';
+import { fromMessages, fromMonsters, type Dropped } from '../../shared/megamudTables';
+import { mobKey } from '../../shared/world';
 
 export interface MigrationOptions {
   home: Home;
@@ -242,6 +244,13 @@ function migrateAll(options: MigrationOptions): void {
   theAccountJoinedTheScript(home, note);
   thePagerRepeats(home, note);
   theHangPenaltyIsTheRealms(home, note);
+  /*
+   * **Before `statedTheTeleport` and `statedThePartyPacing`**, which write the
+   * shipped values into a block that lacks the key: a fork file states the
+   * same settings under the fork's names, and those must be carried first.
+   */
+  theForksSettingsBecameUpstreams(home, note);
+  theMegamudTablesBecameRules(home, note);
   statedTheTeleport(home, note, options.template);
   statedTheFreedomCure(home, note);
   statedTheMeditateCeiling(home, note, options.template);
@@ -2456,7 +2465,14 @@ function retireStaleProse(
     if (typeof blob === 'string' && /\bflee/i.test(blob) && firstKey !== null) {
       const forBlock = comments.get(`${root}.${key}`);
       const forFirst = comments.get(`${root}.${key}.${firstKey}`);
-      if (forBlock !== undefined && forFirst !== undefined) {
+      /*
+       * Already the template's paragraph: read back, the first setting's
+       * comment lands on the map again, and the template's own words name
+       * `flee` ("THERE IS NO `flee` COMMAND"), so without this the same move
+       * was made and announced on every start (2026-09-28).
+       */
+      const settled = blob.trim() === forFirst?.trim() || blob.trim() === forBlock?.trim();
+      if (forBlock !== undefined && forFirst !== undefined && !settled) {
         (pair.key as Scalar).commentBefore = forBlock;
         (first!.key as Scalar).commentBefore = forFirst;
         pair.value.commentBefore = null;
@@ -6860,3 +6876,132 @@ const RESUME_ASK_COMMENT = ` How far the character may have wandered from what i
  movement stopped -- for a route and for a lap alike, so a movement stopped and
  started again from the same room never asks however far it still has to go,
  and a character killed and reborn two maps away does.`;
+
+/** fatavatar's names for the party settings, and upstream's for the same ones (todo 831). */
+const FORK_PARTY_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ['waitForMembersBelow', 'waitBelow'],
+  ['waitNoLongerMinutes', 'waitMinutes'],
+  ['ignoreWaitWhenLeading', 'ignoreWait'],
+  ['ignorePartyWhenFollowing', 'ignoreParty'],
+  ['requestPartyHealth', 'askHealth'],
+  ['parEverySeconds', 'parSeconds']
+];
+
+/**
+ * The fork's settings under upstream's names (2026-09-28), where the fork
+ * merged upstream's adoption of them (todos 813, 818, 831): the party pacing
+ * keys renamed in place, the `sys goto` escape's `destination` as the literal
+ * `command` upstream sends, and a file's `combat.monsters` rows folded into its
+ * `mobRules`. Values are carried, never reset; a key upstream's name already
+ * states wins, and the fork's copy goes.
+ */
+function theForksSettingsBecameUpstreams(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const moved: string[] = [];
+  for (const file of files) {
+    edit(file, (document) => {
+      let changed = false;
+      const party = document.getIn(['automation', 'party'], true);
+      if (isMap(party)) {
+        for (const [fork, upstream] of FORK_PARTY_KEYS) {
+          const at = party.items.findIndex((item) => keyText(item as Pair) === fork);
+          if (at === -1) continue;
+          if (party.has(upstream)) party.items.splice(at, 1);
+          else (party.items[at]!.key as Scalar).value = upstream;
+          changed = true;
+        }
+      }
+      const flee = document.getIn(['automation', 'safety', 'fleeGoto'], true);
+      if (isMap(flee) && flee.has('destination')) {
+        const destination = String(flee.get('destination') ?? '').trim();
+        if (!flee.has('command')) flee.set('command', destination ? `sys goto ${destination}` : '');
+        flee.delete('destination');
+        changed = true;
+      }
+      const combat = document.getIn(['automation', 'combat'], true);
+      if (isMap(combat) && combat.has('monsters')) {
+        const rows = combat.get('monsters');
+        const { rules } = fromMonsters(isSeq(rows) ? rows.toJSON() : []);
+        const kept = combat.get('mobRules');
+        const own = isSeq(kept) ? (kept.toJSON() as Array<{ mob: string }>) : [];
+        const named = new Set(own.map((row) => mobKey(row.mob)));
+        const merged = [...own, ...rules.filter((row) => !named.has(mobKey(row.mob)))];
+        combat.delete('monsters');
+        combat.set('mobRules', document.createNode(merged));
+        changed = true;
+      }
+      if (changed) moved.push(file);
+      return changed;
+    });
+  }
+  if (moved.length === 0) return;
+  const params = { count: moved.length, fileList: moved.join(', ') };
+  note(
+    moved.length === 1
+      ? t('notices.migration.forkSettings.one', params)
+      : t('notices.migration.forkSettings.many', params)
+  );
+}
+
+/**
+ * A realm's MegaMUD tables as the client's own mechanisms (2026-09-28): the
+ * fork's `messages.yaml` into its `server.yaml` as line rules and stated
+ * effects, and its `monsters.yaml` into the same file's `mobRules`, each by
+ * `megamudTables.ts`. The table file is kept beside, renamed `.converted`, so
+ * nothing the player imported is lost and nothing converts it twice. Whatever
+ * no rule can carry is named in the note rather than guessed at.
+ */
+function theMegamudTablesBecameRules(home: Home, note: (message: string) => void): void {
+  for (const id of directories(home.serversDir)) {
+    const dir = path.dirname(home.server(id).file);
+    const messages = path.join(dir, 'messages.yaml');
+    const monsters = path.join(dir, 'monsters.yaml');
+    const read = (file: string, key: string): unknown =>
+      fs.existsSync(file)
+        ? (documentOf(file)?.toJS() as Record<string, unknown> | null)?.[key]
+        : undefined;
+    const tables = { messages: read(messages, 'messages'), monsters: read(monsters, 'monsters') };
+    if (tables.messages === undefined && tables.monsters === undefined) continue;
+    const said = fromMessages(tables.messages ?? []);
+    const mobs = fromMonsters(tables.monsters ?? []);
+    let wrote = false;
+    edit(home.server(id).file, (document) => {
+      const add = (key: string, rows: readonly unknown[], keyOf: (row: never) => string): void => {
+        if (rows.length === 0) return;
+        const node = document.get(key);
+        const own = isSeq(node) ? (node.toJSON() as never[]) : [];
+        const named = new Set(own.map(keyOf));
+        document.set(
+          key,
+          document.createNode([...own, ...rows.filter((row) => !named.has(keyOf(row as never)))])
+        );
+        wrote = true;
+      };
+      add('rules', said.rules, (row: { name: string }) => row.name.toLowerCase());
+      add('effects', said.effects, (row: { name: string }) => row.name.toLowerCase());
+      add('mobRules', mobs.rules, (row: { mob: string }) => mobKey(row.mob));
+      return wrote;
+    });
+    for (const file of [messages, monsters]) {
+      if (fs.existsSync(file)) fs.renameSync(file, `${file}.converted`);
+    }
+    note(
+      t('notices.migration.megamudTables', {
+        realm: id,
+        rules: said.rules.length,
+        effects: said.effects.length,
+        mobRules: mobs.rules.length
+      })
+    );
+    const dropped: Dropped[] = [...said.dropped, ...mobs.dropped];
+    if (dropped.length === 0) continue;
+    const why = {
+      'names-somebody': t('notices.migration.megamudDropped.namesSomebody'),
+      'pause-or-random': t('notices.migration.megamudDropped.pauseOrRandom'),
+      run: t('notices.migration.megamudDropped.run'),
+      'pre-attack': t('notices.migration.megamudDropped.preAttack')
+    } satisfies Record<Dropped['why'], string>;
+    const list = dropped.map((row) => `${row.name} (${why[row.why]})`).join('; ');
+    note(t('notices.migration.megamudDropped.list', { realm: id, list }));
+  }
+}

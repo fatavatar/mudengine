@@ -36,7 +36,7 @@ import {
   type EncumbranceGate,
   type TabsPreference
 } from './config';
-import { normalizeMobRules, type MobRule } from './mobRules';
+import { normalizeMobRules, REALM_MOB_RULES_MOST, type MobRule } from './mobRules';
 import { DENOMINATIONS, type Denomination } from './character';
 import {
   DEFAULT_ALERT_DEBOUNCE_SECONDS,
@@ -738,7 +738,7 @@ export function asServerDraft(value: unknown): ServerDraft | null {
     // Parsed rather than trusted, like the loops: this crossed the IPC
     // boundary. `normalizeMobRules` is the same coercion the config file goes
     // through, so a row means one thing whichever door it arrived at.
-    mobRules: normalizeMobRules(value['mobRules']),
+    mobRules: normalizeMobRules(value['mobRules'], REALM_MOB_RULES_MOST),
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
     locate: asLocateWord(value['locate']) ?? DEFAULT_LOCATE,
     coins: asCoinNames(value['coins']),
