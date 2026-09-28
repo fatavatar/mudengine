@@ -265,6 +265,17 @@ export class FightTracker {
    */
   private landed: { key: string; at: number; used: number } | null = null;
 
+  /**
+   * The fight a `*Combat Off*` just ended, for the `*Combat Engaged*` that may
+   * follow it. A cast or a switch of target mid-fight is answered by the pair,
+   * and the monsters hitting this character did not stop for it: emptying
+   * `attackers` there made the room spell's own re-engage drop the crowd that
+   * earned it, and the next decision switched a room of sea giants to one
+   * target (2026-09-28). Carried within `engageBindMs`, for whoever is still
+   * in the room.
+   */
+  private leftOff: { combat: Combat; at: number } | null = null;
+
   constructor(private readonly sources: FightSources) {}
 
   /**
@@ -330,6 +341,7 @@ export class FightTracker {
   forget(): void {
     this.ledgers.clear();
     this.owed.forget();
+    this.leftOff = null;
     this.landed = null;
     this.fell = null;
   }
@@ -362,6 +374,7 @@ export class FightTracker {
        * answer to an attack command, so an entry kept across an unrelated
        * Off can never bind to an engagement that command did not cause.
        */
+      this.leftOff = { combat: s.combat, at };
       return { ...s, inCombat: false, combat: NO_COMBAT };
     }
     /*
@@ -378,20 +391,51 @@ export class FightTracker {
      * answers its attack.
      */
     const aimed = this.owed.answer(at);
-    if (s.combat.target !== null || aimed === null) {
-      return { ...s, inCombat: true, combat: { ...s.combat, engaged: true } };
+    const combat = this.carriedOver(s, at, aimed === null);
+    if (combat.target !== null || aimed === null) {
+      const health =
+        combat.target === s.combat.target
+          ? combat.health
+          : this.healthFor(combat.target, at, roomAddress(s.room));
+      return { ...s, inCombat: true, combat: { ...combat, engaged: true, health } };
     }
     const target = resolveAgainstRoom(s, aimed);
     return {
       ...s,
       inCombat: true,
       combat: {
-        ...s.combat,
+        ...combat,
         engaged: true,
         target,
         health: this.healthFor(target, at, roomAddress(s.room))
       }
     };
+  }
+
+  /**
+   * The fight an engagement takes up: `s.combat`, with what the `*Combat Off*`
+   * just before it dropped put back — see `leftOff`. The attackers still in
+   * the room, and the target too when the engagement names none of its own (a
+   * room spell cast bare); an aimed engagement is a switch of target and binds
+   * its own.
+   */
+  private carriedOver(s: CharacterState, at: number, keepTarget: boolean): Combat {
+    const left = this.leftOff;
+    this.leftOff = null;
+    if (left === null || at - left.at > tuning().parse.engageBindMs) return s.combat;
+    const here = new Set(s.room.occupants.map((who) => mobKey(who.name)));
+    const attackers = [
+      ...s.combat.attackers,
+      ...left.combat.attackers.filter(
+        (name) => here.has(mobKey(name)) && !s.combat.attackers.includes(name)
+      )
+    ];
+    const target =
+      s.combat.target ??
+      (keepTarget && left.combat.target !== null && here.has(mobKey(left.combat.target))
+        ? left.combat.target
+        : null);
+    return { ...s.combat, attackers, target };
   }
 
   /**
