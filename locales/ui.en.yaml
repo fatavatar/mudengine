@@ -3497,7 +3497,7 @@ settings:
     restNextDoor: Rest Next Door to a Lair
     restNextDoorHint: A room that spawns monsters on a short regen time is not a place to rest. The
       character looks into a neighboring room with no lair, steps in only if it is empty, rests, and
-      steps back.
+      steps back. Never while following, since a follower rests where the party is.
     restingNote: One pair of settings for both, because nothing rests while a loop is moving. A
       separate, lower pause setting kept the character walking while too hurt to rest. Resting lasts
       until you move, attack or cast, so nothing is sent while the status line already shows
