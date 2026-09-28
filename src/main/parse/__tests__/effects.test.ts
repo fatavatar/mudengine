@@ -330,7 +330,7 @@ describe('an effect the realm states', () => {
         name: 'burning',
         starts: 'You are on fire',
         ends: 'The flames die down',
-        means: ['hurting']
+        means: ['losingHealth']
       }
     ]
   );
@@ -362,7 +362,7 @@ describe('an effect the realm states', () => {
     expect(free.afflictions.held).toBe('no');
   });
 
-  /* MegaMUD's *Losing HP*: the walk waits it out (`afflictionHolding`). */
+  /* MegaMUD's *Losing HP's*: set on its start and cleared on its ending, and shown. */
   it('marks the character losing health until its ending', () => {
     const effects = new EffectTracker({
       world,
@@ -371,8 +371,8 @@ describe('an effect the realm states', () => {
       belongings: () => ({ rememberSpellDuration: () => {} })
     });
     const hurt = effects.onset(character(), onset('You are on fire', 'burning', T)) ?? character();
-    expect(hurt.afflictions.hurting).toBe('yes');
+    expect(hurt.afflictions.losingHealth).toBe('yes');
     const healed = effects.expired(hurt, { spells: 'burning' }, T + 5000) ?? hurt;
-    expect(healed.afflictions.hurting).toBe('no');
+    expect(healed.afflictions.losingHealth).toBe('no');
   });
 });

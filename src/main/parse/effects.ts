@@ -891,7 +891,7 @@ export class EffectTracker {
     if (rows.some(confuses) || stated.has('confused')) {
       next = afflicted(next ?? s, 'confused', 'yes') ?? next;
     }
-    for (const condition of ['blind', 'poisoned', 'diseased', 'hurting'] as const) {
+    for (const condition of ['blind', 'poisoned', 'diseased', 'losingHealth'] as const) {
       if (stated.has(condition)) next = afflicted(next ?? s, condition, 'yes') ?? next;
     }
     return next;

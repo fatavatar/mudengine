@@ -96,10 +96,11 @@ export interface Afflictions {
   /**
    * Losing health to something lasting — fire, acid, a bleeding wound, a
    * plague. No sentence in the server's code says it; the realm states it as
-   * message data (MegaMUD's *Losing HP*, carried into `server.yaml`'s
-   * `effects`), and a walk waits it out, as MegaMUD rests until it stops.
+   * message data (MegaMUD's *Losing HP's*, carried into `server.yaml`'s
+   * `effects`). Shown and not stopped for, as MegaMUD shows it (`Player is:
+   * Losing HP's`) and stops only for a row whose action says to wait.
    */
-  hurting: Affliction;
+  losingHealth: Affliction;
 }
 
 export const NO_AFFLICTIONS: Afflictions = {
@@ -108,7 +109,7 @@ export const NO_AFFLICTIONS: Afflictions = {
   diseased: 'unknown',
   held: 'unknown',
   confused: 'unknown',
-  hurting: 'unknown'
+  losingHealth: 'unknown'
 };
 
 /**

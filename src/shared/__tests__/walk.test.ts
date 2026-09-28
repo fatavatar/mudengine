@@ -87,10 +87,9 @@ describe('which stated condition stands a walk still', () => {
     ).toBeNull();
   });
 
-  /* MegaMUD rests while hit points drain away; there is no switch to walk on. */
-  it('waits out losing health, whatever the switches say', () => {
-    const on = { ...movement, walkWhileConfused: true, walkWhilePoisoned: true };
-    expect(afflictionHolding({ ...NO_AFFLICTIONS, hurting: 'yes' }, on)).toBe('hurting');
+  /* MegaMUD shows losing hit points and walks on; only a row's own `wait` holds. */
+  it('walks on while losing health', () => {
+    expect(afflictionHolding({ ...NO_AFFLICTIONS, losingHealth: 'yes' }, movement)).toBeNull();
   });
 
   it('does not hold on a confusion nobody has stated', () => {

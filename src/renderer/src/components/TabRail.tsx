@@ -353,8 +353,6 @@ function afflictionMark(hold: AfflictionHold): string {
       return t('tabs.tab.markPoisoned');
     case 'confused':
       return t('tabs.tab.markConfused');
-    case 'hurting':
-      return t('tabs.tab.markHurting');
     default: {
       const unreachable: never = hold;
       return unreachable;

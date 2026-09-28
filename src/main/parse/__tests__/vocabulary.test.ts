@@ -283,10 +283,10 @@ describe('every condition is readable in both directions', () => {
     diseased: 'user-disease-ends',
     held: 'user-held-ends',
     confused: null,
-    hurting: null
+    losingHealth: null
   };
   /** Conditions no sentence in the server's code begins: only a realm states them (`effects`). */
-  const REALM_STATED = new Set<keyof Afflictions>(['hurting']);
+  const REALM_STATED = new Set<keyof Afflictions>(['losingHealth']);
 
   it('states an onset sentence for each of the five', () => {
     const conditions = AFFLICTION_ONSETS.map((onset) => onset.condition).sort();

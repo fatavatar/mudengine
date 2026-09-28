@@ -276,7 +276,7 @@ describe('resting while poisoned', () => {
       diseased: 'no',
       held: 'no',
       confused: 'no',
-      hurting: 'no'
+      losingHealth: 'no'
     }
   });
 
@@ -320,7 +320,7 @@ describe('resting while poisoned', () => {
           diseased: 'no',
           held: 'no',
           confused: 'no',
-          hurting: 'no'
+          losingHealth: 'no'
         }
       })
     );
@@ -352,7 +352,7 @@ describe('resting while poisoned', () => {
           diseased: 'no',
           held: 'no',
           confused: 'no',
-          hurting: 'no'
+          losingHealth: 'no'
         }
       })
     );

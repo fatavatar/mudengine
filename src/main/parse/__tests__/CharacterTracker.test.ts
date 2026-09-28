@@ -8571,7 +8571,7 @@ describe('what the server has said is wrong with the character', () => {
       diseased: 'unknown',
       held: 'yes',
       confused: 'unknown',
-      hurting: 'unknown'
+      losingHealth: 'unknown'
     });
     const later = play([
       '[HP=34]:',
@@ -8586,7 +8586,7 @@ describe('what the server has said is wrong with the character', () => {
       diseased: 'unknown',
       held: 'no',
       confused: 'unknown',
-      hurting: 'unknown'
+      losingHealth: 'unknown'
     });
   });
 

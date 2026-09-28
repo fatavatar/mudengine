@@ -518,7 +518,7 @@ const MEANINGS: readonly EffectMeaning[] = [
   'diseased',
   'held',
   'confused',
-  'hurting'
+  'losingHealth'
 ];
 
 /**

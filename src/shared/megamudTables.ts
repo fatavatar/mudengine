@@ -98,10 +98,9 @@ export function fromMessages(rows: unknown): {
     const enabled = row['enabled'] !== false;
 
     const means = new Set<EffectMeaning>(MEANINGS.filter((meaning) => marks.includes(meaning)));
-    // Standing still until it ends is what `wait` and "cannot attack" ask for,
-    // and what MegaMUD does while hit points drain away (rest until it stops).
+    // Standing still until it ends is what `wait` and "cannot attack" ask for.
     if (action === 'wait' || marks.includes('no-attack')) means.add('held');
-    if (marks.includes('losing-hp')) means.add('hurting');
+    if (marks.includes('losing-hp')) means.add('losingHealth');
     // "Last action failed" with nothing lasting: the moment a command was lost.
     if (marks.includes('action-failed') && ends.length === 0 && enabled) {
       if (match.includes('{')) dropped.push({ name, why: 'names-somebody' });

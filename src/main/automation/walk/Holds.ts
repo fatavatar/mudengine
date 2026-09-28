@@ -1100,8 +1100,6 @@ function holdingSentence(reason: AfflictionHold): string {
       return t('automation.walk.holdingPoisoned');
     case 'confused':
       return t('automation.walk.holdingConfused');
-    case 'hurting':
-      return t('automation.walk.holdingHurting');
     default: {
       const unreachable: never = reason;
       return unreachable;

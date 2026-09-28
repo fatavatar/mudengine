@@ -93,13 +93,13 @@ describe('a Messages table as rules and effects', () => {
         name: 'acid rain',
         starts: 'You are covered in acid',
         ends: 'The acid dries up',
-        means: ['hurting']
+        means: ['losingHealth']
       },
       {
         name: 'acid rain 2',
         starts: 'You are drenched in acid',
         ends: 'The acid dries up',
-        means: ['hurting']
+        means: ['losingHealth']
       }
     ]);
   });

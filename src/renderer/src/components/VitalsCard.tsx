@@ -166,7 +166,7 @@ function VitalsCard({ character, session, thresholds, ask, ...chrome }: VitalsCa
     afflictions.diseased === 'yes' ? t('cards.vitals.afflicted.diseased') : null,
     afflictions.held === 'yes' ? t('cards.vitals.afflicted.held') : null,
     afflictions.confused === 'yes' ? t('cards.vitals.afflicted.confused') : null,
-    afflictions.hurting === 'yes' ? t('cards.vitals.afflicted.hurting') : null
+    afflictions.losingHealth === 'yes' ? t('cards.vitals.afflicted.losingHealth') : null
   ].filter((word): word is string => word !== null);
 
   const badge = inCombat ? (

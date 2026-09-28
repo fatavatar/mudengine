@@ -971,7 +971,6 @@ tabs:
     markHeld: held
     markPoisoned: poisoned
     markConfused: confused
-    markHurting: losing health
     markShopping: shopping
     markResting: resting
     markRestingTo: resting to {percent}%
@@ -2065,7 +2064,6 @@ cards:
       statusHeld: held
       statusPoisoned: poisoned
       statusConfused: confused
-      statusHurting: losing health
       statusOffline: offline
       statusResting: resting
       statusRunning: running
@@ -2990,7 +2988,7 @@ cards:
       confused: confused
       diseased: diseased
       held: held
-      hurting: losing health
+      losingHealth: losing health
       poisoned: poisoned
     level:
       caution: low
@@ -5218,7 +5216,6 @@ automation:
     holdingHeld: Held fast; waiting here until you can move again.
     holdingPoisoned: Poisoned; waiting here until it runs its course.
     holdingConfused: Confused; waiting here until your head clears.
-    holdingHurting: Losing health; waiting here until it stops.
     afflictionResumed: The condition has passed; walking on.
     holdingDark: Too dark to tell where this is; waiting for a light.
     lightResumed: The room can be read again; walking on.
