@@ -375,3 +375,54 @@ describe('sameSpell', () => {
     expect(sameSpell('mystery', 'myst', null)).toBe(false);
   });
 });
+
+/*
+ * A drain hurts the target and heals the caster: `DrainLife` on the row, or a
+ * hit whose `EndCast` heals — the mudrev realm's rows (2026-09-28).
+ */
+describe('spellServes drains', () => {
+  const suckTheLifeForce: AbilityPairs = [[18, 0]];
+  const linked = (id: number): AbilityPairs | undefined =>
+    id === 1501 ? suckTheLifeForce : id === 108 ? [[115, 0]] : undefined;
+
+  it('reads DrainLife on the row (vampiric assault)', () => {
+    expect(
+      spellServes([
+        [8, 0],
+        [108, 0]
+      ]).drains
+    ).toBe(true);
+  });
+
+  it('follows a hit to an EndCast heal (necromantic storm)', () => {
+    const storm: AbilityPairs = [
+      [17, 0],
+      [120, 108],
+      [151, 1501]
+    ];
+    expect(spellServes(storm, linked).drains).toBe(true);
+    // Without the lookup, only the row's own marks are read.
+    expect(spellServes(storm).drains).toBe(false);
+  });
+
+  it('is not a drain when what the hit ends in heals nothing, or nothing is hit', () => {
+    expect(
+      spellServes(
+        [
+          [17, 0],
+          [151, 108]
+        ],
+        linked
+      ).drains
+    ).toBe(false);
+    expect(
+      spellServes(
+        [
+          [115, 0],
+          [151, 1501]
+        ],
+        linked
+      ).drains
+    ).toBe(false);
+  });
+});

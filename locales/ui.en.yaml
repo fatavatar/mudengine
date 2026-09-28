@@ -400,6 +400,13 @@ notices:
     training: '"automation.train" was added to {file}, turned off. At a trainer with unspent CPs, it
       opens the stat screen and buys the stats set under Training, cheapest first. Nothing is spent
       until you turn it on and raise a stat.'
+    drainStated:
+      one: '"automation.spells.drain", "areaDrain", "drainBelow" and "drainTo" were added to
+        {fileList}, turned off. When set, a drain spell replaces your attack spell while your
+        health is low.'
+      many: '"automation.spells.drain", "areaDrain", "drainBelow" and "drainTo" were added to
+        {count} files ({fileList}), turned off. When set, a drain spell replaces your attack spell
+        while your health is low.'
     restNextDoor:
       one: '"automation.health.restNextDoor" was added to {fileList}, turned on. In a lair with a
         short regen time, the character rests in a neighboring room instead, after checking that it
@@ -3990,6 +3997,21 @@ settings:
     attackCastsLabel: Casts Per Target
     areaCastsHint: Casts of the area spell per fight. 0 is no limit.
     areaCastsLabel: AE Casts Per Fight
+    drainLegend: Drain When Hurt
+    drainNote: A drain spell hurts the target and heals you by the same amount. Below the threshold
+      the drain spells replace your attack and area spells, with the same limits, until your
+      health is back up. Only spells the game says drain are offered.
+    drainHint: Replaces the attack spell while you are hurt. Blank keeps it, or picks from your
+      spellbook when Auto Choose is on.
+    drainLabel: Drain Spell
+    areaDrainHint: Replaces the area spell while you are hurt, when the room is crowded enough. Blank
+      keeps the area spell.
+    areaDrainLabel: AE Drain Spell
+    drainBelowHint: Switch to the drain spells below this share of health. 0 never drains.
+    drainBelowLabel: Drain If Below HP %
+    drainToHint: Keep draining until health is back to this. 0 switches back as soon as you are over
+      the threshold, and every switch restarts your combat round.
+    drainToLabel: Drain Up To HP %
     healBelowInCombatHint: A separate threshold while fighting. 0 uses the one next to it for both;
       set it lower so a scratch does not cost a round.
     healBelowInCombatLabel: Heal In Combat Below %
@@ -4720,6 +4742,7 @@ automation:
     spellNotInstant: '{spell} started combat after all: it is a combat spell, so it is no longer
       treated as instant on this realm and opens fights again.'
     spellIneffectiveArea: '{spell} has no effect here; the attack spell carries this fight.'
+    drainIneffective: '{spell} has no effect here; the attack spell carries this fight.'
     spellIneffectiveNoFallback: '{spell} has no effect here and no fallback spell is set; your
       regular attacks carry this fight.'
     whyUnweighed: 'first of {count} here: the world data cannot rate {target}, and unknown is not
@@ -4757,6 +4780,8 @@ automation:
     noAttackSpells: 'Auto Choose Best Spell: nothing in the spellbook attacks a single target.'
     allResisted: 'Auto Choose Best Spell: this target resists every attack spell in the book; your
       regular attacks carry the fight.'
+    drainStarts: 'Health under {below}%: casting the drain spell until it is back to {to}%.'
+    drainEnds: Health is back up; casting the attack spell again.
   train:
     reason: 'spending {cp} character points at the trainer'
     # Going to collect the level -- `TrainErrand` (todo 18). Every sentence

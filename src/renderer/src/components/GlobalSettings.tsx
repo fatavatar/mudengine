@@ -12,7 +12,8 @@ import MobRuleList from './MobRuleList';
 import GearSetList from './GearSetList';
 import PotionList from './PotionList';
 import SettingsNav, { type NavFieldset } from './SettingsNav';
-import SpellField from './SpellPicker';
+import AttackFields, { type AttackField } from './AttackFields';
+import DrainFields from './DrainFields';
 import HealFields from './HealFields';
 import CarrySections from './CarrySections';
 import Icon from './Icon';
@@ -178,6 +179,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'health-pvp', label: t('settings.health.pvpLegend') }
   ],
   spells: [
+    { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
@@ -236,6 +238,14 @@ import {
 } from '../lib/form';
 
 const ENCODINGS: readonly StreamEncoding[] = ['cp437', 'utf8', 'latin1'];
+
+/** A value `AttackFields` hands back, as the options draft holds it. */
+function attackValue(field: AttackField, value: string): string | number {
+  if (field === 'attack' || field === 'attackFallback' || field === 'areaAttack') return value;
+  if (field === 'minMana' || field === 'areaMinMana') return fraction(value);
+  const count = Number.parseInt(value, 10) || 0;
+  return field === 'areaMinMobs' ? Math.max(1, count) : Math.max(0, count);
+}
 
 /**
  * Keys whose value is a block a spread-merge is sound for. Arrays are shut
@@ -1234,113 +1244,45 @@ export default function GlobalSettings({
         {shown === 'spells' && (
           <>
             <p className="settings-note">{t('settings.spells.rulesPointerNote')}</p>
-            <CheckField
-              checked={draft.automation.spells.autoChoose}
-              hint={t('settings.spells.autoChooseHint')}
-              label={t('settings.spells.autoChoose')}
-              name="global-spell-auto-choose"
-              onChange={(value) =>
-                automation({ spells: { ...draft.automation.spells, autoChoose: value } })
+            <AttackFields
+              bands={draft.ui.vitals.mana}
+              namePrefix="global-"
+              onChange={(field, value) =>
+                automation({
+                  spells: { ...draft.automation.spells, [field]: attackValue(field, value) }
+                })
               }
+              onToggle={(field, value) =>
+                automation({ spells: { ...draft.automation.spells, [field]: value } })
+              }
+              spells={realmSpells}
+              values={{
+                ...draft.automation.spells,
+                minMana: percent(draft.automation.spells.minMana),
+                areaMinMana: percent(draft.automation.spells.areaMinMana)
+              }}
             />
-            <div className="settings-inline">
-              <SpellField
-                hint={t('settings.spells.castHint')}
-                label={t('settings.spells.castLabel')}
-                name="global-spell"
-                onChange={(value) =>
-                  automation({ spells: { ...draft.automation.spells, attack: value } })
-                }
-                spells={realmSpells}
-                value={draft.automation.spells.attack}
-              />
-              <SpellField
-                hint={t('settings.spells.fallbackCastHint')}
-                label={t('settings.spells.fallbackCastLabel')}
-                name="global-spell-fallback"
-                onChange={(value) =>
-                  automation({ spells: { ...draft.automation.spells, attackFallback: value } })
-                }
-                spells={realmSpells}
-                value={draft.automation.spells.attackFallback}
-              />
-              <NumberField
-                hint={t('settings.spells.attackCastsHint')}
-                label={t('settings.spells.attackCastsLabel')}
-                name="global-attack-casts"
-                onChange={(value) =>
+            <fieldset className="settings-menus" data-fieldset="spells-drain">
+              <legend>{t('settings.spells.drainLegend')}</legend>
+              <DrainFields
+                bands={draft.ui.vitals.hp}
+                namePrefix="global-"
+                onChange={(field, value) =>
                   automation({
                     spells: {
                       ...draft.automation.spells,
-                      attackCasts: Math.max(0, Number.parseInt(value, 10) || 0)
+                      [field]: field === 'drain' || field === 'areaDrain' ? value : fraction(value)
                     }
                   })
-                }
-                value={String(draft.automation.spells.attackCasts)}
-              />
-              <NumberField
-                hint={t('settings.spells.minManaHint')}
-                label={t('settings.spells.minManaLabel')}
-                name="global-min-mana"
-                onChange={(value) =>
-                  automation({ spells: { ...draft.automation.spells, minMana: fraction(value) } })
-                }
-                bar={barOfMana(draft.automation.spells.minMana)}
-                value={percent(draft.automation.spells.minMana)}
-              />
-            </div>
-            <div className="settings-inline">
-              <SpellField
-                hint={t('settings.spells.areaCastHint')}
-                label={t('settings.spells.areaCastLabel')}
-                name="global-area-spell"
-                onChange={(value) =>
-                  automation({ spells: { ...draft.automation.spells, areaAttack: value } })
                 }
                 spells={realmSpells}
-                value={draft.automation.spells.areaAttack}
+                values={{
+                  ...draft.automation.spells,
+                  drainBelow: percent(draft.automation.spells.drainBelow),
+                  drainTo: percent(draft.automation.spells.drainTo)
+                }}
               />
-              <NumberField
-                hint={t('settings.spells.areaMinMobsHint')}
-                label={t('settings.spells.areaMinMobsLabel')}
-                name="global-area-min-mobs"
-                onChange={(value) =>
-                  automation({
-                    spells: {
-                      ...draft.automation.spells,
-                      areaMinMobs: Math.max(1, Number.parseInt(value, 10) || 1)
-                    }
-                  })
-                }
-                value={String(draft.automation.spells.areaMinMobs)}
-              />
-              <NumberField
-                hint={t('settings.spells.areaMinManaHint')}
-                label={t('settings.spells.areaMinManaLabel')}
-                name="global-area-min-mana"
-                onChange={(value) =>
-                  automation({
-                    spells: { ...draft.automation.spells, areaMinMana: fraction(value) }
-                  })
-                }
-                bar={barOfMana(draft.automation.spells.areaMinMana)}
-                value={percent(draft.automation.spells.areaMinMana)}
-              />
-              <NumberField
-                hint={t('settings.spells.areaCastsHint')}
-                label={t('settings.spells.areaCastsLabel')}
-                name="global-area-casts"
-                onChange={(value) =>
-                  automation({
-                    spells: {
-                      ...draft.automation.spells,
-                      areaCasts: Math.max(0, Number.parseInt(value, 10) || 0)
-                    }
-                  })
-                }
-                value={String(draft.automation.spells.areaCasts)}
-              />
-            </div>
+            </fieldset>
             <fieldset className="settings-menus" data-fieldset="spells-heal">
               <legend>{t('settings.spells.healLegend')}</legend>
               <HealFields

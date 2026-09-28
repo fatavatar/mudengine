@@ -1557,6 +1557,22 @@ automation:
     attackCasts: 0
     areaCasts: 0
 
+    # Drain when hurt. A drain hurts the target and heals the caster by it --
+    # the realm's DrainLife (`vampiric assault`), or a hit whose EndCast is a
+    # heal on the caster (`necromantic storm` ends in `suck the life force`).
+    # Below `drainBelow` of maximum health, `drain` is cast instead of
+    # `attack` and `areaDrain` instead of `areaAttack`, under the same casts,
+    # crowd and mana tests, until health is back to `drainTo`. 0 there
+    # switches back the moment health is over `drainBelow`, and every switch
+    # re-engages the fight and restarts the character's round, so a gap is
+    # worth leaving. A `drainTo` below `drainBelow` is raised to it. A blank
+    # spell keeps the ordinary one -- or, with `autoChoose` on, `drain` is
+    # picked from the spellbook's drains. `drainBelow: 0` never drains.
+    drain: ''
+    areaDrain: ''
+    drainBelow: 0
+    drainTo: 0
+
     # Heal if below -- MegaMUD's Health tab, kept beside the attack spell
     # because it is the same mechanism: one cast, chosen by a number, under
     # the same `minMana` floor.

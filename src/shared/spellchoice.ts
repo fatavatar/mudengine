@@ -9,6 +9,7 @@
  * has no effect is not cast again this fight*.
  */
 import { HAZARD_ABILITY } from './abilities';
+import type { SpellsConfig } from './config';
 import { magicResistance, scaledPower } from './menace';
 import { castOdds, type ProwessSheet } from './prowess';
 import type { RealmFamily } from './realm';
@@ -385,4 +386,20 @@ export function castsToKill(
     mana: chosen.cost,
     spell: chosen.spell.name
   };
+}
+
+/**
+ * Whether a fight should be draining — `drainBelow` going down, `drainTo`
+ * (or `drainBelow` where it is 0) while already draining. Unknown is not low.
+ */
+export function drainHolding(
+  spells: SpellsConfig,
+  hp: number | null,
+  hpMax: number | null,
+  held: boolean
+): boolean {
+  if (spells.drainBelow <= 0) return false;
+  if (hp === null || hpMax === null || hpMax <= 0) return false;
+  const floor = held ? Math.max(spells.drainTo, spells.drainBelow) : spells.drainBelow;
+  return hp / hpMax < floor;
 }

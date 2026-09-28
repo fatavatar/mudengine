@@ -1990,6 +1990,35 @@ export interface SpellsConfig {
    */
   areaCasts: number;
   /**
+   * The spell that stands in for `attack` while health is low: one that hurts
+   * the target and heals the caster by it (`vampiric assault`, the realm's
+   * `DrainLife`). Blank keeps `attack`; with `autoChoose` on, blank derives it
+   * from the book's drains. Its picker offers only the spells the realm says
+   * drain (`spellServes`).
+   */
+  drain: string;
+  /**
+   * The same for the room spell: cast instead of `areaAttack`, under the area
+   * spell's own crowd and mana tests, while health is low. `necromantic storm`
+   * drains by its `EndCast`, a heal on the caster, and counts. Blank keeps
+   * `areaAttack`.
+   */
+  areaDrain: string;
+  /**
+   * The fraction of maximum health below which the drain spells replace the
+   * attack spells in a fight. 0 never drains.
+   */
+  drainBelow: number;
+  /**
+   * Keep draining until health is back to this fraction; 0 goes back to the
+   * attack spell the moment it is over `drainBelow`. The pair `healBelow` /
+   * `healTo` is, and for a sharper reason: every change of spell mid-fight
+   * re-engages it and restarts the character's round, so a drain that lifts
+   * health one point over the line must not flip the fight back and forth.
+   * Clamped up to `drainBelow`, as `healTo` is.
+   */
+  drainTo: number;
+  /**
    * The spell to heal **this character** with. Blank heals nobody.
    *
    * MegaMUD's *Heal if below* on the Health tab, moved beside the attack
@@ -2825,6 +2854,10 @@ export const DEFAULT_CONFIG: AppConfig = {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
@@ -4155,6 +4188,15 @@ function normalizeSpells(value: unknown): SpellsConfig {
     attackFallback: str(raw['attackFallback'], d.attackFallback).trim(),
     attackCasts: int(raw['attackCasts'], d.attackCasts, 0, 99),
     areaCasts: int(raw['areaCasts'], d.areaCasts, 0, 99),
+    drain: str(raw['drain'], d.drain).trim(),
+    areaDrain: str(raw['areaDrain'], d.areaDrain).trim(),
+    drainBelow: fraction(raw['drainBelow'], d.drainBelow),
+    // Clamped as `healTo` is below, and for its reason.
+    drainTo: (() => {
+      const to = fraction(raw['drainTo'], d.drainTo);
+      const below = fraction(raw['drainBelow'], d.drainBelow);
+      return to === 0 ? 0 : Math.max(to, below);
+    })(),
     heal: str(raw['heal'], d.heal).trim(),
     healPartyWith: str(raw['healPartyWith'], d.healPartyWith).trim(),
     healBelow: fraction(raw['healBelow'], d.healBelow),

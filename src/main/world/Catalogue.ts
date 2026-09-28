@@ -1413,7 +1413,7 @@ export class Catalogue {
         targeting: spellTargeting(spell.targets),
         // What the realm says it serves, so the cure fields can each
         // offer the spells that answer their own question (todo 00).
-        serves: spellServes(spell.abilities)
+        serves: spellServes(spell.abilities, (id) => this.spellById(id)?.abilities)
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }

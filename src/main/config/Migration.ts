@@ -248,6 +248,7 @@ function migrateAll(options: MigrationOptions): void {
   statedThePartyPacing(home, note, options.template);
   statedTheHealChoice(home, note, options.template);
   statedTheAutoJoin(home, note);
+  statedTheDrain(home, note, options.template);
 }
 
 /**
@@ -2814,6 +2815,41 @@ function statedTheHealChoice(
     stated.length === 1
       ? t('notices.migration.healChoice.one', params)
       : t('notices.migration.healChoice.many', params)
+  );
+}
+
+/**
+ * `automation.spells.drain`, `areaDrain`, `drainBelow` and `drainTo`
+ * (2026-09-28): a necrolyte's `vampiric assault` and `necromantic storm` cast
+ * in place of the attack spells while health is low. Off, after `areaCasts`,
+ * with the template's paragraph on the first.
+ */
+function statedTheDrain(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.drain');
+  const d = DEFAULT_CONFIG.automation.spells;
+  const keys = [
+    ['drain', d.drain],
+    ['areaDrain', d.areaDrain],
+    ['drainBelow', d.drainBelow],
+    ['drainTo', d.drainTo]
+  ] as const;
+  const stated = new Set<string>();
+  let after = 'areaCasts';
+  for (const [key, value] of keys) {
+    const said = key === 'drain' ? comment : undefined;
+    for (const file of stateIn(home, SPELLS_BLOCK, key, value, after, said)) stated.add(file);
+    after = key;
+  }
+  if (stated.size === 0) return;
+  const params = { count: stated.size, fileList: [...stated].join(', ') };
+  note(
+    stated.size === 1
+      ? t('notices.migration.drainStated.one', params)
+      : t('notices.migration.drainStated.many', params)
   );
 }
 

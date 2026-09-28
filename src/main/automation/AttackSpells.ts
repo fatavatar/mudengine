@@ -24,10 +24,17 @@ import { NO_INSTANT_SPELLS, type InstantSpellLore } from '../../shared/lore';
 import { isBanded, mobRuleFor, type MobCast, type MobRule } from '../../shared/mobRules';
 import type { MobEntity } from '../../shared/entities';
 import type { RealmFamily } from '../../shared/realm';
-import { resolveSpell, sameSpell, spellCost, spellingsOf } from '../../shared/spellcraft';
+import {
+  resolveSpell,
+  sameSpell,
+  spellCost,
+  spellingsOf,
+  spellServes
+} from '../../shared/spellcraft';
 import { spellKey } from '../../shared/spell-messages';
 import {
   chooseAttackSpell,
+  drainHolding,
   type SpellChoice,
   type SpellChoiceRefusal
 } from '../../shared/spellchoice';
@@ -133,6 +140,8 @@ export class AttackSpells {
   /** The derivation's last refusal said, once per kind. */
   private saidChoiceRefusal: SpellChoiceRefusal | null = null;
   private rules: readonly MobRule[] = [];
+  /** Whether the drain spells stand in for the attack spells — `drainHolding`'s latch. */
+  private draining = false;
 
   constructor(
     private spells: SpellsConfig,
@@ -156,6 +165,7 @@ export class AttackSpells {
   reset(): void {
     this.fightEnded();
     this.instant.clear();
+    this.draining = false;
     this.saidChoice = null;
     this.saidChoiceRefusal = null;
   }
@@ -183,6 +193,8 @@ export class AttackSpells {
       this.spells.autoChoose ||
       this.spells.attack.trim().length > 0 ||
       this.spells.areaAttack.trim().length > 0 ||
+      this.spells.drain.trim().length > 0 ||
+      this.spells.areaDrain.trim().length > 0 ||
       this.rules.some((row) => isBanded(row) && row.cast !== undefined) ||
       this.repeating?.kind === 'spell'
     );
@@ -395,6 +407,27 @@ export class AttackSpells {
     const fraction = mana !== null && manaMax !== null && manaMax > 0 ? mana / manaMax : null;
     const above = (floor: number): boolean => floor <= 0 || fraction === null || fraction >= floor;
 
+    /*
+     * Low health: the room's drain (or the room spell, where no drain is set
+     * for it), then the single-target drain — ahead of what the monster's row
+     * names, since the row is a preference about the monster and this is the
+     * character's own survival. A drain the server says has no effect here
+     * (`AffectsLivingOnly` against the undead) falls through to the ordinary
+     * choice.
+     */
+    if (this.drainingNow(state)) {
+      const areaDrain = this.spells.areaDrain.trim();
+      const room = this.roomSpell(
+        state,
+        areaDrain.length > 0 ? areaDrain : this.spells.areaAttack.trim(),
+        opening,
+        above
+      );
+      if (room !== null) return room;
+      const drain = this.drainSpell(state, target, opening, above);
+      if (drain !== null) return drain;
+    }
+
     const row = mobRuleFor(this.rules, target.name);
     const own: MobCast | undefined = row !== undefined && isBanded(row) ? row.cast : undefined;
     const spent = own !== undefined && !this.usable(own.spell, own.times);
@@ -413,18 +446,8 @@ export class AttackSpells {
      * crowd is threats (what is in this fight or would join it), never
      * `countMobs`, which counts a shopkeeper and a guard dog alike.
      */
-    const area = this.spells.areaAttack.trim();
-    if (!opening && area.length > 0 && this.usable(area, this.spells.areaCasts)) {
-      const costly = state.room.occupants.some(
-        (who) => who.kind === 'mob' && who.costly === 'always'
-      );
-      const crowd = Math.max(countThreats(state, this.rules), state.combat.attackers.length);
-      const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
-      if (!costly && crowd >= this.spells.areaMinMobs && above(floor)) {
-        const cast = this.payable(state, area, true, opening);
-        if (cast !== null) return cast;
-      }
-    }
+    const room = this.roomSpell(state, this.spells.areaAttack.trim(), opening, above);
+    if (room !== null) return room;
 
     if (!above(this.spells.minMana)) return null;
     // *Auto Choose Best Spell*: the round spell is derived, not typed (todo 09).
@@ -446,6 +469,76 @@ export class AttackSpells {
     if (spell.length === 0 || !this.usable(spell, this.spells.attackCasts)) return null;
     if (passedOver(spell)) return null;
     return this.payable(state, spell, false, opening);
+  }
+
+  /**
+   * `area` cast bare at the room, where the fight is crowded enough to earn a
+   * room spell — the test the comment in `wanted` sets out — or null.
+   */
+  private roomSpell(
+    state: CharacterState,
+    area: string,
+    opening: boolean,
+    above: (floor: number) => boolean
+  ): Wanted | null {
+    if (opening || area.length === 0 || !this.usable(area, this.spells.areaCasts)) return null;
+    const costly = state.room.occupants.some(
+      (who) => who.kind === 'mob' && who.costly === 'always'
+    );
+    const crowd = Math.max(countThreats(state, this.rules), state.combat.attackers.length);
+    const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
+    if (costly || crowd < this.spells.areaMinMobs || !above(floor)) return null;
+    return this.payable(state, area, true, opening);
+  }
+
+  /**
+   * Whether the drain spells stand in for the attack spells, now —
+   * `drainBelow` to start and `drainTo` to stop — said on each edge, because
+   * a fight changing spell is a decision somebody will read back. Nothing
+   * that could drain is nothing to announce.
+   */
+  private drainingNow(state: CharacterState): boolean {
+    const { drain, areaDrain, autoChoose } = this.spells;
+    const armed = drain.trim().length > 0 || areaDrain.trim().length > 0 || autoChoose;
+    const { hp, hpMax } = state.vitals;
+    const draining = armed && drainHolding(this.spells, hp, hpMax, this.draining);
+    if (draining !== this.draining) {
+      const percent = (value: number): number => Math.round(value * 100);
+      this.events.notice?.(
+        draining
+          ? t('automation.spells.drainStarts', {
+              below: percent(this.spells.drainBelow),
+              to: percent(Math.max(this.spells.drainTo, this.spells.drainBelow))
+            })
+          : t('automation.spells.drainEnds')
+      );
+    }
+    this.draining = draining;
+    return draining;
+  }
+
+  /**
+   * The single-target drain: `drain` as configured, else — with *Auto Choose
+   * Best Spell* on — the best of the book's drains. Null when there is none
+   * to cast (blank, refused on this monster, capped by `attackCasts`, under
+   * the mana floor), so the ordinary choice decides.
+   */
+  private drainSpell(
+    state: CharacterState,
+    target: SpellTarget,
+    opening: boolean,
+    above: (floor: number) => boolean
+  ): Wanted | null {
+    if (!above(this.spells.minMana)) return null;
+    const drain = this.spells.drain.trim();
+    if (drain.length > 0) {
+      return this.usable(drain, this.spells.attackCasts)
+        ? this.payable(state, drain, false, opening)
+        : null;
+    }
+    if (!this.spells.autoChoose) return null;
+    const chosen = this.chosenSpell(state, target, () => false, true);
+    return chosen === null ? null : this.payable(state, chosen, false, opening);
   }
 
   /** Neither refused on this monster nor past `cap` confirmed casts (0 is no cap). */
@@ -484,7 +577,14 @@ export class AttackSpells {
   private chosenSpell(
     state: CharacterState,
     target: SpellTarget,
-    passedOver: (spell: string) => boolean
+    passedOver: (spell: string) => boolean,
+    /**
+     * Only the spells whose realm row drains (`DrainLife`), for low health.
+     * The row alone, because a single-target drain carries the mark itself;
+     * the `EndCast` chain the pickers follow is the room spells'. Finding
+     * none is not a refusal to say, since the ordinary choice is asked next.
+     */
+    drainsOnly = false
   ): string | null {
     const { combat, magery, family } = this.realmClass();
     const excluded = new Set<string>(this.ineffective);
@@ -498,11 +598,17 @@ export class AttackSpells {
         excluded.add(spell.name);
       }
     }
+    const book = drainsOnly
+      ? (state.spellbook?.filter(
+          (spell) => spellServes(this.realmSpell(spell.name)?.abilities).drains
+        ) ?? null)
+      : state.spellbook;
+    if (drainsOnly && (book === null || book.length === 0)) return null;
     const choice = chooseAttackSpell(
-      state.spellbook === null
+      book === null
         ? { book: null }
         : {
-            book: state.spellbook,
+            book,
             realm: this.realmSpell,
             level: state.progress.level,
             mana: state.vitals.mana,
@@ -518,7 +624,7 @@ export class AttackSpells {
           }
     );
     if (choice.chosen === null) {
-      this.sayChoiceRefusal(choice.refusal);
+      if (!drainsOnly) this.sayChoiceRefusal(choice.refusal);
       return null;
     }
     this.sayChoice(choice);
@@ -586,6 +692,11 @@ export class AttackSpells {
     const fallback = this.spells.attackFallback.trim();
     if (cast.area) {
       this.events.notice?.(t('automation.combat.spellIneffectiveArea', { spell: cast.spell }));
+    } else if (
+      this.spells.drain.trim().length > 0 &&
+      this.keyOf(this.spells.drain) === this.keyOf(cast.spell)
+    ) {
+      this.events.notice?.(t('automation.combat.drainIneffective', { spell: cast.spell }));
     } else if (
       fallback.length > 0 &&
       fallback !== cast.spell &&
