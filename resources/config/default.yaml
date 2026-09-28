@@ -144,7 +144,8 @@ connection:
 # character on that realm and as many places for it to drift.
 #
 # And its `locate:` key -- how the client asks where you are standing: `rm`,
-# which is what a realm with no key gets, or `none` for a realm with no such
+# which is what a realm with no key gets, `sys-status` for a MajorMUD realm
+# that answers `sys status` but has no `rm`, or `none` for a realm with no such
 # command, where nothing is asked and the room is worked out from what you walk
 # into. A character may state its own in its `profile.yaml`.
 #

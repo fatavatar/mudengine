@@ -199,6 +199,8 @@ export type FamilyTell =
   | 'experience-table'
   /** `rm` answered with coordinates, so this server has the word. */
   | 'locate-answered'
+  /** `sys status` answered with coordinates: the MajorMUD lineage's own locate. */
+  | 'sys-status-answered'
   /**
    * A command only GreaterMUD has was said out loud in the room, so this
    * server does not have it.
@@ -232,6 +234,8 @@ export interface FamilyReading {
  *   is `rm`'s answer. `Recent Deaths:` matches the same block type and is
  *   *not* a tell — it is `pro`'s heading, which is why the groups are tested
  *   rather than the type.
+ * - **`user-location` carrying coordinates ⇒ MajorMUD.** `sys status`'s
+ *   `Room <n>  Map: <n>` is that lineage's own locate (`locate: sys-status`).
  *
  *   That distinction turned out to be load-bearing rather than fastidious.
  *   This comment used to add *"and MajorMUD has neither `rm` nor `pro`"*, read
@@ -278,6 +282,9 @@ export function familyToldBy(block: Block, answering: string | null = null): Fam
   }
   if (block.type === 'user-profile' && block.groups['room'] !== undefined) {
     return { family: 'greatermud', tell: 'locate-answered' };
+  }
+  if (block.type === 'user-location' && block.groups['room'] !== undefined) {
+    return { family: 'majormud', tell: 'sys-status-answered' };
   }
   if (block.type === 'command-not-understood') {
     const spoken = commandOf(block.groups['message'] ?? '');

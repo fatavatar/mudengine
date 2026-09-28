@@ -199,9 +199,9 @@ describe('who says how the realm is asked where you stand', () => {
   });
 
   it('reads a word it does not know as unstated, so the realm answers', () => {
-    // `sys-status` is the fork's, held (todo 811): not a value this client has.
-    expect(locate({ locate: 'sys-status' }, realm('none'))).toBe('none');
-    expect(locate({}, realm('sys-status'))).toBe('rm');
+    expect(locate({ locate: 'whereami' }, realm('none'))).toBe('none');
+    expect(locate({}, realm('whereami'))).toBe('rm');
+    expect(locate({}, realm('sys-status'))).toBe('sys-status');
   });
 
   it('reads one off an address spelled out inline', () => {

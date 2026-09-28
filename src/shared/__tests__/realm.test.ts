@@ -151,6 +151,13 @@ describe('the family the wire states', () => {
     });
   });
 
+  it("reads sys status's coordinates as the MajorMUD lineage", () => {
+    expect(familyToldBy(block('user-location', { map: '12', room: '2946' }))).toEqual({
+      family: 'majormud',
+      tell: 'sys-status-answered'
+    });
+  });
+
   it('does not read pro’s other heading as anything', () => {
     // `Recent Deaths:` matches the same block type and carries no coordinates,
     // which is why the groups are tested rather than the type.

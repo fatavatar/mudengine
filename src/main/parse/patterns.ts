@@ -301,6 +301,15 @@ export const RULES: Rule[] = [
     pattern: /^(?:Recent Deaths:|Location:\s+(?<map>\d{1,3}),(?<room>\d{1,6}))/
   },
   /*
+   * `sys status`'s first line (`locate: sys-status`), room then map, reversed
+   * from `pro`'s `Location:`. The rest of that reply is unread. Matched on its
+   * own line, since the answer can land among other room chatter.
+   */
+  {
+    type: 'user-location',
+    pattern: /^Room\s+(?<room>\d{1,6})\s+Map:\s+(?<map>\d{1,4})/
+  },
+  /*
    * `pro`'s own statement of the prompt — `Statusline:          full`, read
    * live on GreaterMUD (2026-09-09). The value is the class-default word or
    * the template somebody set, verbatim (`ProfileCommand.cs:54` prints the

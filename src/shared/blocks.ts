@@ -97,6 +97,13 @@ export type BlockType =
    */
   | 'user-experience-table'
   | 'user-profile'
+  /**
+   * `Room <n>  Map: <n>` — the first line of `sys status`, the MajorMUD
+   * lineage's locate on a realm with no `rm`. Its own type, since it is a
+   * different command's output; read as `user-profile`'s `Location:` is,
+   * because the realm stated the same fact.
+   */
+  | 'user-location'
   /** `pro`'s `Statusline:` row: what the realm says the prompt is. */
   | 'user-statline'
   | 'user-encumbrance'
@@ -913,6 +920,7 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'user-experience': 'status',
   'user-experience-table': 'status',
   'user-profile': 'status',
+  'user-location': 'status',
   'user-statline': 'status',
   'user-encumbrance': 'status',
   'user-health': 'status',

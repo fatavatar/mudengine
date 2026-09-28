@@ -77,7 +77,7 @@ describe('a saved server', () => {
 
   it('takes the realm’s locate word, and reads one it does not know as `rm`', () => {
     expect(asServerDraft({ ...good, locate: 'none' })?.locate).toBe('none');
-    expect(asServerDraft({ ...good, locate: 'sys-status' })?.locate).toBe('rm');
+    expect(asServerDraft({ ...good, locate: 'whereami' })?.locate).toBe('rm');
   });
 
   /*
@@ -250,7 +250,7 @@ describe('a character', () => {
   it('takes its own locate word, and reads anything else as "as the realm says"', () => {
     expect(asProfileDraft({ ...good, locate: 'none' })?.locate).toBe('none');
     expect(asProfileDraft({ ...good, locate: '' })?.locate).toBeNull();
-    expect(asProfileDraft({ ...good, locate: 'sys-status' })?.locate).toBeNull();
+    expect(asProfileDraft({ ...good, locate: 'whereami' })?.locate).toBeNull();
   });
 
   it('refuses anything that is not a mapping', () => {

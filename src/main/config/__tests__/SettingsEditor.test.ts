@@ -409,9 +409,9 @@ describe('servers, one directory each', () => {
     expect(new ServerStore(home).all[0]!.server.locate).toBe('rm');
     expect(fs.readFileSync(file, 'utf8')).not.toContain('locate');
     // A word this client does not know was never on the form, so saving leaves it.
-    fs.appendFileSync(file, 'locate: sys-status\n', 'utf8');
+    fs.appendFileSync(file, 'locate: whereami\n', 'utf8');
     editor.saveServer('Bearfather', server({ locate: 'rm' }));
-    expect(parse(fs.readFileSync(file, 'utf8'))['locate']).toBe('sys-status');
+    expect(parse(fs.readFileSync(file, 'utf8'))['locate']).toBe('whereami');
   });
 
   /* The realm's teleport, literally (todo 813): stated when typed, no key when empty. */
@@ -1194,9 +1194,9 @@ describe('a character\u2019s own locate word', () => {
     expect(own()).toBe('none');
     expect(editor.saveProfile('vaelor', draft({ locate: null }))).toEqual({ ok: true });
     expect(read('vaelor')).not.toHaveProperty('locate');
-    fs.writeFileSync(file, `server: GreaterMUD (local)\nlocate: sys-status\n`, 'utf8');
+    fs.writeFileSync(file, `server: GreaterMUD (local)\nlocate: whereami\n`, 'utf8');
     expect(editor.saveProfile('vaelor', draft({ locate: null }))).toEqual({ ok: true });
-    expect(read('vaelor')['locate']).toBe('sys-status');
+    expect(read('vaelor')['locate']).toBe('whereami');
   });
 });
 

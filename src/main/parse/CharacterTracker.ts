@@ -1419,12 +1419,12 @@ export class CharacterTracker {
         return experienceGained(after, s, g['exp']);
       }
 
+      case 'user-location': // `sys status`'s: the same fact as `Location:`
       case 'user-profile': {
         const map = figure(g['map']);
         const number = figure(g['room']);
         if (map === null || number === null) return null;
-        // `rm`'s answer, and an ordered one: every step still unanswered from
-        // before it was answered by nothing (todo 10).
+        // The locate's answer, ordered: a step unanswered before it never will be (todo 10).
         this.expect.located();
         // The one source that is not inference: the game said so.
         const located = this.world ? resolveFromCoordinates(this.world, map, number) : null;

@@ -414,6 +414,13 @@ describe('room assembly', () => {
     expect(tracker.current.room.number).toBe(1201);
   });
 
+  /* `sys status`, MajorMUD's locate on a realm with no `rm`: room, then map. */
+  it('applies the coordinates sys status reports, room first', () => {
+    const tracker = play(['Room 2946  Map: 12', 'Spawn count: 0']);
+    expect(tracker.current.room.map).toBe(12);
+    expect(tracker.current.room.number).toBe(2946);
+  });
+
   it('clears stale coordinates when a new room arrives', () => {
     // `Location: 5,1201` describes where you were. Carrying it into the next
     // room is a confidently wrong location, which sends the pathfinder

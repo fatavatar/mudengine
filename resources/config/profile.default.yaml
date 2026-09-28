@@ -80,8 +80,8 @@ server: Paradigm Game 1 PVE
 #     - when: '(N)onstop, (Q)uit, or (C)ontinue?'
 #       send: ''
 
-# How this character asks the realm where it is standing: `rm`, or `none` to
-# ask nothing. USUALLY LEAVE THIS OUT, like the menus above: it belongs to the
+# How this character asks the realm where it is standing: `rm`, `sys-status`
+# (MajorMUD's `sys status`), or `none` to ask nothing. USUALLY LEAVE THIS OUT, like the menus above: it belongs to the
 # realm (`locate:` in its `server.yaml`, `rm` where that says nothing), and a
 # line here replaces the realm's answer for this character only.
 # locate: none
