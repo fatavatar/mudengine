@@ -34,6 +34,8 @@
  * realm by `RealmLore` and consulted through {@link SpellLore}.
  */
 
+import type { Afflictions } from './character';
+
 export type SpellMessageKind = 'start' | 'stop';
 
 /**
@@ -451,6 +453,8 @@ export interface SpellLore {
   unlearn(spell: string, kind: SpellMessageKind): void;
   /** What this realm has worked out about the effects it cannot name. */
   readonly effects: EffectLedger;
+  /** The conditions a realm states an effect turns on (`withStatedEffects`); absent, none. */
+  means?(spell: string): readonly EffectMeaning[];
 }
 
 /** A lore that knows no sentence and learns none. The zero-data client. */
@@ -502,5 +506,78 @@ export function spellLoreOf(
       if (learned.remove(spell, kind)) hooks.unlearned?.(spell, kind);
     },
     effects: hooks.effects ?? NO_EFFECT_LEDGER
+  };
+}
+
+/** A condition an effect can turn on, as a realm states it. */
+export type EffectMeaning = keyof Afflictions;
+
+const MEANINGS: readonly EffectMeaning[] = ['blind', 'poisoned', 'diseased', 'held', 'confused'];
+
+/**
+ * An effect a realm states: the sentence it lands with, the one it ends with,
+ * and the conditions it turns on — MegaMUD's *Messages* rows that last,
+ * converted (2026-09-28). What the shipped table and the realm's ability rows
+ * already say is read first; this fills in what they do not, such as `You are
+ * afraid` meaning the character cannot walk.
+ */
+export interface StatedEffect {
+  name: string;
+  starts: string;
+  /** Empty: nothing but the `st` sheet dropping it ends it. */
+  ends: string;
+  means: EffectMeaning[];
+}
+
+/** The `effects:` list of a realm's `server.yaml`; a row with no name or start is dropped. */
+export function normalizeStatedEffects(value: unknown): StatedEffect[] {
+  if (!Array.isArray(value)) return [];
+  const text = (field: unknown): string => (typeof field === 'string' ? field.trim() : '');
+  const out: StatedEffect[] = [];
+  for (const row of value) {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) continue;
+    const entry = row as Record<string, unknown>;
+    const name = text(entry['name']);
+    const starts = text(entry['starts']);
+    if (name.length === 0 || starts.length === 0) continue;
+    const means = Array.isArray(entry['means']) ? entry['means'] : [];
+    out.push({
+      name,
+      starts,
+      ends: text(entry['ends']),
+      means: MEANINGS.filter((meaning) => means.includes(meaning))
+    });
+  }
+  return out;
+}
+
+/**
+ * A realm's stated effects laid under a lore: their sentences are read where
+ * the lore has none for the spell, and their meanings answer `means`.
+ */
+export function withStatedEffects(lore: SpellLore, effects: readonly StatedEffect[]): SpellLore {
+  if (effects.length === 0) return lore;
+  const book = new SpellMessageBook();
+  const meanings = new Map<string, readonly EffectMeaning[]>();
+  for (const effect of effects) {
+    book.add(effect.name, 'start', effect.starts);
+    if (effect.ends.length > 0) book.add(effect.name, 'stop', effect.ends);
+    meanings.set(spellKey(effect.name), effect.means);
+  }
+  const merge = (a: SpellMessageHit | null, b: SpellMessageHit | null): SpellMessageHit | null =>
+    a === null
+      ? b
+      : b === null
+        ? a
+        : {
+            starts: [...new Set([...a.starts, ...b.starts])],
+            stops: [...new Set([...a.stops, ...b.stops])]
+          };
+  return {
+    ...lore,
+    match: (text) => merge(lore.match(text), book.match(text)),
+    startOf: (spell) => lore.startOf(spell) ?? book.startOf(spell),
+    stopOf: (spell) => lore.stopOf(spell) ?? book.stopOf(spell),
+    means: (spell) => meanings.get(spellKey(spell)) ?? lore.means?.(spell) ?? []
   };
 }

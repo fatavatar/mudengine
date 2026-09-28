@@ -584,3 +584,92 @@ describe('guards over stealth', () => {
     );
   });
 });
+
+/*
+ * A sentence as a trigger (2026-09-28): MegaMUD's *Messages* table, in the
+ * rules' own terms — a line holding the sentence fires the rule, and what the
+ * sentence captured fills `then`. An empty command is a bare Enter.
+ */
+describe('a sentence as the trigger', () => {
+  const said = (text: string, domain: Block['domain'] = 'combat'): Block => ({
+    ...block('unknown'),
+    domain,
+    text
+  });
+  const rules = (raw: unknown[]): Rule[] => normalizeRules(raw);
+
+  beforeEach(() => engine.onState(stateWith({})));
+
+  it('fires on a line that holds the sentence, and fills its captures', () => {
+    engine.load(
+      rules([
+        {
+          name: 'chase path',
+          when: { line: '{target} steps onto the side-path and quickly vanishes from view.' },
+          then: 'go path'
+        }
+      ]),
+      []
+    );
+    engine.onBlock(said('Fatty steps onto the side-path and quickly vanishes from view.'));
+    vi.advanceTimersByTime(10);
+    expect(sent).toEqual(['go path']);
+    expect(engine.firings.at(-1)?.commands).toEqual(['go path']);
+  });
+
+  it('passes a capture through to the command', () => {
+    engine.load(
+      rules([{ name: 'thank', when: { line: '{who} heals you' }, then: 'thank {who}' }]),
+      []
+    );
+    engine.onBlock(said('Healbot heals you for 12 damage!'));
+    vi.advanceTimersByTime(10);
+    expect(sent).toEqual(['thank Healbot']);
+  });
+
+  // One for a burst: the rule's own cooldown, a second by default.
+  it('sends a bare Enter for an empty command, one for a burst', () => {
+    engine.load(
+      rules([{ name: 'forest sounds', when: { line: 'The leaves begin to rustle' }, then: '' }]),
+      []
+    );
+    const rustle = 'The leaves begin to rustle, as if some beast were about to spring forth!';
+    engine.onBlock(said(rustle));
+    engine.onBlock(said(rustle));
+    vi.advanceTimersByTime(10);
+    expect(sent).toEqual(['']);
+    expect(engine.firings.at(-1)?.commands).toEqual(['(Enter)']);
+  });
+
+  it('never answers a listing row, or something somebody said unless told to', () => {
+    engine.load(
+      rules([
+        { name: 'quiet', when: { line: 'You are afraid' }, then: 'rest' },
+        { name: 'loud', when: { line: 'Say the word', speech: true }, then: 'bow' }
+      ]),
+      []
+    );
+    engine.onBlock(said('You are afraid'), true);
+    engine.onBlock(said('Bob says "You are afraid"', 'conversation'));
+    engine.onBlock(said('Bob says "Say the word"', 'conversation'));
+    vi.advanceTimersByTime(10);
+    expect(sent).toEqual(['bow']);
+  });
+
+  it('answers a line once, with the first rule that holds it', () => {
+    engine.load(
+      rules([
+        { name: 'stunned', when: { line: 'You are stunned' }, then: 'st' },
+        { name: 'song of stunning', when: { line: 'You are stunned' }, then: 'st' }
+      ]),
+      []
+    );
+    engine.onBlock(said('You are stunned!'));
+    vi.advanceTimersByTime(10);
+    expect(sent).toEqual(['st']);
+  });
+
+  it('refuses a line trigger with no sentence', () => {
+    expect(rules([{ name: 'blank', when: { line: '  ' }, then: 'x' }])).toEqual([]);
+  });
+});

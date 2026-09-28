@@ -8,6 +8,7 @@ import {
   SpellMessageBook,
   spellLoreOf,
   unnamedEffect,
+  withStatedEffects,
   type EffectLedger,
   type LearnedEffect,
   type SpellLore,
@@ -307,5 +308,51 @@ describe('what a new connection forgets', () => {
     expect(named(T + 200)).toEqual(['haste']);
     effects.forget();
     expect(named(T + 300)).toEqual([unnamedEffect('You feel zippy!')]);
+  });
+});
+
+/*
+ * What a realm's `server.yaml` states an effect means (2026-09-28): `You are
+ * afraid` is no spell the realm names with a hold, and still stands the
+ * character still — MegaMUD's *Messages* row, converted.
+ */
+describe('an effect the realm states', () => {
+  const stated = withStatedEffects(
+    spellLoreOf(SpellMessageBook.fromRows(ROWS), new SpellMessageBook()),
+    [
+      {
+        name: 'fear',
+        starts: 'You are afraid',
+        ends: 'The effects of fear wear off',
+        means: ['held']
+      }
+    ]
+  );
+
+  it('is read as the effect by its own sentences', () => {
+    expect(stated.match('You are afraid')?.starts).toEqual(['fear']);
+    expect(stated.match('The effects of fear wear off')?.stops).toEqual(['fear']);
+    // And what the shipped table already says is still read.
+    expect(stated.match('You feel lucky!')?.starts).toEqual(['bless']);
+  });
+
+  it('holds the character on its onset, and lets go on its ending', () => {
+    const log: string[] = [];
+    const effects = new EffectTracker({
+      world,
+      spellLore: stated,
+      claims: {
+        shiftHeldMove: () => {
+          log.push('shiftHeldMove');
+          return true;
+        }
+      },
+      belongings: () => ({ rememberSpellDuration: () => {} })
+    });
+    const held = effects.onset(character(), onset('You are afraid', 'fear', T)) ?? character();
+    expect(held.afflictions.held).toBe('yes');
+    expect(log).toEqual(['shiftHeldMove']);
+    const free = effects.expired(held, { spells: 'fear' }, T + 5000) ?? held;
+    expect(free.afflictions.held).toBe('no');
   });
 });

@@ -34,6 +34,8 @@ import {
 import { mergeMobRules, normalizeMobRules, type MobRule } from './mobRules';
 import { asCoinNames, type CoinNames } from './coins';
 import { asLocateWord, DEFAULT_LOCATE, type LocateWord } from './locate';
+import type { Rule } from './rules';
+import type { StatedEffect } from './spell-messages';
 import type { ConnectionTarget } from './types';
 import { isRecord, str } from './values';
 
@@ -98,6 +100,11 @@ export interface Profile {
    * `coins:` over its realm's, coin by coin (todo 830). See `CoinNames`.
    */
   coins: CoinNames;
+  /**
+   * The realm's stated effects (`server.yaml` `effects:`), laid under the
+   * session's spell lore (`withStatedEffects`). Beside `coins` for its reason.
+   */
+  effects: StatedEffect[];
   /** Dial this character when the client starts. */
   autoConnect: boolean;
   /**
@@ -170,6 +177,8 @@ function resolveServer(
   locate: LocateWord;
   coins: CoinNames;
   fleeGoto: string;
+  rules: Rule[];
+  effects: StatedEffect[];
 } | null {
   if (typeof value === 'string') {
     const found = byName(servers, value);
@@ -183,7 +192,9 @@ function resolveServer(
           hangPenalties: found.hangPenalties,
           locate: found.locate,
           coins: found.coins,
-          fleeGoto: found.fleeGoto
+          fleeGoto: found.fleeGoto,
+          rules: found.rules,
+          effects: found.effects
         }
       : null;
   }
@@ -220,6 +231,9 @@ function resolveServer(
       coins: asCoinNames(value['coins']),
       // And its teleport, which is as much a fact about the place.
       fleeGoto: str(value['fleeGoto'], '').trim(),
+      // Nor does it hold a realm's rules or effects: those live in its directory.
+      rules: [],
+      effects: [],
       target: {
         host,
         port,
@@ -278,6 +292,24 @@ function withRealmMobRules(
       combat: { ...config.automation.combat, mobRules: merged }
     }
   };
+}
+
+/**
+ * The realm's rules (`server.yaml` `rules:`) laid under whatever the options
+ * file or the character states, as `overlay` settled those two — MegaMUD's
+ * per-realm *Messages* table, in the rules' terms (2026-09-28). A rule named
+ * the same as the realm's replaces it, and the realm's come last, so a line
+ * the character answers is not answered by the realm too: the first rule
+ * holding a sentence is the one that fires (`RuleEngine.runLines`).
+ */
+function withRealmRules(config: AppConfig, realm: readonly Rule[]): AppConfig {
+  if (realm.length === 0) return config;
+  const stated = new Set(config.automation.rules.map((rule) => rule.name.toLowerCase()));
+  const rules = [
+    ...config.automation.rules,
+    ...realm.filter((rule) => !stated.has(rule.name.toLowerCase()))
+  ];
+  return { ...config, automation: { ...config.automation, rules } };
 }
 
 /**
@@ -471,6 +503,7 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
       database: server.database,
       locate: ownLocate(raw) ?? server.locate,
       coins: { ...server.coins, ...asCoinNames(raw['coins']) },
+      effects: server.effects,
       autoConnect: raw['autoConnect'] === true,
       // `!== false`, not `=== true`: this one is on unless the file says
       // otherwise. See the field.
@@ -482,7 +515,7 @@ export function resolveProfile(id: string, raw: unknown, baseSource: unknown): P
       config: withRealmSafety(
         withRealmSafety(
           withRealmMobRules(
-            normalizeConfig(overlay(baseSource, patch)),
+            withRealmRules(normalizeConfig(overlay(baseSource, patch)), server.rules),
             base.automation.combat.mobRules,
             server.mobRules,
             raw

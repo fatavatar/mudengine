@@ -481,3 +481,62 @@ describe('who says what the realm calls its coins', () => {
     ).toEqual({ runic: 'krabby patty', gold: 'doubloon' });
   });
 });
+
+/*
+ * A realm's own rules and effects (2026-09-28): MegaMUD's *Messages* table,
+ * converted into the realm's `server.yaml`, reaches every character on it.
+ */
+describe('the realm’s rules and effects', () => {
+  const realm = {
+    name: 'Skinny Inc',
+    host: 'bbs',
+    port: 2424,
+    encoding: 'cp437',
+    rules: [{ name: 'promo', when: { line: 'Check out the website' }, then: '' }],
+    effects: [
+      {
+        name: 'fear',
+        starts: 'You are afraid',
+        ends: 'The effects of fear wear off',
+        means: ['held']
+      }
+    ]
+  };
+  const names = (profile: { config: { automation: { rules: Array<{ name: string }> } } }) =>
+    profile.config.automation.rules.map((rule) => rule.name);
+
+  it('lays the realm’s rules after the character’s, and lets a same-named one replace it', () => {
+    const profile = resolve(
+      {
+        name: 'Skinny',
+        server: 'Skinny Inc',
+        automation: {
+          rules: [
+            { name: 'Promo', when: 'state', then: 'look' },
+            { name: 'mine', when: 'state', then: 'st' }
+          ]
+        }
+      },
+      { servers: [realm] }
+    );
+    expect(names(profile)).toEqual(['Promo', 'mine']);
+    const plain = resolve({ name: 'Skinny', server: 'Skinny Inc' }, { servers: [realm] });
+    expect(names(plain)).toEqual(['promo']);
+  });
+
+  it('carries the realm’s effects on the profile, and none for an inline address', () => {
+    expect(resolve({ name: 'Skinny', server: 'Skinny Inc' }, { servers: [realm] }).effects).toEqual(
+      [
+        {
+          name: 'fear',
+          starts: 'You are afraid',
+          ends: 'The effects of fear wear off',
+          means: ['held']
+        }
+      ]
+    );
+    expect(
+      resolve({ name: 'Skinny', server: { host: 'bbs', port: 2424 } }, { servers: [realm] }).effects
+    ).toEqual([]);
+  });
+});

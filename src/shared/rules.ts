@@ -204,12 +204,22 @@ export type Trigger =
    */
   | { kind: 'mid-round' }
   /** Every `everyMs`, while in the realm. */
-  | { kind: 'timer'; everyMs: number };
+  | { kind: 'timer'; everyMs: number }
+  /**
+   * A sentence, found anywhere in a line — MegaMUD's *Messages* table, in the
+   * rules' own terms (2026-09-28): `{name}` in `match` captures what the realm
+   * put there for `then` to use, `{dmg}` a figure. Never inside a listing, and
+   * never inside what somebody *said* unless `speech` is set: without that,
+   * anybody could gossip a sentence and steer every client listening.
+   */
+  | { kind: 'line'; match: string; speech: boolean };
 
 export interface RuleAction {
   /**
    * The command to send. `{name}` interpolates a capture group from the
-   * triggering block, or a state field.
+   * triggering block, or a state field. Empty is a bare Enter, which the
+   * realm answers by drawing the room again — MegaMUD's `^M` after an ambient
+   * sentence, to see what walked in.
    */
   command: string;
   priority: Priority;
@@ -236,4 +246,54 @@ export interface RuleFiring {
   commands: string[];
   /** Which guard rejected it, when it did not fire. */
   blockedBy?: string;
+}
+
+/** A line trigger's sentence, ready to test a line against. */
+export interface CompiledLine {
+  /** The longest literal stretch, tested with `includes` before the pattern runs. */
+  literal: string;
+  pattern: RegExp;
+  names: string[];
+}
+
+const TOKEN = /\{(\w+)\}/g;
+
+/**
+ * A sentence as something a line is tested against: case-sensitive, like
+ * MegaMUD's own match, and unanchored. A name is lazy, so a leading `{target}`
+ * takes the line from its start, and a trailing one, which a lazy match would
+ * leave one character long, is greedy. `{dmg}` is digits and nothing else.
+ */
+export function compileLine(match: string): CompiledLine {
+  const names: string[] = [];
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let source = '';
+  let literal = '';
+  let last = 0;
+  const tokens = [...match.matchAll(TOKEN)];
+  tokens.forEach((token, index) => {
+    const before = match.slice(last, token.index);
+    if (before.length > literal.length) literal = before;
+    source += escape(before);
+    names.push(token[1]!);
+    const trailing = index === tokens.length - 1 && token.index + token[0].length === match.length;
+    source += token[1] === 'dmg' ? '(\\d+)' : trailing ? '(.+)' : '(.+?)';
+    last = token.index + token[0].length;
+  });
+  const tail = match.slice(last);
+  if (tail.length > literal.length) literal = tail;
+  source += escape(tail);
+  return { literal, pattern: new RegExp(source), names };
+}
+
+/** What a line captured against a sentence, by name, or null when it does not hold it. */
+export function matchLine(compiled: CompiledLine, line: string): Record<string, string> | null {
+  if (compiled.literal.length > 0 && !line.includes(compiled.literal)) return null;
+  const found = compiled.pattern.exec(line);
+  if (!found) return null;
+  const captures: Record<string, string> = {};
+  compiled.names.forEach((name, index) => {
+    captures[name] = (found[index + 1] ?? '').trim();
+  });
+  return captures;
 }

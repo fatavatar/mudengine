@@ -64,6 +64,7 @@ import {
   SpellMessageBook,
   spellLoreOf,
   withRealmSpellNames,
+  withStatedEffects,
   type SpellLore,
   type SpellMessageRow
 } from '../shared/spell-messages';
@@ -383,9 +384,11 @@ function loreFor(id: SessionId): RealmLoreView {
 function spellLoreFor(id: SessionId): SpellLore {
   const world = worldFor(id);
   const shipped = shippedSpellMessages(world);
-  return (
+  // And under both, what the realm's own `server.yaml` states (`withStatedEffects`).
+  return withStatedEffects(
     lore?.spellsFor(world?.info.source ?? 'none', shipped) ??
-    spellLoreOf(shipped, new SpellMessageBook())
+      spellLoreOf(shipped, new SpellMessageBook()),
+    profileFor(id)?.effects ?? []
   );
 }
 

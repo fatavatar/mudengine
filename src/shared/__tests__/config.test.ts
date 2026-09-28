@@ -190,7 +190,10 @@ describe('normalizeConfig', () => {
         locate: 'rm',
         coins: {},
         // No teleport until the realm's own is written (todo 813).
-        fleeGoto: ''
+        fleeGoto: '',
+        // No rules or effects of its own until its Messages table is converted.
+        rules: [],
+        effects: []
       }
     ]);
   });

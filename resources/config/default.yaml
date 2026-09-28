@@ -2091,8 +2091,16 @@ automation:
   # action costs a character.
   #
   # A rule is:
-  #   when       what triggers it -- `state`, `mid-round`, `every 30s`, or a
-  #              block type such as `mob-hits`
+  #   when       what triggers it -- `state`, `mid-round`, `every 30s`, a
+  #              block type such as `mob-hits`, or a sentence:
+  #              `{ line: 'You are flat on your back' }`. A sentence is found
+  #              anywhere in a line, case and all; `{name}` in it captures what
+  #              the realm put there for `then` (`{dmg}` a figure). Never inside
+  #              a listing, and never inside what somebody said unless the
+  #              trigger says `speech: true` -- anybody could gossip a sentence.
+  #              A line answers the first rule holding it, and a realm's own
+  #              (its `server.yaml` `rules:`, where MegaMUD's Messages table is
+  #              converted) come after yours, so yours win
   #   if         guards, all of which must hold. `<field> <op> <value>` over:
   #
   #                hp  hp.percent  mana  mana.percent  level  wealth  phase
@@ -2140,7 +2148,8 @@ automation:
   #
   #   then       what to send. `{name}` fills from the triggering block's
   #              captures, then from state -- so `{target}` and `{attacker}`
-  #              both work
+  #              both work. An empty command, `''`, is a bare Enter: the realm
+  #              draws the room again, which is how to see what just walked in
   #   cooldownMs minimum gap between firings
   #
   # An unknown field or a guard that will not parse makes the whole rule load
@@ -2226,6 +2235,15 @@ automation:
   #         priority: probe
   #         coalesce: party
   #     cooldownMs: 15000
+  #
+  #   - name: follow the leader down the side-path
+  #     # A sentence as the trigger. `{target}` captures whoever stepped onto
+  #     # the path, and could be used in `then`; the guard keeps it to a party.
+  #     when: { line: '{target} steps onto the side-path and quickly vanishes from view.' }
+  #     if:
+  #       - partySize > 1
+  #     then: go path
+  #     cooldownMs: 3000
   #
   #   - name: find out what just walked in
   #     # A room arrival names somebody and says nothing about them. A `who`

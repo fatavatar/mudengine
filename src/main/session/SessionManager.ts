@@ -2959,7 +2959,7 @@ export class SessionManager {
     }
 
     this.noticeRealmMismatch(block);
-    this.rules.onBlock(block);
+    this.rules.onBlock(block, step.collecting);
     this.walker.onBlock(block);
     /*
      * A `rm` used to go out on every `*Combat Off*` while a loop ran, on the

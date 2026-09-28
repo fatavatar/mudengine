@@ -41,6 +41,7 @@ import {
   type ThemePreference
 } from './themes';
 import type { Comparison, Guard, GuardField, Rule, RuleAction, Trigger } from './rules';
+import { normalizeStatedEffects, type StatedEffect } from './spell-messages';
 import {
   ALERT_SIDES,
   DEFAULT_ALERT_DEBOUNCE_SECONDS,
@@ -242,6 +243,10 @@ export interface Server {
    * 297`); empty states none. A character's own replaces it. See `FleeGotoConfig`.
    */
   fleeGoto: string;
+  /** This realm's own rules, laid under the options file's and the character's. See `withRealmRules`. */
+  rules: Rule[];
+  /** This realm's sentences for effects landing and ending, and what each means. See `StatedEffect`. */
+  effects: StatedEffect[];
 }
 
 export interface FontConfig {
@@ -1990,33 +1995,16 @@ export interface SpellsConfig {
    */
   areaCasts: number;
   /**
-   * The spell that stands in for `attack` while health is low: one that hurts
-   * the target and heals the caster by it (`vampiric assault`, the realm's
-   * `DrainLife`). Blank keeps `attack`; with `autoChoose` on, blank derives it
-   * from the book's drains. Its picker offers only the spells the realm says
-   * drain (`spellServes`).
+   * Drain when hurt (2026-09-28): `drain` and `areaDrain` — spells that hurt
+   * and heal the caster by it (`spellServes`) — are cast instead of `attack`
+   * and `areaAttack` below `drainBelow` of maximum health until `drainTo`,
+   * the heal's hysteresis, since every change of spell re-engages the fight.
+   * Blank keeps the ordinary spell; `autoChoose` derives a blank `drain`.
+   * `drainTo` 0 lets go at `drainBelow`, and is clamped up to it as `healTo` is.
    */
   drain: string;
-  /**
-   * The same for the room spell: cast instead of `areaAttack`, under the area
-   * spell's own crowd and mana tests, while health is low. `necromantic storm`
-   * drains by its `EndCast`, a heal on the caster, and counts. Blank keeps
-   * `areaAttack`.
-   */
   areaDrain: string;
-  /**
-   * The fraction of maximum health below which the drain spells replace the
-   * attack spells in a fight. 0 never drains.
-   */
   drainBelow: number;
-  /**
-   * Keep draining until health is back to this fraction; 0 goes back to the
-   * attack spell the moment it is over `drainBelow`. The pair `healBelow` /
-   * `healTo` is, and for a sharper reason: every change of spell mid-fight
-   * re-engages it and restarts the character's round, so a drain that lifts
-   * health one point over the line must not flip the fight back and forth.
-   * Clamped up to `drainBelow`, as `healTo` is.
-   */
   drainTo: number;
   /**
    * The spell to heal **this character** with. Blank heals nobody.
@@ -3448,7 +3436,9 @@ function normalizeServer(value: unknown): Server | null {
     hangPenalties: typeof value['hangPenalties'] === 'boolean' ? value['hangPenalties'] : null,
     locate: asLocateWord(value['locate']) ?? DEFAULT_LOCATE,
     coins: asCoinNames(value['coins']),
-    fleeGoto: str(value['fleeGoto'], '').trim()
+    fleeGoto: str(value['fleeGoto'], '').trim(),
+    rules: normalizeRules(value['rules']),
+    effects: normalizeStatedEffects(value['effects'])
   };
 }
 
@@ -3617,6 +3607,11 @@ export function parseGuard(text: string): Guard | null {
 }
 
 function parseTrigger(value: unknown): Trigger | null {
+  // A sentence: `{ line: 'You are flat on your back', speech: false }`.
+  if (isRecord(value)) {
+    const match = str(value['line'], '').trim();
+    return match.length > 0 ? { kind: 'line', match, speech: value['speech'] === true } : null;
+  }
   if (typeof value !== 'string') return null;
   const text = value.trim();
 
@@ -3636,13 +3631,11 @@ function parseTrigger(value: unknown): Trigger | null {
 }
 
 function parseAction(value: unknown): RuleAction | null {
-  if (typeof value === 'string') {
-    return value.trim() ? { command: value.trim(), priority: 'combat' } : null;
-  }
+  // Empty is a bare Enter (`RuleAction.command`), stated on purpose.
+  if (typeof value === 'string') return { command: value.trim(), priority: 'combat' };
   if (!isRecord(value)) return null;
 
-  const command = str(value['command'], '');
-  if (command.length === 0) return null;
+  const command = str(value['command'], '').trim();
 
   const priority = PRIORITIES.includes(value['priority'] as RuleAction['priority'])
     ? (value['priority'] as RuleAction['priority'])

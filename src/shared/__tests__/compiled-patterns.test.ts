@@ -40,6 +40,13 @@ const BUILT_ONCE: Record<string, { count: number; because: string }> = {
       'so each is compiled once when the shipped table is read (`MessageBook.add`) and held; ' +
       'the per-line path runs only the compiled ones a word index selects (todo 109)'
   },
+  'src/shared/rules.ts': {
+    count: 1,
+    because:
+      "a `line` rule's sentence is configuration (MegaMUD's Messages table, converted, " +
+      '2026-09-28), so `compileLine` builds its pattern once when the rules are loaded ' +
+      '(`RuleEngine.load`) and holds it; the per-line path tests a literal first'
+  },
   'src/shared/coins.ts': {
     count: 1,
     because:

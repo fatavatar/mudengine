@@ -18,7 +18,15 @@ import {
 } from '../../shared/character';
 import { attacksFirst, type MobRule } from '../../shared/mobRules';
 import { playersHere } from './HangUp';
-import type { Guard, Rule, RuleFiring } from '../../shared/rules';
+import { REREAD_ROOM } from '../../shared/commands';
+import {
+  compileLine,
+  matchLine,
+  type CompiledLine,
+  type Guard,
+  type Rule,
+  type RuleFiring
+} from '../../shared/rules';
 import { tuning } from '../app/tuning';
 import type { SessionModule } from './Module';
 
@@ -268,6 +276,8 @@ export interface RuleEngineEvents {
 
 export class RuleEngine implements SessionModule {
   private rules: Rule[] = [];
+  /** Each `line` rule's sentence, compiled once per load. */
+  private lines: Array<{ rule: Rule; compiled: CompiledLine; speech: boolean }> = [];
   private readonly lastFired = new Map<string, number>();
   private readonly trace: RuleFiring[] = [];
   private midRoundTimer: NodeJS.Timeout | null = null;
@@ -309,6 +319,11 @@ export class RuleEngine implements SessionModule {
    */
   load(rules: Rule[], mobRules: readonly MobRule[]): void {
     this.rules = rules.filter((rule) => rule.enabled);
+    this.lines = this.rules.flatMap((rule) =>
+      rule.when.kind === 'line'
+        ? [{ rule, compiled: compileLine(rule.when.match), speech: rule.when.speech }]
+        : []
+    );
     this.mobRules = mobRules;
     this.rearmTimers();
   }
@@ -339,10 +354,32 @@ export class RuleEngine implements SessionModule {
     this.extra = { ...this.extra, ...extra };
   }
 
-  /** A line was classified: run its `block` rules, and track combat timing. */
-  onBlock(block: Block): void {
+  /**
+   * A line was classified: run its `block` rules, its `line` rules — never
+   * for a line inside a listing (`collecting`), whose rows would answer their
+   * own command — and track combat timing.
+   */
+  onBlock(block: Block, collecting = false): void {
     this.run({ kind: 'block', type: block.type }, block);
+    if (!collecting) this.runLines(block);
     if (COMBAT_BLOCKS.has(block.type)) this.armMidRound();
+  }
+
+  /**
+   * Every `line` rule whose sentence the line holds, first match only: a
+   * realm's table names one sentence twice more than once, and a line
+   * answered twice sends its response twice. What the sentence captured is
+   * laid over the block's own groups for `then` to read.
+   */
+  private runLines(block: Block): void {
+    const said = block.domain === 'conversation';
+    for (const { rule, compiled, speech } of this.lines) {
+      if (said && !speech) continue;
+      const captures = matchLine(compiled, block.text);
+      if (captures === null) continue;
+      this.fire(rule, { ...block, groups: { ...block.groups, ...captures } });
+      return;
+    }
   }
 
   private armMidRound(): void {
@@ -410,6 +447,18 @@ export class RuleEngine implements SessionModule {
     const commands: string[] = [];
     let unresolved: string | null = null;
     for (const action of rule.then) {
+      // Stated empty on purpose: a bare Enter, one however many lines ask.
+      if (action.command.length === 0) {
+        this.queue.enqueue({
+          command: REREAD_ROOM,
+          priority: action.priority,
+          coalesceKey: action.coalesce ?? 'rule-reread',
+          ...(action.expiresMs === undefined ? {} : { expiresAt: now + action.expiresMs }),
+          reason: `rule: ${rule.name}`
+        });
+        commands.push('(Enter)');
+        continue;
+      }
       const command = interpolate(action.command, block, state, facts).trim();
       // An unresolved placeholder means the capture the rule wanted was not
       // there. Sending the template verbatim would type `attack {target}` into

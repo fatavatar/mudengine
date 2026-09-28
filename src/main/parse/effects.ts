@@ -742,10 +742,11 @@ export class EffectTracker {
       const causes = this.spellLore.effects.seen(sentence)?.causes ?? {};
       return AFFLICTIONS.filter((condition) => causes[condition] === 'confirmed');
     }
-    const conditions: Array<keyof Afflictions> = [];
+    // What the realm's `server.yaml` states the effect means (`withStatedEffects`), first.
+    const conditions: Array<keyof Afflictions> = [...(this.spellLore.means?.(name) ?? [])];
     const row = this.world?.spellNamed(name);
-    if (holdsMovement(row)) conditions.push('held');
-    if (confuses(row)) conditions.push('confused');
+    if (holdsMovement(row) && !conditions.includes('held')) conditions.push('held');
+    if (confuses(row) && !conditions.includes('confused')) conditions.push('confused');
     const start = this.spellLore.startOf(name);
     const stated = start === null ? null : afflictionOnset(start);
     if (stated !== null && !conditions.includes(stated)) conditions.push(stated);
@@ -878,14 +879,21 @@ export class EffectTracker {
    */
   private heldByOnset(s: CharacterState, candidates: readonly string[]): CharacterState | null {
     const rows = candidates.map((name) => this.world?.spellNamed(name));
+    // And what the realm's `server.yaml` states each means (`withStatedEffects`).
+    const stated = new Set(candidates.flatMap((name) => this.spellLore.means?.(name) ?? []));
     let next: CharacterState | null = null;
-    if (rows.some(holdsMovement)) {
+    if (rows.some(holdsMovement) || stated.has('held')) {
       this.expect.shiftHeldMove();
       next = afflicted(s, 'held', 'yes');
     }
     // A confusion landing refuses nothing by itself — the fumbles come later,
     // one command at a time — so the flag is set and no claim is taken.
-    if (rows.some(confuses)) next = afflicted(next ?? s, 'confused', 'yes') ?? next;
+    if (rows.some(confuses) || stated.has('confused')) {
+      next = afflicted(next ?? s, 'confused', 'yes') ?? next;
+    }
+    for (const condition of ['blind', 'poisoned', 'diseased'] as const) {
+      if (stated.has(condition)) next = afflicted(next ?? s, condition, 'yes') ?? next;
+    }
     return next;
   }
 
