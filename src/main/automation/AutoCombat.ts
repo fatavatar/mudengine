@@ -2005,6 +2005,23 @@ export class AutoCombat {
         continue;
       }
       /*
+       * A row the player marked Enemy is past the disposition, as `engage:
+       * all` is for every monster. MegaMUD's Enemy is *attacked on sight*
+       * (`idh_relationships`); whether the realm data says it would have
+       * swung first is this client's own caution, not the player's.
+       * Reported on Skinny (2026-09-29): storm giants he marked Enemy over
+       * the realm's Avoid are `Align` 3, Neutral, so `passive`, and he stood
+       * beside Fatty's fight until it reached him through `defendParty`.
+       *
+       * Only a row that *says* Enemy. It is also what an unlisted monster
+       * reads as (`relationOf`), and those stay with `engage`. The caps
+       * above stand, being the player's own too.
+       */
+      if (this.ruleOf(who.name)?.relationship === 'enemy') {
+        willing.push(who);
+        continue;
+      }
+      /*
        * Or it *might*, because the rows sharing this name disagree. Same coin
        * toss as an uncertain disposition and settled by the same setting —
        * refusing it outright is what would have made this not work on `giant
@@ -2901,7 +2918,15 @@ export class AutoCombat {
         (who) =>
           who.kind === 'mob' && (this.leftAlone(who.name) || this.relationOf(who.name) !== 'enemy')
       );
-      const crowd = Math.max(countThreats(state), state.combat.attackers.length);
+      /*
+       * A row marked Not hostile is no threat either, whatever the realm
+       * rates it: the same reading `Recovery` rests by. Otherwise the player
+       * said the monster would not join, and the spell was cast for a crowd
+       * that was not coming (the player, 2026-09-29). One already swinging
+       * is counted by `attackers`.
+       */
+      const threats = countThreats(state, (name) => this.ruleOf(name)?.notHostile === true);
+      const crowd = Math.max(threats, state.combat.attackers.length);
       const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
       if (
         !costly &&
