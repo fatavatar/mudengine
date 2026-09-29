@@ -102,6 +102,7 @@ import type { CurrencyEntity, ExitEntity, ItemEntity } from '../../shared/entiti
 import { addCoins } from '../../shared/coins';
 import { observe, playerEntity, playerKey } from '../../shared/players';
 import { noteRemoteCall, noteRemoteClient, trackPlayers } from './players';
+import { keepPartyCurrent } from './partyUpkeep';
 import { trackTally } from './tally';
 import { NO_TALLY, settleClocks, type CombatTally } from '../../shared/tally';
 import { readStatAll, statedBasis } from '../../shared/stated';
@@ -121,7 +122,6 @@ import {
   withoutPlayer,
   withPartyListing,
   withRemoteVitals,
-  withMemberMoving,
   withRank,
   withResting
 } from './presence';
@@ -734,6 +734,16 @@ export class CharacterTracker {
    * byte-identical, so the reply is not evidence either way.
    */
   private sneakedThisMove = false;
+  /**
+   * A `Sneaking...` sent while no move of this character's was in flight: the
+   * leader's move, relayed to a sneaking follower (`MoveCommand.cs:86-95`).
+   * The server relays it without asking `goodToGo`, so a leader who walks into
+   * a wall leaves one behind for a move that never happened (upstream
+   * c5391cc). It becomes the receipt only when `-- Following your Party
+   * leader <dir> --` says the follower was walked, within
+   * `tuning.parse.staleMoveMs`. When it was printed, or null.
+   */
+  private relayedSneakAt: number | null = null;
 
   constructor(
     private readonly world?: WorldGraph,
@@ -1590,6 +1600,7 @@ export class CharacterTracker {
   private stealthAfterMove(): Stealth {
     const settled: Stealth = this.sneakedThisMove ? 'sneaking' : 'seen';
     this.sneakedThisMove = false;
+    this.relayedSneakAt = null;
     return settled;
   }
 
@@ -1603,6 +1614,7 @@ export class CharacterTracker {
    */
   private stealthBroke(s: CharacterState): CharacterState | null {
     this.sneakedThisMove = false;
+    this.relayedSneakAt = null;
     return s.stealth === 'seen' ? null : { ...s, stealth: 'seen' };
   }
 
@@ -1618,6 +1630,7 @@ export class CharacterTracker {
    */
   private breakStealth(): void {
     this.sneakedThisMove = false;
+    this.relayedSneakAt = null;
     if (this.state.stealth === 'seen') return;
     this.state = { ...this.state, stealth: 'seen' };
   }
@@ -2592,6 +2605,10 @@ export class CharacterTracker {
     if (next !== null && moved && Object.keys(next.combat.claimed).length > 0) {
       next = { ...next, combat: { ...next.combat, claimed: {} } };
     }
+    // And the party's: a member's fight ends with its monster, and a member
+    // seen acting has stood up (`keepPartyCurrent`).
+    const party = keepPartyCurrent(before, next ?? this.state, block, moved);
+    if (party !== (next ?? this.state)) next = party;
     /*
      * **A room the character could read is proof it can see** — the second
      * half of todo 02, asked for as *"if you get a room you know you can see,
@@ -4368,6 +4385,7 @@ export class CharacterTracker {
          * one.
          */
         this.sneakedThisMove = false;
+        this.relayedSneakAt = null;
         return s.stealth === 'seen' ? null : { ...s, stealth: 'seen' };
 
       /*
@@ -5357,14 +5375,12 @@ export class CharacterTracker {
       case 'player-leaves-room': {
         const player = g['player'];
         if (!player) return null;
-        const moved = withMemberMoving(s, player);
-        const base = moved ?? s;
-        if (!base.room.occupants.some((who) => who.name === player)) return moved;
+        if (!s.room.occupants.some((who) => who.name === player)) return null;
         return {
-          ...base,
+          ...s,
           room: {
-            ...base.room,
-            occupants: base.room.occupants.filter((who) => who.name !== player)
+            ...s.room,
+            occupants: s.room.occupants.filter((who) => who.name !== player)
           }
         };
       }
@@ -5849,15 +5865,20 @@ export class CharacterTracker {
        */
       /*
        * `Sneaking...` is printed by `MoveCommand` on a successful move and
-       * only while the character actually is sneaking, so it is both the fact
-       * and the receipt for the move it precedes. The flag is what
+       * only while the character actually is sneaking, so it is the fact at
+       * once, and the receipt for the move it precedes when that move is this
+       * character's own (`Expectations.mayBeMoving`); a leader's relayed one
+       * waits for the follow (`relayedSneakAt`). The flag is what
        * `stealthAfterMove` reads when that move commits; see its declaration
        * for why the absence of this line is the only thing that can say
        * stealth broke.
        */
-      case 'user-sneaking':
-        this.sneakedThisMove = true;
+      case 'user-sneaking': {
+        const own = this.expect.mayBeMoving;
+        if (own) this.sneakedThisMove = true;
+        this.relayedSneakAt = own ? null : block.at;
         return s.stealth === 'sneaking' ? null : { ...s, stealth: 'sneaking' };
+      }
 
       case 'user-not-sneaking':
       case 'user-sneak-failed':
@@ -6690,9 +6711,15 @@ export class CharacterTracker {
        * The server walked this character after its leader. A room is about to
        * arrive that no typed command asked for, and it is a room reached by a
        * *move* — so the same expectation a typed direction pushes is pushed
-       * here, and the resolver gets to use the strongest signal it has.
+       * here, and the resolver gets to use the strongest signal it has. A
+       * fresh relayed `Sneaking...` becomes this move's receipt.
        */
       case 'party-follows': {
+        const relayed = this.relayedSneakAt;
+        this.relayedSneakAt = null;
+        if (relayed !== null && block.at - relayed < tuning().parse.staleMoveMs) {
+          this.sneakedThisMove = true;
+        }
         const direction = MOVE_COMMANDS[g['direction']?.trim().toLowerCase() ?? ''];
         if (!direction) return null;
         this.expect.pushMove(direction);

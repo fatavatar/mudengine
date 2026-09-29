@@ -1122,9 +1122,14 @@ automation:
   #
   # There is no ground meaning "everybody", and the absence is deliberate: it is
   # not a reason, it is the absence of a gate.
+  #
+  # `autoJoin` joins a party when its leader invites you, without waiting for
+  # the @join the leader would telepath next. Only somebody granted @join
+  # above is joined, and never while you are already in a party.
   remotes:
     enabled: false
     gangpath: false
+    autoJoin: false
     gang: []
     party: [health, bless-expired, heal]
     players: {}
@@ -1260,7 +1265,9 @@ automation:
     # holds no lair in is looked into first (`l <direction>`), entered only if
     # it is empty, rested in, and stepped back from when nothing else has the
     # character. Where no neighbour is safe the rest goes ahead where it is,
-    # said once. On: it acts only when resting was going to act.
+    # said once. Never while following a party: where the party stands is the
+    # leader's to choose, and a follower rests beside it. On: it acts only
+    # when resting was going to act.
     restNextDoor: true
 
     # Rest before stepping through a trap, until health covers what the trap
@@ -1529,6 +1536,22 @@ automation:
     attackCasts: 0
     areaCasts: 0
 
+    # Drain when hurt. A drain hurts the target and heals the caster by it --
+    # the realm's DrainLife (`vampiric assault`), or a hit whose EndCast is a
+    # heal on the caster (`necromantic storm` ends in `suck the life force`).
+    # Below `drainBelow` of maximum health, `drain` is cast instead of
+    # `attack` and `areaDrain` instead of `areaAttack`, under the same casts,
+    # crowd and mana tests, until health is back to `drainTo`. 0 there
+    # switches back the moment health is over `drainBelow`, and every switch
+    # re-engages the fight and restarts the character's round, so a gap is
+    # worth leaving. A `drainTo` below `drainBelow` is raised to it. A blank
+    # spell keeps the ordinary one -- or, with `autoChoose` on, `drain` is
+    # picked from the spellbook's drains. `drainBelow: 0` never drains.
+    drain: ''
+    areaDrain: ''
+    drainBelow: 0
+    drainTo: 0
+
     # Heal if below -- MegaMUD's Health tab, kept beside the attack spell
     # because it is the same mechanism: one cast, chosen by a number, under
     # the same `minMana` floor.
@@ -1559,6 +1582,20 @@ automation:
     healBelow: 0
     healTo: 0
     healParty: false
+
+    # Auto Choose Best Heal. On, the heal is picked each cast from your
+    # spellbook and the realm's figures instead of from `heal` and
+    # `healPartyWith`: the cheapest spell expected to cover what is missing,
+    # else the one that mends most. With more than one person hurt, a
+    # party-wide heal such as `healing rain` is weighed against one heal on
+    # the worst of them. Hit points mended low on the bar count for more than
+    # those mended near the top, so three people at 68%, 71% and 35% get a
+    # major heal on the one at 35% unless the rain does nearly as much for
+    # them. The choice is printed when it changes, and where it cannot be
+    # made (a member whose client never answered @health, a book not yet
+    # read) the spell in the box is cast. Off by default because it casts
+    # spells you did not type.
+    autoChooseHeal: false
 
     # Ask a carried item for the blessing it casts, when that blessing is not
     # up -- the half of MegaMUD's AutoBless this client had no answer to: a

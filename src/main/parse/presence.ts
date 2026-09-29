@@ -41,6 +41,18 @@ function isAlignment(value: string | undefined): value is Alignment {
   return value !== undefined && (ALIGNMENTS as readonly string[]).includes(value);
 }
 
+/**
+ * A row's alignment. An empty column is **Neutral**: MajorMUD's `who` prints
+ * the word only for characters that have one, and Neutral is the one without
+ * (`Skinny Fatterson  -  Dedicate`, 2026-09-28). Read as unknown, it left a
+ * neutral character unable to say which `hates-good` monsters attack it, so
+ * a room of sea giants swinging at it never counted as a crowd.
+ */
+function alignmentOf(value: string | undefined): Alignment | null {
+  if (value === undefined || value.trim().length === 0) return 'Neutral';
+  return isAlignment(value) ? value : null;
+}
+
 /** `62%` as a fraction in [0, 1]; null when the listing printed none. */
 export function percent(value: string | undefined): number | null {
   if (value === undefined) return null;
@@ -94,10 +106,9 @@ export function rosterFrom(rows: Array<Record<string, string>> | undefined): Adv
     .map((row): Adventurer | null => {
       const name = row['name'];
       if (!name) return null;
-      const alignment = row['alignment'];
       return {
         name,
-        alignment: isAlignment(alignment) ? alignment : null,
+        alignment: alignmentOf(row['alignment']),
         title: row['title']?.trim() || null,
         flags: row['flags']?.trim() || null,
         // `None` is read as no gang; see `gangOf` for the one row that says so.
@@ -621,24 +632,26 @@ export function withRank(
 }
 
 /**
- * `<player> just left to the …`: a member walking off has stood up. The one
- * thing besides a listing that says so — a leader's `stops to rest` otherwise
- * outlived the rest, and its follower sat down in every room it was walked
- * into, before the leader had (skinny behind Fatty, 2026-09-24).
+ * Members seen swinging, being swung at, casting or walking out are no longer
+ * resting or meditating: the server stands a player up for each (`Player.cs`
+ * 6181, `Mob.cs` 1372, `Spell.cs` 2006, `Exits.cs` 78) and says nothing. A
+ * leader's `stops to rest` otherwise outlived the rest, and its follower sat
+ * down in every room it was walked into (skinny behind Fatty, 2026-09-24;
+ * upstream daa7d34 for the rest). Unknown until the next listing; null when
+ * nobody named was sitting.
  */
-export function withMemberMoving(
-  s: CharacterState,
-  player: string | undefined
-): CharacterState | null {
-  if (!player) return null;
-  const held = s.party.members.find((entry) => entry.name === player);
-  if (held === undefined || held.activity === null) return null;
+export function upFromRest(s: CharacterState, names: readonly string[]): CharacterState | null {
+  const up = new Set(names.map((name) => name.toLowerCase()));
+  const sitting = (entry: PartyMember): boolean =>
+    up.has(entry.name.toLowerCase()) &&
+    (entry.activity?.state === 'resting' || entry.activity?.state === 'meditating');
+  if (!s.party.members.some(sitting)) return null;
   return {
     ...s,
     party: {
       ...s.party,
       members: s.party.members.map((entry) =>
-        entry.name === player ? { ...entry, activity: null } : entry
+        sitting(entry) ? { ...entry, activity: null } : entry
       )
     }
   };
@@ -646,8 +659,9 @@ export function withMemberMoving(
 
 /**
  * `<player> stops to rest.` / `kneels to meditate`: the flag between listings,
- * for a member. Standing up is announced only by walking off
- * (`withMemberMoving`); otherwise a listing clears it.
+ * for a member. Nothing says a rest has ended, so a listing clears it, and so
+ * does the member being seen doing what the server stands them up for
+ * (`upFromRest`).
  */
 export function withResting(
   s: CharacterState,

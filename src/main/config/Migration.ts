@@ -270,6 +270,9 @@ function migrateAll(options: MigrationOptions): void {
   theMobRulesBecameMonsterRows(home, note);
   statedTheMeditateTarget(home, note, options.template);
   statedTheFleeGoto(home, note, options.template);
+  statedTheDrain(home, note, options.template);
+  statedTheAutoJoin(home, note);
+  statedTheHealChoice(home, note, options.template);
 }
 
 /**
@@ -6164,6 +6167,59 @@ function statedTheFleeGoto(
 }
 
 /**
+ * `automation.spells.drain`, `areaDrain`, `drainBelow` and `drainTo`
+ * (2026-09-28): a necrolyte's `vampiric assault` and `necromantic storm` cast
+ * in place of the attack spells while health is low. Written off, after
+ * `areaCasts`, with the template's paragraph on the first, into every file
+ * that states a spells block.
+ */
+function statedTheDrain(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.drain');
+  const defaults = DEFAULT_CONFIG.automation.spells;
+  const keys = [
+    ['drain', defaults.drain],
+    ['areaDrain', defaults.areaDrain],
+    ['drainBelow', defaults.drainBelow],
+    ['drainTo', defaults.drainTo]
+  ] as const;
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('drain')) return false;
+      const pairs = keys
+        .filter(([key]) => !spells.has(key))
+        .map(([key, value]) => document.createPair(key, value) as Pair);
+      const first = pairs[0];
+      if (typeof comment === 'string' && first !== undefined && isScalar(first.key)) {
+        first.key.commentBefore = comment;
+      }
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'areaCasts'
+      );
+      if (after === -1) spells.items.push(...pairs);
+      else spells.items.splice(after + 1, 0, ...pairs);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.drainStated.one', params)
+      : t('notices.migration.drainStated.many', params)
+  );
+}
+
+/**
  * `mobRules` became monster rows (2026-09-24): the two lists about named
  * monsters were one question asked in two panels.
  *
@@ -6302,6 +6358,83 @@ function statedTheConfusionWait(home: Home, note: (message: string) => void): vo
  * fourth exists, so it is written in after `disease`, where a player
  * reading the block will find it. Idempotent; nothing stated is overwritten.
  */
+/**
+ * `automation.spells.autoChooseHeal` into every file that states `spells:`
+ * without it, after `healParty` and with the template's comment (upstream
+ * 3b60de1, ported 2026-09-29). The heal was chosen under `autoChoose` until it
+ * had its own switch, so each file's new key takes that file's `autoChoose`:
+ * a player who had the heals chosen still has them chosen.
+ */
+function statedTheHealChoice(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.autoChooseHeal');
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('autoChooseHeal')) return false;
+      const pair = document.createPair('autoChooseHeal', spells.get('autoChoose') === true) as Pair;
+      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'healParty'
+      );
+      if (after === -1) spells.items.push(pair);
+      else spells.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.healChoiceStated.one', params)
+      : t('notices.migration.healChoiceStated.many', params)
+  );
+}
+
+/**
+ * `automation.remotes.autoJoin` into every file that states `remotes:` without
+ * it, off, after `gangpath` (upstream 759fc4d, ported 2026-09-29). Its
+ * explanation is in the template's block comment above `remotes:`, so the key
+ * carries none.
+ */
+function statedTheAutoJoin(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const remotes = document.getIn(['automation', 'remotes'], true);
+      if (!isMap(remotes) || remotes.has('autoJoin')) return false;
+      const pair = document.createPair(
+        'autoJoin',
+        DEFAULT_CONFIG.automation.remotes.autoJoin
+      ) as Pair;
+      const after = remotes.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'gangpath'
+      );
+      remotes.items.splice(after === -1 ? 0 : after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.autoJoinStated.one', params)
+      : t('notices.migration.autoJoinStated.many', params)
+  );
+}
+
 function statedTheFreedomCure(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
   const stated: string[] = [];
@@ -6672,6 +6805,8 @@ function theTuningBlockGainedKeys(
       addGroup(group, { ...DEFAULT_INTERNAL.tuning[group] });
     }
     addKey('spells', 'healRequestMs', DEFAULT_INTERNAL.tuning.spells.healRequestMs);
+    addKey('spells', 'healUrgency', DEFAULT_INTERNAL.tuning.spells.healUrgency);
+    addKey('spells', 'healNearEnough', DEFAULT_INTERNAL.tuning.spells.healNearEnough);
     addKey('remotes', 'healAskAgainMs', DEFAULT_INTERNAL.tuning.remotes.healAskAgainMs);
     addKey('hunting', 'measuredFightsMin', DEFAULT_INTERNAL.tuning.hunting.measuredFightsMin);
     addKey('view', 'questRunLingerMs', DEFAULT_INTERNAL.tuning.view.questRunLingerMs);

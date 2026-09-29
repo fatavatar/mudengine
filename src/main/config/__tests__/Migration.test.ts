@@ -2862,11 +2862,12 @@ describe('peers became remotes', () => {
   it('converts a file with the switch off too, because the rename is not optional', () => {
     fs.writeFileSync(home.options, 'automation:\n  peers:\n    enabled: false\n', 'utf8');
     migrate();
-    // `statedPartyRemotes` runs behind this one and states the party list into
-    // the block it just produced, which is the whole point of running it after.
+    // `statedPartyRemotes` and `statedTheAutoJoin` run behind this one and state
+    // their keys into the block it just produced, which is the point of running after.
     expect(remotes()).toEqual({
       enabled: false,
-      party: [...DEFAULT_CONFIG.automation.remotes.party]
+      party: [...DEFAULT_CONFIG.automation.remotes.party],
+      autoJoin: false
     });
   });
 
@@ -2918,7 +2919,8 @@ describe('peers became remotes', () => {
     expect(automation.peers).toBeUndefined();
     expect(automation.remotes).toEqual({
       enabled: false,
-      party: [...DEFAULT_CONFIG.automation.remotes.party]
+      party: [...DEFAULT_CONFIG.automation.remotes.party],
+      autoJoin: false
     });
   });
 });
@@ -6354,5 +6356,155 @@ ${login}`,
     realm("login:\n  - when: 'or (C)ontinue'\n    send: '{password}'\n");
     migrate();
     expect(server()['login']).toEqual([{ when: 'or (C)ontinue', send: '{password}' }]);
+  });
+});
+
+/* Drain when hurt (2026-09-28): four keys after `areaCasts`, off, with the paragraph, once. */
+describe('the drain spells', () => {
+  const profile = (): string => home.profile('vaelor').file;
+  const spellsOf = (): Record<string, unknown> =>
+    (parse(fs.readFileSync(profile(), 'utf8'))['automation'] as Record<string, unknown>)[
+      'spells'
+    ] as Record<string, unknown>;
+
+  beforeEach(() => {
+    fs.writeFileSync(path.join(old, 'user.yaml'), OPTIONS, 'utf8');
+    migrate();
+    fs.mkdirSync(path.dirname(profile()), { recursive: true });
+  });
+
+  it('writes them after areaCasts, with the paragraph, once', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  spells:\n    attack: aslt\n    areaCasts: 0\n    heal: ""\n',
+      'utf8'
+    );
+    migrate(true);
+    const spells = spellsOf();
+    // `autoChoose` heads the block, written by its own pass.
+    expect(Object.keys(spells).slice(1, 7)).toEqual([
+      'attack',
+      'areaCasts',
+      'drain',
+      'areaDrain',
+      'drainBelow',
+      'drainTo'
+    ]);
+    expect(spells['drain']).toBe('');
+    expect(spells['drainBelow']).toBe(0);
+    expect(fs.readFileSync(profile(), 'utf8')).toContain('Drain when hurt');
+    expect(said.some((m) => m.includes('drain spell while health is low'))).toBe(true);
+    migrate(true);
+    expect(said.filter((m) => m.includes('drain spell while health is low'))).toHaveLength(0);
+  });
+
+  it('leaves a stated drain alone', () => {
+    fs.writeFileSync(
+      profile(),
+      'server: GreaterMUD (local)\nautomation:\n  spells:\n    drain: vampiric assault\n',
+      'utf8'
+    );
+    migrate();
+    expect(spellsOf()['drain']).toBe('vampiric assault');
+    expect(spellsOf()['drainBelow']).toBeUndefined();
+  });
+});
+
+/* Upstream 759fc4d: Join When Invited, written off into files that predate it. */
+describe('joining when invited is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const remotes = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'remotes'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-auto-join-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes the switch off after gangpath in a remotes block that predates it, once', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  remotes:\n    enabled: true\n    gangpath: false\n    gang: []\n',
+      'utf8'
+    );
+    migrate();
+    expect(remotes()['autoJoin']).toBe(false);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('autoJoin:')).toBeGreaterThan(text.indexOf('gangpath:'));
+    expect(text.indexOf('autoJoin:')).toBeLessThan(text.indexOf('gang:'));
+    expect(said.filter((line) => line.includes('Join When Invited'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated switch alone', () => {
+    fs.writeFileSync(home.options, 'automation:\n  remotes:\n    autoJoin: true\n', 'utf8');
+    migrate();
+    expect(remotes()['autoJoin']).toBe(true);
+  });
+});
+
+/* Upstream 3b60de1: the heal had no switch of its own, so each file keeps what it had. */
+describe('the heal choice is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const spells = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'spells'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-heal-choice-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('gives the heal its own switch, on where the spell choice was on, after healParty', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  spells:\n    autoChoose: true\n    healParty: true\n    minMana: 0.2\n',
+      'utf8'
+    );
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(true);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('autoChooseHeal:')).toBeGreaterThan(text.indexOf('healParty:'));
+    expect(text.indexOf('autoChooseHeal:')).toBeLessThan(text.indexOf('minMana:'));
+    expect(said.filter((line) => line.includes('Auto Choose Best Heal'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('writes the heal switch off where the spell choice was off, and leaves a stated one', () => {
+    fs.writeFileSync(home.options, 'automation:\n  spells:\n    autoChoose: false\n', 'utf8');
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(false);
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  spells:\n    autoChoose: false\n    autoChooseHeal: true\n',
+      'utf8'
+    );
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(true);
   });
 });

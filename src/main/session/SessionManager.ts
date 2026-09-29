@@ -1866,6 +1866,15 @@ export class SessionManager {
          * is unread, which never refuses.
          */
         canHide: () => holdsAbility(this.capabilities(), CLASS_STEALTH_ABILITY),
+        drains: (name) => {
+          const world = this.world;
+          const row = world?.spellNamed(name);
+          return (
+            row !== undefined &&
+            row !== null &&
+            spellServes(row.abilities, (id) => world?.spellById(id)?.abilities).drains
+          );
+        },
         ...(this.knownMob === undefined ? {} : { knownMob: this.knownMob })
       },
       automation.spells,
