@@ -291,6 +291,16 @@ export class Remotes {
   /** Whether the character is known to be seen, so a say costs no stealth. */
   private seen = false;
 
+  /**
+   * Who stood in this character's room as of the last tick, lower-cased. See
+   * `autoInvite`.
+   *
+   * A different "seen" from the field above: that one is this character's own
+   * stealth visibility to the realm, and this one is room presence, kept only
+   * to diff against — never read as a fact about anybody in particular.
+   */
+  private lastRoomOccupants: ReadonlySet<string> = new Set();
+
   constructor(
     private config: AutomationConfig,
     private readonly queue: CommandQueue,
@@ -558,6 +568,10 @@ export class Remotes {
     if (this.config.enabled && this.config.remotes.enabled) this.sweep(Date.now());
     this.askForHeal(state);
     this.askForListing(state);
+    // Independent of `remotes.enabled` on purpose: this never answers a
+    // request, so the switch that gates answering `@` commands does not gate
+    // it. See `autoInvite`.
+    this.autoInvite(state);
     if (!this.config.enabled || !this.config.remotes.enabled) return;
     const leader = state.party.following;
     if (leader === null) {
@@ -593,6 +607,58 @@ export class Remotes {
     const interval = (state.inCombat ? every : every * 2) * 1000;
     if (Date.now() - this.listedAt < interval) return;
     this.sendListing(t('automation.remotes.reasonParEvery', { seconds: every }));
+  }
+
+  /**
+   * Auto Invite when seen: a granted name is invited the moment they become
+   * present in this character's own room — whichever of the two walked in.
+   * See `CONTEXT.md` › Party › Auto Invite when seen.
+   *
+   * **Diffed against the last tick's occupants, not a parsed arrival line.**
+   * `player-arrives-room` only fires for somebody walking in on a stationary
+   * character; this character walking into a room where the grantee already
+   * stands replaces `room.occupants` wholesale instead, with no per-name event
+   * at all. Diffing catches both shapes the same way, and needs nothing new
+   * from the parser or `CharacterTracker`.
+   *
+   * **No separate "already sent" bookkeeping.** The diff itself is what makes
+   * this edge-triggered: a name already present on the last tick is not
+   * "arrived" again, so nothing re-fires while they simply stay in the room.
+   * The only question left to ask at the moment of arrival is whether they
+   * are already spoken for — joined, or already holding a pending invite from
+   * this character — which `joinedTheParty` and `party.members` already know.
+   */
+  private autoInvite(state: CharacterState): void {
+    // Keyed by the lower-cased name, like every grant, but carrying the
+    // room's own spelling through to the command — `invite` goes out as the
+    // realm printed it, not as the config file keys it.
+    const occupants = new Map(
+      state.room.occupants
+        .filter((occupant) => occupant.kind !== 'mob')
+        .map((occupant) => [occupant.name.toLowerCase(), occupant.name] as const)
+    );
+    const arrived = [...occupants].filter(([key]) => !this.lastRoomOccupants.has(key));
+    this.lastRoomOccupants = new Set(occupants.keys());
+
+    if (!this.config.enabled || state.phase !== 'in-game' || arrived.length === 0) return;
+    // A follower's own invite would read as belonging to the leader's party,
+    // not this character's — silent unless leading or partyless.
+    if (state.party.following !== null) return;
+
+    for (const [key, name] of arrived) {
+      if (!this.config.remotes.players[key]?.autoInviteWhenSeen) continue;
+      if (joinedTheParty(state, name)) continue;
+      const alreadyInvited = state.party.members.some(
+        (member) => member.name.toLowerCase() === key && member.invited
+      );
+      if (alreadyInvited) continue;
+      this.queue.enqueue({
+        command: `invite ${name}`,
+        priority: 'probe',
+        coalesceKey: `remote:auto-invite:${key}`,
+        reason: t('automation.remotes.reasonAutoInvite', { name })
+      });
+    }
   }
 
   /**

@@ -18,7 +18,7 @@ import {
   ACTIONABLE_REMOTES,
   grantFor,
   judgeRemote,
-  type RemoteGrant,
+  type PlayerGrant,
   type RemoteName
 } from '@shared/remotes';
 import { playerKey, type PlayerRecord } from '@shared/players';
@@ -53,8 +53,8 @@ export interface PlayerFlyoutProps {
    */
   remotes: RemotesConfig;
   /**
-   * Write this person's whole grant — what they may ask for and what they may
-   * never — or clear it.
+   * Write this person's whole grant — what they may ask for, what they may
+   * never, and whether Auto Invite when seen is on for them — or clear it.
    *
    * Reaches the character's own options file, which is why it is a callback
    * rather than local state: a permission somebody set by clicking and lost on
@@ -62,7 +62,7 @@ export interface PlayerFlyoutProps {
    * because *Allow all* is one press and twenty writes would be twenty rewrites
    * of the same file racing each other. See `App.tsx`.
    */
-  onGrant(name: string, grant: RemoteGrant): void;
+  onGrant(name: string, grant: PlayerGrant): void;
   /**
    * A worn item clicked, asking the realm what it is.
    *
@@ -723,13 +723,13 @@ function PlayerAccess({
    * chip. A permission must not.
    */
   inParty: boolean;
-  onGrant(name: string, grant: RemoteGrant): void;
+  onGrant(name: string, grant: PlayerGrant): void;
   returnFocus(): void;
 }) {
   const grant = grantFor(remotes, record.name);
   const allowed = effective(remotes, record.name, inGang, inParty);
 
-  const set = useCallback((next: RemoteGrant) => onGrant(record.name, next), [record, onGrant]);
+  const set = useCallback((next: PlayerGrant) => onGrant(record.name, next), [record, onGrant]);
 
   return (
     <div className="player-access">
@@ -873,6 +873,7 @@ function PlayerAccess({
           mode="player"
           onSet={(remote, stance) =>
             set({
+              ...grant,
               allow:
                 stance === 'allow'
                   ? [...grant.allow, remote]
@@ -886,16 +887,37 @@ function PlayerAccess({
           onSetAll={(stance) =>
             // Clear takes the denies with it: a "clear all" that left half the
             // state behind is a mode, and this grid has no room for one.
-            set(
-              stance === 'allow'
+            // Auto Invite when seen is untouched either way — it is a
+            // different trigger from anything on this grid, answering no
+            // request at all, so "clear every remote" does not imply "and
+            // stop inviting them on sight" too.
+            set({
+              ...grant,
+              ...(stance === 'allow'
                 ? { allow: [...ACTIONABLE_REMOTES], deny: [] }
-                : { allow: [], deny: [] }
-            )
+                : { allow: [], deny: [] })
+            })
           }
           returnFocus={returnFocus}
           subject={record.name}
         />
       </div>
+
+      {/*
+        Its own control, deliberately apart from the grid above: "Invite" on
+        that grid answers this person's own `@invite` request, and this fires
+        with nobody asking. Same verb, different trigger — see
+        `CONTEXT.md` › Party › Auto Invite when seen.
+      */}
+      <label className="player-auto-invite">
+        <input
+          checked={grant.autoInviteWhenSeen}
+          onChange={(event) => set({ ...grant, autoInviteWhenSeen: event.target.checked })}
+          type="checkbox"
+        />
+        <span>{t('cards.player.access.autoInviteLabel')}</span>
+      </label>
+      <p className="settings-note">{t('cards.player.access.autoInviteHint')}</p>
     </div>
   );
 }

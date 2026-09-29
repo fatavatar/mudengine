@@ -1663,3 +1663,179 @@ describe('party pacing', () => {
     expect(sent).toEqual(['party', 'party']);
   });
 });
+
+describe('Auto Invite when seen', () => {
+  const occupant = (name: string) => ({
+    name,
+    kind: 'player' as const,
+    disposition: null,
+    uncertain: false,
+    costly: 'never' as const,
+    charmed: false,
+    hidden: false,
+    free: false
+  });
+
+  const partyMember = (name: string, invited = false) => ({
+    name,
+    className: null,
+    health: 1,
+    mana: null,
+    rank: null,
+    activity: null,
+    invited,
+    vitals: null
+  });
+
+  /**
+   * Granted the new option only, for `name` — never the reactive `invite`
+   * remote too, so a case here can never be secretly about that one instead.
+   */
+  const grantedTo = (
+    name: string,
+    remotesOver: Partial<AutomationConfig['remotes']> = {}
+  ): AutomationConfig => ({
+    ...config,
+    remotes: {
+      ...config.remotes,
+      players: { [name.toLowerCase()]: { allow: [], deny: [], autoInviteWhenSeen: true } },
+      ...remotesOver
+    }
+  });
+
+  const emptyRoom = who({ room: { ...EMPTY_CHARACTER.room, occupants: [] } });
+
+  const withOccupants = (base: CharacterState, ...names: string[]): CharacterState => ({
+    ...base,
+    room: { ...base.room, occupants: names.map(occupant) }
+  });
+
+  it('invites a granted name the moment they are newly present, and only once while they stay', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('invites them just the same when this character is the one who walks in on them', () => {
+    // Occupants replace wholesale on this character's own arrival — no
+    // discrete "player-arrives-room" line for somebody already standing
+    // there — and the diff catches it all the same.
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onCharacter(withOccupants(emptyRoom, 'Rend'));
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('sends nothing for a name not granted Auto Invite when seen', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Rend'));
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('sends nothing for somebody already in the party', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    const joined = {
+      ...emptyRoom,
+      party: { ...emptyRoom.party, members: [partyMember('Soul')] }
+    };
+    character.onCharacter(joined);
+    character.onCharacter(withOccupants(joined, 'Soul'));
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('sends nothing while a pending invite from this character is still outstanding', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    const invited = {
+      ...emptyRoom,
+      party: { ...emptyRoom.party, members: [partyMember('Soul', true)] }
+    };
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(invited, 'Soul'));
+    character.onCharacter(withOccupants(invited, 'Soul'));
+    drain();
+    expect(sent).toEqual([]);
+
+    // Leaving and coming back is a fresh arrival, but the invite is still
+    // outstanding — not joined, not withdrawn — so it stays suppressed.
+    character.onCharacter(invited);
+    character.onCharacter(withOccupants(invited, 'Soul'));
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('fires again once a lapsed invite clears, on their next arrival', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    const invited = {
+      ...emptyRoom,
+      party: { ...emptyRoom.party, members: [partyMember('Soul', true)] }
+    };
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(invited, 'Soul'));
+    drain();
+    expect(sent).toEqual([]);
+
+    // The offer lapses (withdrawn, or simply timed out) and they leave; the
+    // next time they are seen, nothing is standing in the way any more.
+    const lapsed = { ...emptyRoom, party: { ...emptyRoom.party, members: [] } };
+    character.onCharacter(lapsed);
+    character.onCharacter(withOccupants(lapsed, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('says nothing while this character is following somebody else', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    const following = {
+      ...emptyRoom,
+      party: { ...emptyRoom.party, following: 'Fatty', members: [partyMember('Fatty')] }
+    };
+    character.onCharacter(following);
+    character.onCharacter(withOccupants(following, 'Soul'));
+    drain();
+    expect(sent).toEqual([]);
+  });
+
+  it('still invites while leading an existing party', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    const leading = { ...emptyRoom, party: { ...emptyRoom.party, members: [partyMember('Rend')] } };
+    character.onCharacter(leading);
+    character.onCharacter(withOccupants(leading, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('still invites while in no party at all', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('fires even with Enable Remote Control off, since it never answers a request', () => {
+    const character = new Remotes(grantedTo('Soul', { enabled: false }), queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('is independent of the reactive @invite grant — granted alone, it does nothing on sight', () => {
+    const reactiveOnly: AutomationConfig = {
+      ...config,
+      remotes: { ...config.remotes, players: { soul: { allow: ['invite'], deny: [] } } }
+    };
+    const character = new Remotes(reactiveOnly, queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual([]);
+  });
+});

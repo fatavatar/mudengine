@@ -1268,8 +1268,13 @@ describe('one player’s @ command permissions', () => {
     const automation = read(id)['automation'] as Record<string, unknown>;
     return automation['remotes'] as Record<string, unknown>;
   };
-  const grantsOf = (id: string): Record<string, { allow: string[]; deny: string[] }> =>
-    (remotesOf(id)['players'] ?? {}) as Record<string, { allow: string[]; deny: string[] }>;
+  const grantsOf = (
+    id: string
+  ): Record<string, { allow: string[]; deny: string[]; autoInviteWhenSeen: boolean }> =>
+    (remotesOf(id)['players'] ?? {}) as Record<
+      string,
+      { allow: string[]; deny: string[]; autoInviteWhenSeen: boolean }
+    >;
 
   beforeEach(() => {
     editor.saveProfile(
@@ -1280,7 +1285,9 @@ describe('one player’s @ command permissions', () => {
 
   it('writes what one player may ask for, under a lower-cased key', () => {
     expect(editor.setRemoteGrant('vaelor', 'Soul', { allow: ['health'], deny: [] }).ok).toBe(true);
-    expect(grantsOf('vaelor')).toEqual({ soul: { allow: ['health'], deny: [] } });
+    expect(grantsOf('vaelor')).toEqual({
+      soul: { allow: ['health'], deny: [], autoInviteWhenSeen: false }
+    });
   });
 
   /*
@@ -1298,7 +1305,11 @@ describe('one player’s @ command permissions', () => {
 
   it('writes a deny beside it', () => {
     editor.setRemoteGrant('vaelor', 'Rend', { allow: ['health'], deny: ['do'] });
-    expect(grantsOf('vaelor')['rend']).toEqual({ allow: ['health'], deny: ['do'] });
+    expect(grantsOf('vaelor')['rend']).toEqual({
+      allow: ['health'],
+      deny: ['do'],
+      autoInviteWhenSeen: false
+    });
   });
 
   /*
@@ -1308,7 +1319,11 @@ describe('one player’s @ command permissions', () => {
    */
   it('puts a remote on exactly one list', () => {
     editor.setRemoteGrant('vaelor', 'Soul', { allow: ['health', 'do'], deny: ['do'] });
-    expect(grantsOf('vaelor')['soul']).toEqual({ allow: ['health'], deny: ['do'] });
+    expect(grantsOf('vaelor')['soul']).toEqual({
+      allow: ['health'],
+      deny: ['do'],
+      autoInviteWhenSeen: false
+    });
   });
 
   it('states one remote once however many times the payload says it', () => {
@@ -1331,13 +1346,17 @@ describe('one player’s @ command permissions', () => {
     editor.setRemoteGrant('vaelor', 'Soul', { allow: ['health'], deny: [] });
     editor.setRemoteGrant('vaelor', 'Yang', { allow: ['where'], deny: [] });
     editor.setRemoteGrant('vaelor', 'Soul', { allow: [], deny: [] });
-    expect(grantsOf('vaelor')).toEqual({ yang: { allow: ['where'], deny: [] } });
+    expect(grantsOf('vaelor')).toEqual({
+      yang: { allow: ['where'], deny: [], autoInviteWhenSeen: false }
+    });
   });
 
   it('matches a name however it is capitalised', () => {
     editor.setRemoteGrant('vaelor', 'Soul', { allow: ['health'], deny: [] });
     editor.setRemoteGrant('vaelor', 'SOUL', { allow: ['where'], deny: [] });
-    expect(grantsOf('vaelor')).toEqual({ soul: { allow: ['where'], deny: [] } });
+    expect(grantsOf('vaelor')).toEqual({
+      soul: { allow: ['where'], deny: [], autoInviteWhenSeen: false }
+    });
   });
 
   it('is idempotent — clicking the same thing twice writes it once', () => {
@@ -1440,7 +1459,7 @@ describe('the gang list and the gangpath switch', () => {
     editor.setRemoteGrant('vaelor', 'Soul', { allow: ['do'], deny: [] });
     editor.setGangRemotes('vaelor', ['health']);
     const players = remotesOf('vaelor')['players'] as Record<string, unknown>;
-    expect(players['soul']).toEqual({ allow: ['do'], deny: [] });
+    expect(players['soul']).toEqual({ allow: ['do'], deny: [], autoInviteWhenSeen: false });
   });
 });
 

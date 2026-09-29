@@ -49,7 +49,7 @@ import {
   type AlertRule,
   type Severity
 } from './notifications';
-import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
+import { isRemoteName, type PlayerGrant, type RemoteName } from './remotes';
 import type { ConnectionTarget, StreamEncoding } from './types';
 import { mobKey } from './world';
 import { asMonsterRules, type MonsterRule } from './monsterRules';
@@ -1129,10 +1129,11 @@ export interface RemotesConfig {
    */
   party: RemoteName[];
   /**
-   * What each named player may and may not ask for, keyed by the **lower-cased**
-   * name, as `PlayerRegistry` keys it. Absent is an empty grant: nothing.
+   * What each named player may and may not ask for, plus Auto Invite when
+   * seen, keyed by the **lower-cased** name, as `PlayerRegistry` keys it.
+   * Absent is `NO_PLAYER_GRANT`: nothing granted, nothing automatic.
    */
-  players: Record<string, RemoteGrant>;
+  players: Record<string, PlayerGrant>;
 }
 
 /**
@@ -3957,18 +3958,21 @@ function remoteNames(value: unknown, fallback: RemoteName[]): RemoteName[] {
 
 function playerGrants(
   value: unknown,
-  fallback: Record<string, RemoteGrant>
-): Record<string, RemoteGrant> {
+  fallback: Record<string, PlayerGrant>
+): Record<string, PlayerGrant> {
   if (value === undefined) return fallback;
   if (!isRecord(value)) return {};
-  const out: Record<string, RemoteGrant> = {};
+  const out: Record<string, PlayerGrant> = {};
   for (const [name, grant] of Object.entries(value)) {
     const key = name.trim().toLowerCase();
     if (key.length === 0 || !isRecord(grant)) continue;
-    const held = out[key] ?? { allow: [], deny: [] };
+    const held = out[key] ?? { allow: [], deny: [], autoInviteWhenSeen: false };
     out[key] = {
       allow: [...new Set([...held.allow, ...remoteNames(grant['allow'], [])])],
-      deny: [...new Set([...held.deny, ...remoteNames(grant['deny'], [])])]
+      deny: [...new Set([...held.deny, ...remoteNames(grant['deny'], [])])],
+      // Union with any earlier entry for the same key, like the two lists
+      // above: `Soul:` and `soul:` both saying yes is one yes, not a fight.
+      autoInviteWhenSeen: held.autoInviteWhenSeen || bool(grant['autoInviteWhenSeen'], false)
     };
   }
   return out;
