@@ -5435,6 +5435,9 @@ automation:
     reasonReinvite: 'inviting {name} back: the realm drops the party through a text exit'
     partyHolding: Waiting here for {names} to come through behind you.
     partyLeftBehind: '{names} did not come through; walking on without them.'
+    partyGoingBack: '{names} did not come on with the party; going back for them.'
+    partyRejoining: Waiting here for {names} to join the party again.
+    reasonPartyListing: checking who came on with the party after the text exit
     # Todo 104: the sheet's own figure decides, from `SneakCommand.cs`'s roll.
     sneakNoSkill: 'Not sneaking before steps: this character has no Stealth (the sheet says 0), so the server refuses every attempt. Sneak Before Each Step is ignored for this session.'
     reasonStepping: walking to {stepName}

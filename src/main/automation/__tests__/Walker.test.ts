@@ -5815,7 +5815,10 @@ describe('a text-exit party relay', () => {
     }));
 
   /** A walker whose `stateNow` is whatever was last pushed, as a hold's re-ask reads it. */
-  function trackedWalker(over: Partial<AutomationConfig> = {}): {
+  function trackedWalker(
+    over: Partial<AutomationConfig> = {},
+    events: Partial<WalkerEvents> = {}
+  ): {
     walker: Walker;
     begin: (route: Route, state: CharacterState) => string | null;
     push: (state: CharacterState) => void;
@@ -5831,7 +5834,8 @@ describe('a text-exit party relay', () => {
     const w = new Walker(wideConfig, wideQueue, {
       notice: (m) => notices.push(m),
       // Never called before `current` is set: every scenario `begin`s first.
-      stateNow: () => current!
+      stateNow: () => current!,
+      ...events
     });
     return {
       walker: w,
@@ -6031,5 +6035,108 @@ describe('a text-exit party relay', () => {
     sent.length = 0;
     push(leading(1, 3, []));
     expect(sent).toEqual(['invite Pip']);
+  });
+  /*
+   * The first step after the crossing is where a rejoin shows: the realm
+   * carries joined members through a direction, so a `par` in the room it
+   * leads to says who did not rejoin (the player, 2026-09-29).
+   */
+  describe('after the first step on', () => {
+    const step = (from: string, to: string, command: string, name: string): RouteStep => ({
+      from,
+      to,
+      direction: command as Direction,
+      command,
+      name,
+      requirement: null,
+      dark: false
+    });
+    const ON: Route = {
+      cost: 3,
+      blocked: false,
+      steps: [
+        PORTAL.steps[0]!,
+        step('1/2', '1/3', 'e', 'Third Room'),
+        step('1/3', '1/4', 'e', 'End')
+      ]
+    };
+    const roster = () => block('party-roster');
+
+    it('asks the listing before stepping on, and walks on when everybody came', async () => {
+      const { begin, push, walker: w } = trackedWalker();
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      sent.length = 0;
+      push(leading(1, 3, ['Pip'], {}, occupants('Pip')));
+      expect(sent).toEqual(['party']);
+      expect(w.progress.hold).toBe('party');
+      w.onBlock(roster());
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(sent).toEqual(['party', 'e']);
+      expect(w.progress.hold).toBeNull();
+    });
+
+    it('goes back for a member who did not rejoin, invites them, and waits for the join', async () => {
+      const replanned: string[] = [];
+      const {
+        begin,
+        push,
+        walker: w
+      } = trackedWalker(
+        {},
+        {
+          replan: (to) => {
+            replanned.push(to);
+            return to === '1/2'
+              ? { cost: 1, blocked: false, steps: [step('1/3', '1/2', 'w', 'Sewer')] }
+              : { cost: 2, blocked: false, steps: ON.steps.slice(1) };
+          }
+        }
+      );
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 3, []));
+      w.onBlock(roster());
+      sent.length = 0;
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(replanned).toEqual(['1/2']);
+      expect(sent).toEqual(['w']);
+      expect(notices.at(-1)).toContain('going back');
+
+      // Back where Pip was left: invited again, and held until Pip has joined.
+      push(leading(1, 2, [], {}, occupants('Pip')));
+      expect(replanned).toEqual(['1/2', '1/4']);
+      expect(sent).toEqual(['w', 'invite Pip']);
+      expect(w.progress.hold).toBe('party');
+
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(sent).toEqual(['w', 'invite Pip', 'e']);
+      expect(w.progress.hold).toBeNull();
+    });
+
+    it('walks on without them when there is no way back', async () => {
+      const { begin, push, walker: w } = trackedWalker({}, { replan: () => 'no way' });
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 3, []));
+      w.onBlock(roster());
+      sent.length = 0;
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(sent).toEqual(['e']);
+      expect(notices.at(-1)).toContain('walking on without them');
+    });
+
+    it('does not wait for a listing that never comes past partyCatchUpMs', async () => {
+      const { begin, push, walker: w } = trackedWalker();
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 3, ['Pip'], {}, occupants('Pip')));
+      await vi.advanceTimersByTimeAsync(
+        DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs + DEFAULT_INTERNAL.tuning.walk.holdMs
+      );
+      expect(w.progress.hold).toBeNull();
+      expect(sent).toContain('e');
+    });
   });
 });
