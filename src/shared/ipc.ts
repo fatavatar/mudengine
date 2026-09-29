@@ -649,6 +649,13 @@ export const Invoke = {
   /** Stop moving, whichever of the two is running. The place is kept. */
   stopMoving: 'move:stop',
   /**
+   * End an in-progress catch-up wait early, resuming movement at once.
+   *
+   * The leader's own override for the party relay's catch-up wait — see ADR
+   * 0002. A no-op when nothing is waiting.
+   */
+  endCatchUpWait: 'move:catchup-end',
+  /**
    * One room back the way the character came, per press.
    *
    * A route to the previous room on the trail, never the opposite of the last
@@ -1177,6 +1184,8 @@ export interface IpcApi {
   ): Promise<string | null>;
   /** Stop moving, whichever of the two is running. Keeps its place. */
   stopMoving(session: SessionId): Promise<void>;
+  /** End an in-progress catch-up wait early, resuming movement at once. */
+  endCatchUpWait(session: SessionId): Promise<void>;
   /**
    * Walk one room back the way the character came.
    *

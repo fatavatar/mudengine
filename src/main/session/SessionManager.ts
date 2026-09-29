@@ -8942,6 +8942,18 @@ export class SessionManager {
   }
 
   /**
+   * End an in-progress catch-up wait early, resuming movement at once.
+   *
+   * The leader's own override for the party relay's catch-up wait — the
+   * third way out CONTEXT.md's glossary names, beside everybody arriving and
+   * `catchUpWaitSeconds` running out. See `Walker.endCatchupWait` and ADR
+   * 0002. A no-op when nothing is waiting.
+   */
+  endCatchUpWait(): void {
+    this.walker.endCatchupWait();
+  }
+
+  /**
    * Start moving: begin the named loop, or pick back up whatever was stopped.
    *
    * `loopName` is what the card's picker says, and it is only ever a *start*:

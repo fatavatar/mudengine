@@ -602,6 +602,8 @@ interface CharacterForm {
   /** `party.waitForMembersBelow`, as a percentage string. */
   partyWaitBelow: string;
   partyWaitMinutes: string;
+  /** `party.catchUpWaitSeconds`, as a seconds string. */
+  partyCatchUpWaitSeconds: string;
   partyIgnoreWait: boolean;
   partyIgnoreParty: boolean;
   partyRequestHealth: boolean;
@@ -820,6 +822,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     partyAskHeal: percent(entry.party.askForHealBelow),
     partyWaitBelow: percent(entry.party.waitForMembersBelow),
     partyWaitMinutes: String(entry.party.waitNoLongerMinutes),
+    partyCatchUpWaitSeconds: String(entry.party.catchUpWaitSeconds),
     partyIgnoreWait: entry.party.ignoreWaitWhenLeading,
     partyIgnoreParty: entry.party.ignorePartyWhenFollowing,
     partyRequestHealth: entry.party.requestPartyHealth,
@@ -1040,6 +1043,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
       askForHealBelow: fractionOf(form.partyAskHeal),
       waitForMembersBelow: fractionOf(form.partyWaitBelow),
       waitNoLongerMinutes: Number.parseInt(form.partyWaitMinutes, 10) || 0,
+      catchUpWaitSeconds: Number.parseInt(form.partyCatchUpWaitSeconds, 10) || 0,
       ignoreWaitWhenLeading: form.partyIgnoreWait,
       ignorePartyWhenFollowing: form.partyIgnoreParty,
       requestPartyHealth: form.partyRequestHealth,
@@ -1386,6 +1390,7 @@ function emptyForm(
     partyAskHeal: percent(party.askForHealBelow),
     partyWaitBelow: percent(party.waitForMembersBelow),
     partyWaitMinutes: String(party.waitNoLongerMinutes),
+    partyCatchUpWaitSeconds: String(party.catchUpWaitSeconds),
     partyIgnoreWait: party.ignoreWaitWhenLeading,
     partyIgnoreParty: party.ignorePartyWhenFollowing,
     partyRequestHealth: party.requestPartyHealth,
@@ -3691,6 +3696,13 @@ export default function SettingsScreen({
                             name="party-wait-minutes"
                             onChange={(value) => patch({ partyWaitMinutes: value })}
                             value={form.partyWaitMinutes}
+                          />
+                          <NumberField
+                            hint={t('settings.party.catchUpWaitHint')}
+                            label={t('settings.party.catchUpWaitLabel')}
+                            name="party-catch-up-wait-seconds"
+                            onChange={(value) => patch({ partyCatchUpWaitSeconds: value })}
+                            value={form.partyCatchUpWaitSeconds}
                           />
                           <NumberField
                             hint={t('settings.party.parEveryHint')}
