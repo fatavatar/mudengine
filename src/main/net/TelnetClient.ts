@@ -72,6 +72,8 @@ export class TelnetClient extends EventEmitter {
   private nawsTimer: NodeJS.Timeout | null = null;
   /** Set on an explicit `disconnect()` so `close` can report a graceful exit. */
   private closingIntentionally = false;
+  /** Identifies the current socket so late events from a replaced socket are ignored. */
+  private connectionGeneration = 0;
 
   /**
    * How long to wait for the socket to open. See `tuning.net.connectTimeoutMs`.
@@ -113,6 +115,7 @@ export class TelnetClient extends EventEmitter {
    */
   connect(target: ConnectionTarget): Promise<void> {
     this.disconnect();
+    const generation = ++this.connectionGeneration;
 
     this.encoding = target.encoding;
     this.escapeCarry = '';
@@ -152,6 +155,7 @@ export class TelnetClient extends EventEmitter {
        * moment the socket connects or fails.
        */
       let dialTimer: NodeJS.Timeout | null = setTimeout(() => {
+        if (generation !== this.connectionGeneration) return;
         dialTimer = null;
         socket.removeListener('connect', onConnect);
         socket.removeListener('error', onConnectError);
@@ -171,6 +175,7 @@ export class TelnetClient extends EventEmitter {
       };
 
       const onConnectError = (error: Error): void => {
+        if (generation !== this.connectionGeneration) return;
         clearDial();
         socket.removeListener('connect', onConnect);
         this.teardown();
@@ -178,6 +183,7 @@ export class TelnetClient extends EventEmitter {
       };
 
       const onConnect = (): void => {
+        if (generation !== this.connectionGeneration) return;
         clearDial();
         socket.removeListener('error', onConnectError);
         /*
@@ -202,8 +208,15 @@ export class TelnetClient extends EventEmitter {
       socket.once('error', onConnectError);
       socket.once('connect', onConnect);
 
-      socket.on('data', (chunk) => this.ingest(chunk));
+      socket.on('data', (chunk) => {
+        if (generation === this.connectionGeneration) this.ingest(chunk);
+      });
       socket.on('close', () => {
+        if (generation !== this.connectionGeneration) {
+          socket.removeAllListeners();
+          socket.destroy();
+          return;
+        }
         const graceful = this.closingIntentionally;
         this.teardown();
         this.emit('close', graceful);
@@ -213,6 +226,7 @@ export class TelnetClient extends EventEmitter {
 
   disconnect(): void {
     if (!this.socket) return;
+    this.connectionGeneration++;
     this.closingIntentionally = true;
     this.socket.end();
     // `end()` waits for the FIN handshake; destroy on the next tick guarantees
