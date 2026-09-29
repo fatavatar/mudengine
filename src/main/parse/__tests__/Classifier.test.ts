@@ -1938,6 +1938,10 @@ describe('the cheap eight', () => {
     });
     expectType('Your tracking skills fail you this time.', 'user-tracks-failed');
     expectType('You are now resting.', 'user-rests');
+    // A meditation that ended by itself, with no state (skinny, 2026-09-23).
+    expect(
+      expectType('You awake from deep meditation feeling stronger!', 'user-rests')['state']
+    ).toBeUndefined();
     // MajorMUD's `confusion` and `song of dazzling` land with this (captures/001, 037, 092).
     expectType('You are confused!', 'user-confused');
   });

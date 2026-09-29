@@ -5725,3 +5725,47 @@ describe('a step that hands the character to a draw', () => {
     walk.dispose();
   });
 });
+
+/*
+ * MegaMUD sends its post-rest command before the move that ends the rest,
+ * and the move waits for it (`megamud.exe` `0x413c50`, 2026-09-29).
+ */
+describe('the kit before the step', () => {
+  it('waits for a swap on its way, then steps', async () => {
+    let ready = false;
+    const walk = new Walker(config, queue, {
+      notice: (m) => notices.push(m),
+      kitReady: () => ready,
+      stateNow: () => at(1, 1)
+    });
+    expect(walk.start(ROUTE, at(1, 1))).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(moves(sent)).toEqual([]);
+    ready = true;
+    await vi.advanceTimersByTimeAsync(TUNING.walk.holdMs);
+    expect(moves(sent)).toEqual(['e']);
+    walk.dispose();
+  });
+
+  /* Asking stands the sitting kit down, so a walk resting for health must not ask. */
+  it('does not ask while it stands still for health', async () => {
+    let asked = 0;
+    const hurt = at(1, 1, {
+      vitals: { ...structuredClone(EMPTY_CHARACTER.vitals), hp: 10, hpMax: 100 }
+    });
+    const walk = new Walker(config, queue, {
+      notice: (m) => notices.push(m),
+      kitReady: () => {
+        asked += 1;
+        return true;
+      },
+      stateNow: () => hurt
+    });
+    expect(walk.start(ROUTE, hurt)).toBeNull();
+    await vi.advanceTimersByTimeAsync(TUNING.walk.holdMs * 2);
+    expect(walk.progress.hold).toBe('health');
+    expect(asked).toBe(0);
+    expect(moves(sent)).toEqual([]);
+    walk.dispose();
+  });
+});

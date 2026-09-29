@@ -99,7 +99,7 @@ const make = (config = gear(), over: Partial<EquipmentSources> = {}): EquipmentM
 
 describe('which kit to be in', () => {
   it('puts the base kit on with nothing else happening', () => {
-    make().onCharacter(standing([carried('plate boots'), carried('lifestealer')]), false);
+    make().onCharacter(standing([carried('plate boots'), carried('lifestealer')]), false, null);
     expect(sent).toEqual(['wear lifestealer', 'wear plate boots']);
   });
 
@@ -109,7 +109,7 @@ describe('which kit to be in', () => {
       worn('lifestealer', WEAPON_HAND),
       carried('brown leather boots')
     ];
-    make().onCharacter(standing(pack), true);
+    make().onCharacter(standing(pack), true, null);
     expect(sent).toEqual(['wear brown leather boots']);
   });
 
@@ -124,7 +124,7 @@ describe('which kit to be in', () => {
       worn('plate boots', 'Feet'),
       carried('nexus spear')
     ];
-    make().onCharacter(fighting('nasty sandworm', pack), false);
+    make().onCharacter(fighting('nasty sandworm', pack), false, null);
     expect(sent).toEqual(['remove golden chalice', 'wear nexus spear']);
   });
 
@@ -134,15 +134,19 @@ describe('which kit to be in', () => {
       worn('plate boots', 'Feet'),
       carried('nexus spear')
     ];
-    make().onCharacter(fighting('big sandworm', pack), false);
+    make().onCharacter(fighting('big sandworm', pack), false, null);
     expect(sent).toEqual([]);
   });
 
   it('sends nothing with the switch off, or off an unread pack', () => {
     const pack = [carried('plate boots'), carried('lifestealer')];
-    make(gear({ enabled: false })).onCharacter(standing(pack), false);
+    make(gear({ enabled: false })).onCharacter(standing(pack), false, null);
     const unread = standing(pack);
-    make().onCharacter({ ...unread, inventory: { ...unread.inventory, listedAt: null } }, false);
+    make().onCharacter(
+      { ...unread, inventory: { ...unread.inventory, listedAt: null } },
+      false,
+      null
+    );
     expect(sent).toEqual([]);
   });
 
@@ -150,8 +154,8 @@ describe('which kit to be in', () => {
   it('does not repeat a command on every status line', () => {
     const manager = make();
     const state = standing([carried('plate boots'), carried('lifestealer')]);
-    manager.onCharacter(state, false);
-    manager.onCharacter(state, false);
+    manager.onCharacter(state, false, null);
+    manager.onCharacter(state, false, null);
     expect(sent).toEqual(['wear lifestealer', 'wear plate boots']);
   });
 
@@ -167,7 +171,7 @@ describe('which kit to be in', () => {
       worn('lifestealer', WEAPON_HAND),
       carried('brown leather boots')
     ];
-    manager.onCharacter(standing(pack), true);
+    manager.onCharacter(standing(pack), true, null);
     expect(sent).toEqual(['wear brown leather boots']);
     // Now walking with the leather boots on, and the base wants the plate back.
     const after = [
@@ -175,15 +179,89 @@ describe('which kit to be in', () => {
       worn('lifestealer', WEAPON_HAND),
       carried('plate boots')
     ];
-    manager.onCharacter(standing(after), false);
+    manager.onCharacter(standing(after), false, null);
     expect(sent).toEqual(['wear brown leather boots', 'wear plate boots']);
+  });
+
+  /*
+   * Fatty's Pre/Post Rest commands, `eq healing stone` and `eq ruby-eyed
+   * amulet` (fatty.ini): the stone and the amulet share the neck, so the base
+   * set naming the amulet is what brings it back.
+   */
+  it('wears the resting set while sitting and the base again for the step', () => {
+    const config = gear({
+      sets: [
+        { name: 'Default', when: 'always', mob: '', wear: ['golden ruby-eyed amulet'] },
+        { name: 'Resting', when: 'resting', mob: '', wear: ['healing stone'] }
+      ]
+    });
+    const manager = make(config, { slotOf: () => 'Neck' });
+    const beforeRest = [worn('golden ruby-eyed amulet', 'Neck'), carried('healing stone')];
+    manager.onCharacter(standing(beforeRest), false, 'resting');
+    expect(sent).toEqual(['wear healing stone']);
+    const afterRest = [worn('healing stone', 'Neck'), carried('golden ruby-eyed amulet')];
+    manager.onCharacter(standing(afterRest), true, null);
+    expect(sent).toEqual(['wear healing stone', 'wear golden ruby-eyed amulet']);
+  });
+
+  /*
+   * Skinny, 2026-09-29: the rest set's ring and the base's shared a hand with a
+   * ring no set names, each `wear` took the other set's ring off, and the kit
+   * asked again every thirty seconds with `Changing into Rest Set.` on every
+   * status line between.
+   */
+  it('swaps one ring for another on a full hand, and says so once', () => {
+    const config = gear({
+      sets: [
+        { name: 'Normal Set', when: 'always', mob: '', wear: ['ring of faith'] },
+        { name: 'Rest Set', when: 'resting', mob: '', wear: ['etched platinum ring'] }
+      ]
+    });
+    const manager = make(config, { slotOf: () => 'Finger' });
+    const walking = [
+      worn('ring of faith', 'Finger'),
+      worn('platinum moonstone ring', 'Finger'),
+      carried('etched platinum ring')
+    ];
+    manager.onCharacter(standing(walking), false, 'resting');
+    manager.onCharacter(standing(walking), false, 'resting');
+    expect(sent).toEqual(['remove ring of faith', 'wear etched platinum ring']);
+    expect(notices.filter((line) => line.includes('Rest Set'))).toHaveLength(1);
+
+    const sitting = [
+      worn('etched platinum ring', 'Finger'),
+      worn('platinum moonstone ring', 'Finger'),
+      carried('ring of faith')
+    ];
+    manager.onCharacter(standing(sitting), true, null);
+    expect(sent.slice(2)).toEqual(['remove etched platinum ring', 'wear ring of faith']);
+  });
+
+  /* What the walker's next step waits on — see `WalkerEvents.kitReady`. */
+  it('is dressing from the swap until the kit is on, or the swap expires', () => {
+    const manager = make();
+    const bare = [carried('plate boots'), carried('lifestealer')];
+    manager.onCharacter(standing(bare), false, null);
+    expect(manager.dressing).toBe(true);
+    manager.onCharacter(
+      standing([worn('plate boots', 'Feet'), worn('lifestealer', WEAPON_HAND)]),
+      false,
+      null
+    );
+    expect(manager.dressing).toBe(false);
+
+    const swallowed = make();
+    swallowed.onCharacter(standing(bare), false, null);
+    clock += 60_000;
+    expect(swallowed.dressing).toBe(false);
+    expect(make(gear({ enabled: false })).dressing).toBe(false);
   });
 
   it('says what a set names and the pack does not hold, once', () => {
     const manager = make();
     const state = standing([carried('lifestealer')]);
-    manager.onCharacter(state, false);
-    manager.onCharacter(state, false);
+    manager.onCharacter(state, false, null);
+    manager.onCharacter(state, false, null);
     expect(notices.filter((line) => line.includes('plate boots'))).toHaveLength(1);
   });
 });
