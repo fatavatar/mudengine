@@ -51,6 +51,9 @@ app:
     invalidName: Invalid path/loop name.
     invalidLoop: Invalid loop definition.
     invalidPicks: The loop builder sent something that is not a list of at most {max} rooms.
+    noLoopsSent: Nothing sent was a MegaMUD loop, so this realm's loops were left as they were.
+    noneFit: None of the {count} loops fit this realm's map, so nothing was added. Choose the
+      MegaMUD folder recorded on this realm.
     notFound: No loop named {name} in this character's options.
     unknownScope: Invalid loop scope.
   onboarding:
@@ -3546,6 +3549,20 @@ settings:
     searchPlaceholderLoading: Search the shipped loops
   loopSection:
     addLoop: Add a loop
+    importDropped: 'Left out: {start} whose first room this realm''s map does not have, {steps} whose
+      steps do not fit it, {short} too short to walk.'
+    importLabel: Import MegaMUD loops…
+    importNoRooms: The folder has no Rooms.md, so each first room was found by its name alone.
+    importNone: That folder has no MegaMUD loops. MegaMUD keeps them as .mp files in its data
+      folder, beside Rooms.md.
+    importNote: Choose a MegaMUD data folder, the one holding Rooms.md and the .mp paths. Every loop
+      in it that fits this realm's map is added here, for every character on this realm; a loop
+      already here under the same name is replaced.
+    importReading: Reading the folder…
+    importUnreadable: The folder could not be read.
+    imported:
+      many: 'Added {count} loops ({replaced} replaced one of the same name).'
+      one: 'Added 1 loop ({replaced} replaced one of the same name).'
     empty: None. A loop is a list of rooms walked in sequence; add one below, and start it from the palette.
     heading: Loops
     inheritedNote: 'It also walks {count} it does not own, edited where {itLivesOrTheyLive}:'
@@ -4375,6 +4392,8 @@ errors:
     duplicateRealmName: There is already a realm called {name}.
     globalAddressMismatch: the address did not survive being saved
     loopScopeUnknown: Nowhere to put that loop — the character or realm it named is not there.
+    tooManyLoops: That would give this realm more than {max} loops (it holds {held}), more than its
+      page can keep. Remove some first.
     remoteNameRequired: No name given.
     realmInUse: '{name} is still where {users} {playsOrPlay}. Move them first, or they would have
       nowhere to connect.'

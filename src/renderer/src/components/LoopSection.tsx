@@ -21,6 +21,8 @@ export interface LoopSectionProps {
   picking: boolean;
   onOpenPicker(): void;
   onDonePicking(): void;
+  /** Whatever else this scope offers after the shelf: a realm's MegaMUD import. */
+  children?: React.ReactNode;
 }
 
 /**
@@ -47,7 +49,8 @@ export default function LoopSection({
   catalogue,
   picking,
   onOpenPicker,
-  onDonePicking
+  onDonePicking,
+  children
 }: LoopSectionProps): React.JSX.Element {
   const chosen = new Set(loops.map((loop) => loop.name));
 
@@ -100,6 +103,8 @@ export default function LoopSection({
           <span>{t('settings.loopSection.addLoop')}</span>
         </button>
       )}
+
+      {children}
 
       {warning !== undefined && <p className="settings-warn">{warning}</p>}
 

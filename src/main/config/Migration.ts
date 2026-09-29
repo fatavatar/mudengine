@@ -58,6 +58,7 @@ import {
 } from '../../shared/notifications';
 import { DEFAULT_REWRITES, type RewriteDesign, type RewriteEntity } from '../../shared/rewrites';
 import { DEFAULT_INTERNAL } from '../../shared/internal';
+import { asShippedWorld } from '../../shared/worlds';
 import { DENOMINATIONS } from '../../shared/character';
 import { SERVER_FILE, type Home } from '../app/home';
 import { directoryNames } from './dirs';
@@ -5420,17 +5421,27 @@ function loopsTookTheirRecordedNames(
 ): void {
   if (shelf === undefined) return;
 
-  const files = [
+  const scopes = [
     home.globalLoops,
-    ...directories(home.serversDir).map((id) => home.server(id).loops),
+    /*
+     * Not a realm with its own database (2026-09-29). The shelf was recorded
+     * on Paradigm's bundled map, so nothing on such a realm is a copy of it --
+     * but its own MegaMUD folder, imported, walks many of the same rooms under
+     * the same areas (MudRev's `Royal Guards` is Paradigm's `Dark-elf Royal
+     * Guards`), and renaming those made the next import write each one back
+     * beside its renamed self.
+     */
+    ...directories(home.serversDir)
+      .filter((id) => !ownsItsMap(home.server(id).file))
+      .map((id) => home.server(id).loops),
     ...directories(home.profilesDir).map((id) => home.profile(id).loops)
-  ].flatMap((dir) =>
+  ].map((dir) =>
     listing(dir)
       .filter((name) => /\.ya?ml$/i.test(name))
       .map((name) => path.join(dir, name))
   );
   // Nothing copied, nothing to bring across — and the shelf stays unread.
-  if (files.length === 0) return;
+  if (scopes.every((files) => files.length === 0)) return;
 
   const byPlaces = new Map<string, Loop | null>();
   for (const loop of shelf()) {
@@ -5439,17 +5450,41 @@ function loopsTookTheirRecordedNames(
   }
 
   const renamed: string[] = [];
-  for (const file of files) {
-    edit(file, (document) => {
-      const loop = asLoops([document.toJS() as unknown])[0];
-      if (loop === undefined) return false;
-      const shelved = byPlaces.get(placesKey(loop));
-      if (!shelved || shelved.name === loop.name) return false;
-      if (loopCategory(loop.name) !== shelved.category) return false;
-      document.set('name', shelved.name);
-      renamed.push(`${loop.name} -> ${shelved.name}`);
-      return true;
-    });
+  for (const files of scopes) {
+    /*
+     * Never onto a name the scope already holds (2026-09-29). A realm's own
+     * MegaMUD folder, imported, can walk the very rooms a shelf loop walks
+     * under the same area and still be a loop of its own: MudRev's
+     * `Newhaven Arena - Arena Up Down` is Paradigm's `NewHaven Arena Loop`,
+     * and MudRev has a `NewHaven Arena Loop` too. Renamed, the scope held two
+     * loops of one name — one of them unreachable, since a name is the address
+     * — and the next import wrote the renamed one back as a third file.
+     */
+    const held = new Set(
+      files.flatMap((file) => {
+        try {
+          const loop = asLoops([parseDocument(fs.readFileSync(file, 'utf8')).toJS() as unknown])[0];
+          return loop === undefined ? [] : [loop.name.toLowerCase()];
+        } catch {
+          return [];
+        }
+      })
+    );
+    for (const file of files) {
+      edit(file, (document) => {
+        const loop = asLoops([document.toJS() as unknown])[0];
+        if (loop === undefined) return false;
+        const shelved = byPlaces.get(placesKey(loop));
+        if (!shelved || shelved.name === loop.name) return false;
+        if (loopCategory(loop.name) !== shelved.category) return false;
+        if (held.has(shelved.name.toLowerCase())) return false;
+        held.delete(loop.name.toLowerCase());
+        held.add(shelved.name.toLowerCase());
+        document.set('name', shelved.name);
+        renamed.push(`${loop.name} -> ${shelved.name}`);
+        return true;
+      });
+    }
   }
 
   if (renamed.length === 0) return;
@@ -5459,6 +5494,20 @@ function loopsTookTheirRecordedNames(
       ? t('notices.migration.loopsRenamed.one', params)
       : t('notices.migration.loopsRenamed.many', params)
   );
+}
+
+/** Whether a realm's file names a database of its own rather than a bundled world. */
+function ownsItsMap(file: string): boolean {
+  try {
+    const database = parseDocument(fs.readFileSync(file, 'utf8')).get('database');
+    return (
+      typeof database === 'string' &&
+      database.trim().length > 0 &&
+      asShippedWorld(database) === null
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

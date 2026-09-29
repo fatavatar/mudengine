@@ -30,7 +30,12 @@ import {
   type ProfileAccent
 } from '../../shared/profiles';
 import { isThemePreference, type ThemePreference } from '../../shared/themes';
-import type { GlobalDraft, ProfileDraft, ServerDraft } from '../../shared/drafts';
+import {
+  LOOP_LIMITS,
+  type GlobalDraft,
+  type ProfileDraft,
+  type ServerDraft
+} from '../../shared/drafts';
 import type { ProfileEditable, SettingsSnapshot, SpellOption } from '../../shared/ipc';
 import type { CureGates } from '../../shared/spellcraft';
 import type { ConnectionTarget } from '../../shared/types';
@@ -636,6 +641,27 @@ export class SettingsEditor {
    * it is, so this is the only thing that decides.
    */
   addLoop(scope: LoopScope, owner: string | null, loop: Loop): EditResult {
+    const added = this.addLoops(scope, owner, [loop]);
+    return added.ok ? { ok: true } : added;
+  }
+
+  /**
+   * `addLoop` for many at once: a MegaMUD folder imported onto a realm
+   * (2026-09-29). Each loop is filed by name as `addLoop` files one, so an
+   * import run twice rewrites its own files rather than doubling them, and a
+   * loop somebody drew by hand under another name is never touched. Says how
+   * many it replaced.
+   *
+   * Refused whole when the scope would then hold more than a settings page can
+   * carry (`LOOP_LIMITS.loops`): the page saves the list it holds, and
+   * `writeLoops` removes every file that list does not name — so loops past
+   * the ceiling would be written now and deleted by the next keystroke there.
+   */
+  addLoops(
+    scope: LoopScope,
+    owner: string | null,
+    loops: readonly Loop[]
+  ): { ok: true; replaced: number } | { ok: false; error: string } {
     const dir = this.loopsDirectory(scope, owner);
     if (dir === null) {
       return { ok: false, error: t('errors.settings.loopScopeUnknown') };
@@ -646,8 +672,18 @@ export class SettingsEditor {
      * comments somebody wrote in it survive being chosen again.
      */
     const existing = readLoopFiles(dir);
-    const found = existing.find((entry) => entry.name.toLowerCase() === loop.name.toLowerCase());
-    const slug = found?.slug ?? loopFileName(loop.name, new Set(existing.map((e) => e.slug)));
+    const held = new Set(existing.map((entry) => entry.name.toLowerCase()));
+    const replaced = loops.filter((loop) => held.has(loop.name.toLowerCase())).length;
+    if (existing.length + loops.length - replaced > LOOP_LIMITS.loops) {
+      return {
+        ok: false,
+        error: t('errors.settings.tooManyLoops', {
+          max: LOOP_LIMITS.loops,
+          held: existing.length
+        })
+      };
+    }
+    const taken = new Set(existing.map((entry) => entry.slug));
 
     try {
       fs.mkdirSync(dir, { recursive: true });
@@ -655,16 +691,14 @@ export class SettingsEditor {
       return { ok: false, error: errorMessage(error) };
     }
 
-    return editYaml(path.join(dir, `${slug}.yaml`), {
-      // Key by key, like every other edit to a file the user owns.
-      mutate: (document) => {
-        const node = loopNode(loop);
-        for (const [key, value] of Object.entries(node)) document.setIn([key], value);
-        if (node['bounce'] === undefined && document.hasIn(['bounce'])) {
-          document.deleteIn(['bounce']);
-        }
-      }
-    });
+    for (const loop of loops) {
+      const found = existing.find((entry) => entry.name.toLowerCase() === loop.name.toLowerCase());
+      const slug = found?.slug ?? loopFileName(loop.name, taken);
+      taken.add(slug);
+      const written = writeLoopFile(path.join(dir, `${slug}.yaml`), loop);
+      if (!written.ok) return written;
+    }
+    return { ok: true, replaced };
   }
 
   /**
@@ -1504,24 +1538,28 @@ export function writeLoops(dir: string, loops: readonly Loop[]): EditResult {
     const found = existing.find((entry) => entry.name.toLowerCase() === loop.name.toLowerCase());
     const slug = found?.slug ?? loopFileName(loop.name, taken);
     taken.add(slug);
-    const written = editYaml(path.join(dir, `${slug}.yaml`), {
-      /*
-       * Set key by key rather than replacing the document, so a comment
-       * somebody wrote above `stops:` survives an edit made on the screen —
-       * the same rule every other file the user owns is edited under.
-       */
-      mutate: (document) => {
-        const node = loopNode(loop);
-        for (const [key, value] of Object.entries(node)) document.setIn([key], value);
-        if (node['bounce'] === undefined && document.hasIn(['bounce'])) {
-          document.deleteIn(['bounce']);
-        }
-      }
-    });
+    const written = writeLoopFile(path.join(dir, `${slug}.yaml`), loop);
     if (!written.ok) return written;
   }
 
   return { ok: true };
+}
+
+/**
+ * One loop into its file, set key by key rather than replacing the document,
+ * so a comment somebody wrote above `stops:` survives an edit made on the
+ * screen — the same rule every other file the user owns is edited under.
+ */
+function writeLoopFile(file: string, loop: Loop): EditResult {
+  return editYaml(file, {
+    mutate: (document) => {
+      const node = loopNode(loop);
+      for (const [key, value] of Object.entries(node)) document.setIn([key], value);
+      if (node['bounce'] === undefined && document.hasIn(['bounce'])) {
+        document.deleteIn(['bounce']);
+      }
+    }
+  });
 }
 
 /** What is already in a loops directory: which file holds which loop. */

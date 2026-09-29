@@ -36,6 +36,7 @@ import { migrateHome } from './config/Migration';
 import { homeAt, homeRoot, type Home } from './app/home';
 import { WorldGraph, type Traveller } from './world/WorldGraph';
 import { RealmLibrary } from './world/RealmLibrary';
+import { loopsFromMegaMud } from './world/megamudLoops';
 import { REALM_EXTENSIONS } from './world/RealmSource';
 import { WorldMemory } from './world/WorldMemory';
 import { FindBook } from './world/FindBook';
@@ -125,6 +126,7 @@ import {
   type MonsterImport,
   type MonsterTable
 } from '../shared/monsterRules';
+import { asMegaMudPaths, type LoopImport } from '../shared/megamudPaths';
 import type { SessionSummary } from '../shared/ipc';
 import { EMPTY_CHARACTER } from '../shared/character';
 import { IDLE_WALK } from '../shared/walk';
@@ -2825,6 +2827,42 @@ function registerIpc(): void {
       monsters: asMonsterRules(rows)
     });
     return result.ok ? null : result.error;
+  });
+
+  /*
+   * A MegaMUD folder's loops onto a realm, converted against **that realm's**
+   * data: a loop is a walk through rooms, and the rooms are the realm's. The
+   * window read the folder; what crossed is parsed here like any payload.
+   */
+  handle(Invoke.importLoops, async (_caller, realm: unknown, rawPaths: unknown) => {
+    const stored =
+      typeof realm === 'string' ? servers?.all.find((entry) => entry.server.name === realm) : null;
+    if (!stored) return { ok: false, error: t('app.servers.noSuchServer') } satisfies LoopImport;
+    const paths = asMegaMudPaths(rawPaths);
+    // Refused rather than written as nothing, for `importMessages`' reason.
+    if (paths.length === 0) {
+      return { ok: false, error: t('app.loop.noLoopsSent') } satisfies LoopImport;
+    }
+    const learned = worldBook?.at(realmAddress(stored.server)) ?? null;
+    const graph = realms?.load(stored.server.database, learned).graph;
+    if (!graph) return { ok: false, error: t('session.loop.noRealmData') } satisfies LoopImport;
+    const { loops: converted, dropped } = await loopsFromMegaMud(graph, paths);
+    if (converted.length === 0) {
+      return {
+        ok: false,
+        error: t('app.loop.noneFit', { count: paths.length })
+      } satisfies LoopImport;
+    }
+    const result = editor().addLoops('server', stored.server.name, converted);
+    if (!result.ok) return { ok: false, error: result.error } satisfies LoopImport;
+    // Live now rather than on the store's next poll, for `addLoop`'s reason.
+    loops?.refresh();
+    return {
+      ok: true,
+      count: converted.length,
+      replaced: result.replaced,
+      dropped
+    } satisfies LoopImport;
   });
 
   handle(Invoke.saveProfile, (_caller, rawId: unknown, rawDraft: unknown) => {

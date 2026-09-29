@@ -16,6 +16,7 @@
  */
 import type { MessageImport, MessageTable, MessageTrigger } from './messageTriggers';
 import type { MonsterImport, MonsterRule, MonsterTable } from './monsterRules';
+import type { LoopImport, MegaMudPath } from './megamudPaths';
 import type { AutomationSnapshot } from './automation';
 import type { Block } from './blocks';
 import type { LocalMap } from './map';
@@ -889,6 +890,13 @@ export const Invoke = {
   importMonsters: 'settings:import-monsters',
   /** Writes one realm's whole monster table, after an edit on its page. */
   saveMonsters: 'settings:save-monsters',
+  /**
+   * Adds the loops in a MegaMUD folder to one realm's own
+   * (`servers/<id>/loops/`), converted against that realm's data. The window
+   * reads the folder and its loops cross as `MegaMudPath`s, not the files,
+   * for `importMonsters`' reason (`shared/megamudPaths.ts`).
+   */
+  importLoops: 'settings:import-loops',
   /** Where to hunt from here: the lairs within reach, priced for this character. */
   huntingGrounds: 'world:hunt',
   trainers: 'world:trainers',
@@ -1312,6 +1320,8 @@ export interface IpcApi {
   importMonsters(realm: string, fileName: string, monsters: MonsterRule[]): Promise<MonsterImport>;
   /** Resolves to why it refused, or null. */
   saveMonsters(realm: string, monsters: MonsterRule[]): Promise<string | null>;
+  /** Adds a MegaMUD folder's loops to a realm's, and says how many came across. */
+  importLoops(realm: string, paths: MegaMudPath[]): Promise<LoopImport>;
   /*
    * Addressed, like every push: with a realm per character, an unaddressed
    * query would answer from whichever realm happened to be the client's — and a
