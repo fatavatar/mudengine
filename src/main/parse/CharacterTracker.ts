@@ -102,6 +102,7 @@ import type { CurrencyEntity, ExitEntity, ItemEntity } from '../../shared/entiti
 import { addCoins } from '../../shared/coins';
 import { observe, playerEntity, playerKey } from '../../shared/players';
 import { noteRemoteCall, noteRemoteClient, trackPlayers } from './players';
+import { keepPartyCurrent } from './partyUpkeep';
 import { trackTally } from './tally';
 import { NO_TALLY, settleClocks, type CombatTally } from '../../shared/tally';
 import { readStatAll, statedBasis } from '../../shared/stated';
@@ -121,7 +122,6 @@ import {
   withoutPlayer,
   withPartyListing,
   withRemoteVitals,
-  withMemberMoving,
   withRank,
   withResting
 } from './presence';
@@ -2605,6 +2605,10 @@ export class CharacterTracker {
     if (next !== null && moved && Object.keys(next.combat.claimed).length > 0) {
       next = { ...next, combat: { ...next.combat, claimed: {} } };
     }
+    // And the party's: a member's fight ends with its monster, and a member
+    // seen acting has stood up (`keepPartyCurrent`).
+    const party = keepPartyCurrent(before, next ?? this.state, block, moved);
+    if (party !== (next ?? this.state)) next = party;
     /*
      * **A room the character could read is proof it can see** — the second
      * half of todo 02, asked for as *"if you get a room you know you can see,
@@ -5371,14 +5375,12 @@ export class CharacterTracker {
       case 'player-leaves-room': {
         const player = g['player'];
         if (!player) return null;
-        const moved = withMemberMoving(s, player);
-        const base = moved ?? s;
-        if (!base.room.occupants.some((who) => who.name === player)) return moved;
+        if (!s.room.occupants.some((who) => who.name === player)) return null;
         return {
-          ...base,
+          ...s,
           room: {
-            ...base.room,
-            occupants: base.room.occupants.filter((who) => who.name !== player)
+            ...s.room,
+            occupants: s.room.occupants.filter((who) => who.name !== player)
           }
         };
       }
