@@ -272,6 +272,7 @@ function migrateAll(options: MigrationOptions): void {
   statedTheFleeGoto(home, note, options.template);
   statedTheDrain(home, note, options.template);
   statedTheAutoJoin(home, note);
+  statedTheHealChoice(home, note, options.template);
 }
 
 /**
@@ -6358,6 +6359,47 @@ function statedTheConfusionWait(home: Home, note: (message: string) => void): vo
  * reading the block will find it. Idempotent; nothing stated is overwritten.
  */
 /**
+ * `automation.spells.autoChooseHeal` into every file that states `spells:`
+ * without it, after `healParty` and with the template's comment (upstream
+ * 3b60de1, ported 2026-09-29). The heal was chosen under `autoChoose` until it
+ * had its own switch, so each file's new key takes that file's `autoChoose`:
+ * a player who had the heals chosen still has them chosen.
+ */
+function statedTheHealChoice(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.autoChooseHeal');
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('autoChooseHeal')) return false;
+      const pair = document.createPair('autoChooseHeal', spells.get('autoChoose') === true) as Pair;
+      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'healParty'
+      );
+      if (after === -1) spells.items.push(pair);
+      else spells.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.healChoiceStated.one', params)
+      : t('notices.migration.healChoiceStated.many', params)
+  );
+}
+
+/**
  * `automation.remotes.autoJoin` into every file that states `remotes:` without
  * it, off, after `gangpath` (upstream 759fc4d, ported 2026-09-29). Its
  * explanation is in the template's block comment above `remotes:`, so the key
@@ -6763,6 +6805,8 @@ function theTuningBlockGainedKeys(
       addGroup(group, { ...DEFAULT_INTERNAL.tuning[group] });
     }
     addKey('spells', 'healRequestMs', DEFAULT_INTERNAL.tuning.spells.healRequestMs);
+    addKey('spells', 'healUrgency', DEFAULT_INTERNAL.tuning.spells.healUrgency);
+    addKey('spells', 'healNearEnough', DEFAULT_INTERNAL.tuning.spells.healNearEnough);
     addKey('remotes', 'healAskAgainMs', DEFAULT_INTERNAL.tuning.remotes.healAskAgainMs);
     addKey('hunting', 'measuredFightsMin', DEFAULT_INTERNAL.tuning.hunting.measuredFightsMin);
     addKey('view', 'questRunLingerMs', DEFAULT_INTERNAL.tuning.view.questRunLingerMs);

@@ -190,6 +190,11 @@ notices:
         and {count} file was moved over to it: {fileList}'
       many: 'Using the vortexes and entering the Negative Power Plane are now the Keep Out Of list,
         and {count} files were moved over to it: {fileList}'
+    healChoiceStated:
+      many: 'Auto Choose Best Heal was added to {count} files, turned on where Auto Choose Best Spell
+        is on: {fileList}'
+      one: 'Auto Choose Best Heal was added to {fileList}, turned on where Auto Choose Best Spell is
+        on.'
     autoJoinStated:
       many: 'Join When Invited was added, off, to {count} files: {fileList}'
       one: 'Join When Invited was added, off, to {fileList}'
@@ -4169,10 +4174,15 @@ settings:
     autoChoose: Auto Choose Best Spell
     autoChooseHint:
       Picks the round spell each round from your spellbook and the realm's figures — never one the
-      monster resists, the cheapest that would finish it, else the hardest hitter. Healing is
-      chosen the same way against the hit points actually missing, so a scratch is not mended with
-      a major heal, and the cures are picked where their boxes are blank. The spells below are cast
-      with this off, and with it on wherever the spellbook cannot answer.
+      monster resists, the cheapest that would finish it, else the hardest hitter. The cures are
+      picked where their boxes are blank. The spells below are cast with this off, and with it on
+      wherever the spellbook cannot answer.
+    autoChooseHeal: Auto Choose Best Heal
+    autoChooseHealHint:
+      Picks each heal from your spellbook and the realm's figures against the hit points actually
+      missing, so a scratch is not mended with a major heal, and casts a party heal like healing
+      rain when it does more than one heal on the worst hurt. The healing spells below are cast
+      with this off, or wherever it cannot choose.
     fallbackCastHint:
       Cast instead for the rest of the fight once the game says the combat spell has no effect on
       the target. Blank leaves the fight to the round attacks.
@@ -5020,6 +5030,7 @@ automation:
     reasonParty: 'heal: {memberName} is at {percent}%'
     reasonRequested: 'heal: {memberName} asked (@heal)'
     reasonSelf: 'heal: health is low'
+    reasonArea: 'heal: {count} in the party are hurt'
     requestHealOff: '{from} asked for a heal (@heal), and healing is off (Heal If Below is 0) — nothing is cast.'
     requestLapsed: '{from} asked for a heal (@heal) and none went out within {seconds}s.'
     requestLowMana: '{from} asked for a heal (@heal); it waits for mana over the floor.'
@@ -5030,6 +5041,11 @@ automation:
       cover the {deficit} hp missing.'
     choseMost: 'Healing with {spell} ({min}-{max}, about {expected} a cast, {cost} mana): the most
       one cast mends, and {deficit} hp are missing.'
+    choseArea:
+      many: 'Healing the party with {spell} ({min}-{max} each, {cost} mana): {count} are hurt,
+        and one heal on the worst does no better for the mana.'
+      one: 'Healing the party with {spell} ({min}-{max} each, {cost} mana): it does at least as
+        much as one heal for the mana.'
     noChoice: 'No heal in the spellbook fits, so {spell} is cast as configured.'
     noChoiceNoSpell: No heal in the spellbook fits, and none is configured, so nothing is cast.
     noFiguresSelf:

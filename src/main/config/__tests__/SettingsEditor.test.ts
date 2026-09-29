@@ -590,7 +590,16 @@ describe('what a character plays against, and what keeps it alive', () => {
   it('writes a character’s own answer to `@` commands', () => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, autoJoin: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
     expect(automation['remotes']).toEqual({
@@ -673,11 +682,29 @@ describe('what a character plays against, and what keeps it alive', () => {
   it('keeps the key when it is turned back off', () => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, autoJoin: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: false, gangpath: false, autoJoin: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: false,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
     expect(automation['remotes']).toEqual({
@@ -1277,7 +1304,16 @@ describe('one player’s @ command permissions', () => {
   beforeEach(() => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, autoJoin: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
   });
 
@@ -1407,7 +1443,16 @@ describe('the gang list and the gangpath switch', () => {
   beforeEach(() => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, autoJoin: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
   });
 

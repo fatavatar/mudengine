@@ -530,6 +530,7 @@ export class AutoCombat {
       healBelow: 0,
       healBelowInCombat: 0,
       healTo: 0,
+      autoChooseHeal: false,
       healParty: false,
       invokeItems: false,
       minMana: 0,

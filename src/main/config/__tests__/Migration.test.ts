@@ -6455,3 +6455,56 @@ describe('joining when invited is stated', () => {
     expect(remotes()['autoJoin']).toBe(true);
   });
 });
+
+/* Upstream 3b60de1: the heal had no switch of its own, so each file keeps what it had. */
+describe('the heal choice is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const spells = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'spells'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-heal-choice-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('gives the heal its own switch, on where the spell choice was on, after healParty', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  spells:\n    autoChoose: true\n    healParty: true\n    minMana: 0.2\n',
+      'utf8'
+    );
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(true);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('autoChooseHeal:')).toBeGreaterThan(text.indexOf('healParty:'));
+    expect(text.indexOf('autoChooseHeal:')).toBeLessThan(text.indexOf('minMana:'));
+    expect(said.filter((line) => line.includes('Auto Choose Best Heal'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('writes the heal switch off where the spell choice was off, and leaves a stated one', () => {
+    fs.writeFileSync(home.options, 'automation:\n  spells:\n    autoChoose: false\n', 'utf8');
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(false);
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  spells:\n    autoChoose: false\n    autoChooseHeal: true\n',
+      'utf8'
+    );
+    migrate();
+    expect(spells()['autoChooseHeal']).toBe(true);
+  });
+});

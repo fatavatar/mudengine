@@ -627,6 +627,8 @@ interface CharacterForm {
   spellAreaAttack: string;
   /** Derive the round spell and the cures from the book. */
   spellAutoChoose: boolean;
+  /** *Auto Choose Best Heal*: each heal picked from the book. See `SpellsConfig.autoChooseHeal`. */
+  spellAutoChooseHeal: boolean;
   spellAreaMinMobs: string;
   spellAreaMinMana: string;
   /** The fallback once the round spell has no effect, and the per-target cast caps (0 is no limit). */
@@ -837,6 +839,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     useWards: entry.health.useWards,
     spellAttack: entry.spells.attack,
     spellAutoChoose: entry.spells.autoChoose,
+    spellAutoChooseHeal: entry.spells.autoChooseHeal,
     spellAreaAttack: entry.spells.areaAttack,
     spellAreaMinMobs: String(entry.spells.areaMinMobs),
     spellAreaMinMana: percent(entry.spells.areaMinMana),
@@ -1054,6 +1057,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
     spells: {
       attack: form.spellAttack.trim(),
       autoChoose: form.spellAutoChoose,
+      autoChooseHeal: form.spellAutoChooseHeal,
       areaAttack: form.spellAreaAttack.trim(),
       areaMinMobs: Math.max(1, Number.parseInt(form.spellAreaMinMobs, 10) || 3),
       areaMinMana: fractionOf(form.spellAreaMinMana),
@@ -1398,6 +1402,7 @@ function emptyForm(
     useWards: health.useWards,
     spellAttack: spells.attack,
     spellAutoChoose: spells.autoChoose,
+    spellAutoChooseHeal: spells.autoChooseHeal,
     spellAreaAttack: spells.areaAttack,
     spellAreaMinMobs: String(spells.areaMinMobs),
     spellAreaMinMana: percent(spells.areaMinMana),
@@ -3493,6 +3498,13 @@ export default function SettingsScreen({
 
                       <fieldset className="settings-menus" data-fieldset="spells-heal">
                         <legend>{t('settings.spells.healLegend')}</legend>
+                        <CheckField
+                          checked={form.spellAutoChooseHeal}
+                          hint={t('settings.spells.autoChooseHealHint')}
+                          label={t('settings.spells.autoChooseHeal')}
+                          name="spell-auto-choose-heal"
+                          onChange={(value) => patch({ spellAutoChooseHeal: value })}
+                        />
                         <div className="settings-inline">
                           <SpellField
                             hint={t('settings.spells.healHint')}
