@@ -4350,15 +4350,34 @@ export class Walker {
   }
 
   /**
-   * Once a text-exit crossing lands: invite whoever `relayTextExit`'s
-   * snapshot named but the new room does not hold, say `@join` so their
-   * clients can accept it unattended, and hold movement — only movement — for
-   * whoever is still missing. Returns whether a wait was actually taken;
-   * `wasLeaving`/`step` are only kept for that case, to resume through
-   * `finishStep` once it lets go.
+   * Once a text-exit crossing lands: invite everyone `relayTextExit`'s
+   * snapshot named, say `@join` so their clients can accept it unattended,
+   * and hold movement — only movement — for whoever is not yet physically
+   * here. Returns whether a wait was actually taken; `wasLeaving`/`step` are
+   * only kept for that case, to resume through `finishStep` once it lets go.
    *
-   * One invite per missing member, once: no retry loop while the wait runs.
-   * See `mudengine-automation` › Reinvite sweep, and ADR 0002.
+   * **Every name in the snapshot, not a "missing" subset.** Measured live
+   * (2026-09-29), twice, across two sessions: MegaMUD's own party-follow
+   * flag does not survive a text-exit crossing even when the follower's own
+   * client replays it correctly and lands in the same room — `party` asked
+   * right after read `You are not in a party at the present time` with
+   * `Also here: Thom` still on screen from the room block two lines above.
+   * The realm's command table has no entry for a `Text:` exit (see
+   * `mudengine-automation`'s own glossary), so its native auto-follow — which
+   * works by re-issuing the leader's command for the follower — has nothing
+   * to re-issue and drops the relationship outright, regardless of whether
+   * this client's own relay-and-replay got the follower there anyway.
+   * Comparing to room presence for *whom to invite* was the wrong test: the
+   * party breaks whether or not the room holds them, so there is nobody to
+   * meaningfully exclude by presence alone, and only a genuinely voluntary
+   * departure — already filtered out of the snapshot by `relayTextExit`,
+   * before this ever runs — should be. Room presence stays the right test
+   * for the *wait* below, a different question: not "are they still
+   * following" but "have they physically caught up."
+   *
+   * One invite per name, once, whether or not it turns out to have been
+   * needed: no retry loop while the wait runs. See `mudengine-automation` ›
+   * Reinvite sweep, and ADR 0002's amendment on this.
    */
   private startCatchupWait(
     state: CharacterState,
@@ -4366,12 +4385,8 @@ export class Walker {
     wasLeaving: boolean,
     step: RouteStep
   ): boolean {
-    // Physical presence in the new room, not the roster — see the comment on
-    // `relayTextExit`'s own snapshot for why the roster cannot be trusted here.
-    const here = new Set(state.room.occupants.map((occupant) => occupant.name.toLowerCase()));
-    const missing = before.filter((name) => !here.has(name.toLowerCase()));
-    if (missing.length === 0) return false;
-    for (const name of missing) {
+    if (before.length === 0) return false;
+    for (const name of before) {
       this.queue.enqueue({
         command: `invite ${name}`,
         priority: 'movement',
@@ -4383,6 +4398,11 @@ export class Walker {
       priority: 'movement',
       reason: t('automation.walk.reasonJoinCall')
     });
+    // Only the wait cares whether anyone is actually missing from the room —
+    // the invites above already went out to everyone, unconditionally.
+    const here = new Set(state.room.occupants.map((occupant) => occupant.name.toLowerCase()));
+    const missing = before.filter((name) => !here.has(name.toLowerCase()));
+    if (missing.length === 0) return false;
     const seconds = this.config.party.catchUpWaitSeconds;
     // 0 means skip the wait entirely — the opposite of `waitNoLongerMinutes`'s
     // "0 means forever" — so the invites above still go out, but nothing holds.

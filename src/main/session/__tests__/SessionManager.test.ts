@@ -4627,6 +4627,31 @@ describe('a party relay crossing a text exit', () => {
     await until(() => manager!.walker.progress.hold === null);
   });
 
+  /*
+   * Measured live (2026-09-29), across two paired leader/follower sessions:
+   * MegaMUD drops the party's follow flag on a text-exit crossing even when
+   * the follower's own client replays it correctly and lands in the same
+   * room — `party` read "You are not in a party" with the follower's name
+   * still on the room's own listing. So the invite is unconditional on the
+   * snapshot; only the catch-up wait is conditional on presence.
+   */
+  it('re-invites even a member who did land in the new room, but holds nothing for them', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig());
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+
+    // Pip did make it — physically present in the new room regardless.
+    socket.write('Sewer\r\nAlso here: Pip.\r\nObvious exits: up\r\n');
+    await until(() => manager!.character.room.number === 4);
+
+    await until(() => lines().includes('invite Pip'));
+    expect(lines()).toContain('.@join');
+    expect(manager!.walker.progress.hold).toBeNull();
+  });
+
   it('resumes on its own once catchUpWaitSeconds elapses, with nobody chased further', async () => {
     const world = haven();
     const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 1 }));

@@ -5891,12 +5891,19 @@ describe('a text-exit party relay', () => {
     expect(sent).toEqual(['invite Pip', '.@join']);
   });
 
-  it('invites nobody and holds nothing when everybody crossed', () => {
+  /*
+   * MegaMUD drops the follow flag on a text-exit crossing whether or not the
+   * follower's own client lands in the new room — measured live (2026-09-29):
+   * `party` read "You are not in a party" with `Also here: Thom` still on
+   * screen. So the invite fires for everyone in the snapshot regardless of
+   * presence; only the *wait* is conditional on it.
+   */
+  it('invites everyone in the snapshot even when they already crossed, but holds nothing', () => {
     const { begin, push, walker: w } = trackedWalker();
     begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
-    expect(sent).toEqual([]);
+    expect(sent).toEqual(['invite Pip', '.@join']);
     expect(w.progress.hold).toBeNull();
   });
 
@@ -6006,9 +6013,10 @@ describe('a text-exit party relay', () => {
     const { begin, push, walker: w } = trackedWalker();
     begin(TWO_PORTALS, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
-    // First crossing: Pip is right there, so nothing is held.
+    // First crossing: Pip is right there, so nothing is held — but the
+    // invite still goes out, since presence never says the follow survived.
     push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
-    expect(sent).toEqual(['.@party go second portal', 'go second portal']);
+    expect(sent).toEqual(['invite Pip', '.@join', '.@party go second portal', 'go second portal']);
     expect(w.progress.hold).toBeNull();
     sent.length = 0;
 
