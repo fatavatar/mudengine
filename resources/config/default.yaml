@@ -1645,6 +1645,23 @@ automation:
       disease: ''
       freedom: ''
 
+    # MegaMUD's regen and when-full spells, timed as megamud.exe times them.
+    # `hp` is cast before a rest while health is short, with at least minMana
+    # left; the rest follows on the next line. `mana` is cast out of
+    # meditation whenever mana is 20 or more short of its maximum. Neither is
+    # cast again while a row of the realm's message table says it is still
+    # working, or, where the realm never says it ended, until health and mana
+    # have both been full. `manaMinTick` recasts `mana` while it is up when a
+    # tick brings less than this (or nothing for 34 seconds); 0 never does.
+    # `hpFull` and `manaFull` are cast once each time health reaches restTo and
+    # mana reaches meditateTo. Blank casts nothing.
+    regen:
+      hp: ''
+      mana: ''
+      manaMinTick: 0
+      hpFull: ''
+      manaFull: ''
+
     # Blessings kept up on this character and the party, in priority order --
     # the first entry is recast first when several are down. The spell names
     # the row: the whole name, resolved to the realm's short word when it is

@@ -30,6 +30,7 @@ import Advanced from './Advanced';
 import CarrySections from './CarrySections';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
+import RegenFields from './RegenFields';
 import SpellField, { castableOn, drainsIn, refusesTarget } from './SpellPicker';
 import { castsOnOthers, castsOnSelf } from '@shared/spellcraft';
 import FormActions from './FormActions';
@@ -65,7 +66,8 @@ import type {
   ProfileDraft,
   ServerDraft,
   BlessingDraft,
-  CuresDraft
+  CuresDraft,
+  RegenDraft
 } from '@shared/drafts';
 import type { Loop, ScopedLoop } from '@shared/loops';
 import type { ProfileEditable, SessionId, SettingsSnapshot } from '@shared/ipc';
@@ -498,6 +500,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'spells-round', label: t('settings.spells.legend') },
     { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
+    { id: 'spells-regen', label: t('settings.spells.regenLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
   ],
@@ -663,6 +666,8 @@ interface CharacterForm {
   spellMinMana: string;
   /** Cures by affliction, and the blessings kept up by events. */
   spellCures: CuresDraft;
+  /** MegaMUD's regen and when-full spells. */
+  spellRegen: RegenDraft;
   spellBlessings: BlessingDraft[];
   spellNotifyWearOff: boolean;
   spellAutoBless: boolean;
@@ -865,6 +870,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     spellHealParty: entry.spells.healParty,
     spellMinMana: percent(entry.spells.minMana),
     spellCures: { ...entry.spells.cures },
+    spellRegen: { ...entry.spells.regen },
     spellBlessings: entry.spells.blessings.map((blessing) => ({ ...blessing })),
     spellNotifyWearOff: entry.spells.notifyPartyOnWearOff,
     spellAutoBless: entry.spells.autoBless,
@@ -1088,6 +1094,13 @@ function draftOf(form: CharacterForm): ProfileDraft {
         poison: form.spellCures.poison.trim(),
         disease: form.spellCures.disease.trim(),
         freedom: form.spellCures.freedom.trim()
+      },
+      regen: {
+        ...form.spellRegen,
+        hp: form.spellRegen.hp.trim(),
+        mana: form.spellRegen.mana.trim(),
+        hpFull: form.spellRegen.hpFull.trim(),
+        manaFull: form.spellRegen.manaFull.trim()
       },
       blessings: form.spellBlessings.map((blessing) => ({
         ...blessing,
@@ -1430,6 +1443,7 @@ function emptyForm(
     spellHealParty: spells.healParty,
     spellMinMana: percent(spells.minMana),
     spellCures: { ...spells.cures },
+    spellRegen: { ...spells.regen },
     spellBlessings: spells.blessings.map((blessing) => ({ ...blessing })),
     spellNotifyWearOff: spells.notifyPartyOnWearOff,
     spellAutoBless: spells.autoBless,
@@ -3587,6 +3601,17 @@ export default function SettingsScreen({
                               ? t('settings.spells.healNoPartyCast')
                               : undefined
                           }
+                        />
+                      </fieldset>
+
+                      <fieldset className="settings-menus" data-fieldset="spells-regen">
+                        <legend>{t('settings.spells.regenLegend')}</legend>
+                        <p className="settings-note">{t('settings.spells.regenNote')}</p>
+                        <RegenFields
+                          namePrefix="character"
+                          onChange={(spellRegen) => patch({ spellRegen })}
+                          regen={form.spellRegen}
+                          spells={shownBook.selfHeals}
                         />
                       </fieldset>
 

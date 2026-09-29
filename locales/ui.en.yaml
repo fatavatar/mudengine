@@ -193,6 +193,11 @@ notices:
         and {count} file was moved over to it: {fileList}'
       many: 'Using the vortexes and entering the Negative Power Plane are now the Keep Out Of list,
         and {count} files were moved over to it: {fileList}'
+    regenSpellsStated:
+      many: 'Regeneration spells (MegaMUD''s HP and Mana Regen, and the when-full spells) were added,
+        blank, to {count} files: {fileList}'
+      one: 'Regeneration spells (MegaMUD''s HP and Mana Regen, and the when-full spells) were added,
+        blank, to {fileList}.'
     healChoiceStated:
       many: 'Auto Choose Best Heal was added to {count} files, turned on where Auto Choose Best Spell
         is on: {fileList}'
@@ -4240,6 +4245,24 @@ settings:
     healPartyWithLabel: Party Healing Spell
     healToHint: Keep healing that target until it is back to this. 0 casts once at the threshold.
     healToLabel: Heal Up To HP %
+    regenLegend: Regeneration
+    regenNote:
+      MegaMUD's regen and when-full spells, timed as it times them. Each is skipped while a message
+      from the realm's table says it is already working.
+    regenHpLabel: HP Regen
+    regenHpHint:
+      Cast before resting while health is short, above the heal's mana floor. The rest follows on
+      the next line.
+    regenManaLabel: Mana Regen
+    regenManaHint: Cast out of meditation whenever mana is 20 or more short of its maximum.
+    regenMinTickLabel: Min Mana Tick
+    regenMinTickHint:
+      While Mana Regen is up, a tick bringing less mana than this casts it again — so does no gain
+      in 34 seconds. 0 never recasts on the tick.
+    regenHpFullLabel: When HP Full
+    regenHpFullHint: Cast once each time health reaches Keep Resting To HP %.
+    regenManaFullLabel: When Mana Full
+    regenManaFullHint: Cast once each time mana reaches Keep Meditating To Mana %.
     legend: Attack Spell
     minManaHint: Falls through to the round attacks below this. 0 always casts.
     minManaLabel: Not Below Mana %
@@ -4933,6 +4956,11 @@ automation:
   cure:
     reason: 'cure: {affliction}'
     derived: 'Curing {affliction} with {spell}, the cheapest spell in the book that does.'
+  regen:
+    reasonHp: '{spell} before resting, to heal faster'
+    reasonMana: '{spell} to regain mana faster'
+    reasonHpFull: '{spell}: health is full'
+    reasonManaFull: '{spell}: mana is full'
   spells:
     choseKills: 'Casting {spell} ({min}–{max}, {cost} mana): its least roll finishes what is left of the target.'
     choseHardest: 'Casting {spell} ({min}–{max}, about {expected} a cast, {cost} mana): the hardest hitter the pool can pay for.'

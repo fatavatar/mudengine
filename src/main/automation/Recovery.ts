@@ -288,6 +288,11 @@ export class Recovery {
        * family is unknown: unknown is never the permissive answer.
        */
       poisonRefusesRest?(): boolean;
+      /**
+       * Anything to cast before this rest — MegaMUD's *HP Regen* (`Regen`).
+       * True means it went out, and the rest waits for the next line.
+       */
+      beforeRest?(state: CharacterState): boolean;
     } = {}
   ) {}
 
@@ -644,6 +649,13 @@ export class Recovery {
   }
 
   private propose(command: string, reason: string): void {
+    if (
+      command === 'rest' &&
+      this.state !== null &&
+      this.events.beforeRest?.(this.state) === true
+    ) {
+      return;
+    }
     this.queue.enqueue({
       command,
       priority: 'probe',

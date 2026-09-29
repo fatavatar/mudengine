@@ -535,6 +535,7 @@ export class AutoCombat {
       invokeItems: false,
       minMana: 0,
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
+      regen: { hp: '', mana: '', manaMinTick: 0, hpFull: '', manaFull: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoBless: true

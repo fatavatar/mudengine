@@ -3,6 +3,7 @@ import Advanced from './Advanced';
 import AlertList from './AlertList';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
+import RegenFields from './RegenFields';
 import { MonsterRuleList } from './MonsterRules';
 import GearSetList from './GearSetList';
 import PotionList from './PotionList';
@@ -175,6 +176,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   spells: [
     { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
+    { id: 'spells-regen', label: t('settings.spells.regenLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
   ],
@@ -1555,6 +1557,17 @@ export default function GlobalSettings({
                     ? t('settings.spells.healNoPartyCast')
                     : undefined
                 }
+              />
+            </fieldset>
+
+            <fieldset className="settings-menus" data-fieldset="spells-regen">
+              <legend>{t('settings.spells.regenLegend')}</legend>
+              <p className="settings-note">{t('settings.spells.regenNote')}</p>
+              <RegenFields
+                namePrefix="global"
+                onChange={(regen) => automation({ spells: { ...draft.automation.spells, regen } })}
+                regen={draft.automation.spells.regen}
+                spells={selfHeals}
               />
             </fieldset>
 

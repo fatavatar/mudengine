@@ -66,6 +66,7 @@ import { Blessings } from '../automation/Blessings';
 import { CombatLease } from '../automation/CombatLease';
 import type { AutomationSwitch } from '../../shared/config';
 import { Cures } from '../automation/Cures';
+import { Regen } from '../automation/Regen';
 import { Potions } from '../automation/Potions';
 import { LoopRunner } from '../automation/LoopRunner';
 import type { LoopProgress } from '../../shared/loops';
@@ -1056,6 +1057,8 @@ export class SessionManager {
   private readonly heal: AutoHeal;
   private readonly potions: Potions;
   private readonly cures: Cures;
+  /** MegaMUD's regen and when-full spells. See `Regen`. */
+  private readonly regen: Regen;
   /** Blessings kept up by events on this character and the party. */
   private readonly blessings: Blessings;
   /** Asking a carried item for the blessing it can cast. See `AutoInvoke`. */
@@ -1916,7 +1919,8 @@ export class SessionManager {
          * so a MajorMUD server running a converted GreaterMUD realm does not
          * have it, and null is not `greatermud`.
          */
-        poisonRefusesRest: () => poisonRefusesRest(this.capabilities(), this.serverFamily)
+        poisonRefusesRest: () => poisonRefusesRest(this.capabilities(), this.serverFamily),
+        beforeRest: (state) => this.regen.beforeRest(state)
       }
     );
     /*
@@ -2723,6 +2727,13 @@ export class SessionManager {
       realmSpell,
       { notice: (message) => this.sink.notice(message) }
     );
+    this.regen = new Regen(
+      automation.spells,
+      automation.health,
+      automation.enabled,
+      this.queue,
+      realmSpell
+    );
     this.blessings = new Blessings(
       automation.spells,
       automation.enabled,
@@ -2756,6 +2767,7 @@ export class SessionManager {
     };
     this.heal.useCastGate(gate);
     this.cures.useCastGate(gate);
+    this.regen.useCastGate(gate);
     this.blessings.useCastGate(gate);
     /*
      * And the blessing a carried item can give, which is not a cast at all:
@@ -3503,6 +3515,7 @@ export class SessionManager {
     this.roomOwed = null;
     this.potions.reset();
     this.cures.reset();
+    this.regen.reset();
     this.blessings.reset();
     this.combatLease.reset();
     this.invoke.reset();
@@ -4089,6 +4102,7 @@ export class SessionManager {
     this.roomOwed = null;
     this.potions.reset();
     this.cures.reset();
+    this.regen.reset();
     this.blessings.reset();
     this.combatLease.reset();
     this.invoke.reset();
@@ -4535,6 +4549,7 @@ export class SessionManager {
     this.heal.configure(automation.spells, automation.enabled);
     this.potions.configure(automation.health, automation.enabled);
     this.cures.configure(automation.spells, automation.enabled);
+    this.regen.configure(automation.spells, automation.health, automation.enabled);
     this.blessings.configure(automation.spells, automation.enabled);
     this.invoke.configure(automation.enabled && automation.spells.invokeItems);
     this.events.configure(automation.events, automation.enabled);
@@ -5553,8 +5568,12 @@ export class SessionManager {
     // A cure is a heal chosen by a sentence rather than a number; a buff is
     // the least urgent thing here and refuses combat by itself. Neither on
     // the way out of a room, for the reason above.
+    // Regen and the when-full spells are one action a line, as MegaMUD's rest
+    // decision is: a line that cast one does not also sit the character down.
+    let regenCast = false;
     if (!this.isRetreating()) {
       this.cures.onCharacter(state);
+      regenCast = this.regen.onCharacter(state);
       this.blessings.onCharacter(state);
       // And the same question asked of the pack rather than the spellbook.
       // After the casts, because a bless this character can cast is the one
@@ -5619,7 +5638,7 @@ export class SessionManager {
      * safe neighbour, where the rest goes ahead, said once.
      */
     const away = this.restAway.consider(state, this.recovery.wouldRest(state));
-    if (away !== 'took-over' && this.mayRest()) this.restNow(state);
+    if (!regenCast && away !== 'took-over' && this.mayRest()) this.restNow(state);
   }
 
   /**
@@ -5871,8 +5890,9 @@ export class SessionManager {
     this.heal.onCharacter(state);
     this.potions.onCharacter(state);
     this.cures.onCharacter(state);
+    const regenCast = this.regen.onCharacter(state);
     const away = this.restAway.consider(state, this.recovery.wouldRest(state));
-    if (away !== 'took-over' && this.mayRest()) this.restNow(state);
+    if (!regenCast && away !== 'took-over' && this.mayRest()) this.restNow(state);
   }
 
   /**
