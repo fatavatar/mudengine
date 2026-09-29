@@ -1061,6 +1061,12 @@ export interface RemotesConfig {
    */
   gangpath: boolean;
   /**
+   * Join a party when its leader invites this character, without waiting for
+   * the `@join` that would follow. Only a leader granted `join` is joined, and
+   * never while this character is already in a party (`Remotes.autoJoinOn`).
+   */
+  autoJoin: boolean;
+  /**
    * Remotes anybody in **this character's gang** may use.
    *
    * One list, not a map keyed by gang: a character is in one gang at a time.
@@ -2133,6 +2139,17 @@ export interface SpellsConfig {
    * started on nor continued.
    */
   healTo: number;
+  /**
+   * *Auto Choose Best Heal* (upstream 3b60de1, 2026-09-27). On, the heal is
+   * chosen per cast from the spellbook and the realm's figures rather than
+   * read from `heal` and `healPartyWith`: the cheapest spell expected to cover
+   * what is missing, and, with more than one person hurt, a party-wide heal
+   * where it is worth more than one heal on the worst of them (`planHeal`). A
+   * choice that cannot be made falls back to the configured spell and says so.
+   * Its own switch rather than `autoChoose`'s, because a player may want the
+   * heals chosen and the attack spell typed, or the other way round.
+   */
+  autoChooseHeal: boolean;
   /** Whether party members are healed at all. The toolbar's own toggle. */
   healParty: boolean;
   /**
@@ -2863,6 +2880,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     remotes: {
       enabled: false,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       /*
        * The one grant that ships non-empty, and it is three names: see
@@ -2926,6 +2944,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       healBelow: 0,
       healBelowInCombat: 0,
       healTo: 0,
+      autoChooseHeal: false,
       healParty: false,
       invokeItems: false,
       minMana: 0.15,
@@ -3957,6 +3976,7 @@ function normalizeRemotes(value: unknown, d: RemotesConfig): RemotesConfig {
   return {
     enabled: bool(raw['enabled'], d.enabled),
     gangpath: bool(raw['gangpath'], d.gangpath),
+    autoJoin: bool(raw['autoJoin'], d.autoJoin),
     gang: remoteNames(raw['gang'], d.gang),
     party: remoteNames(raw['party'], d.party),
     players: playerGrants(raw['players'], d.players)
@@ -4279,6 +4299,7 @@ function normalizeSpells(value: unknown): SpellsConfig {
       const below = fraction(raw['healBelow'], d.healBelow);
       return to === 0 ? 0 : Math.max(to, below);
     })(),
+    autoChooseHeal: bool(raw['autoChooseHeal'], d.autoChooseHeal),
     healParty: bool(raw['healParty'], d.healParty),
     invokeItems: bool(raw['invokeItems'], d.invokeItems),
     minMana: fraction(raw['minMana'], d.minMana),

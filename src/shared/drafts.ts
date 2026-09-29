@@ -241,6 +241,7 @@ export interface GlobalDraft {
     spells: {
       /** Derive the round spell and the cures from the book. See `SpellsConfig`. */
       autoChoose: boolean;
+      autoChooseHeal: boolean;
       attack: string;
       areaAttack: string;
       areaMinMobs: number;
@@ -552,6 +553,7 @@ export interface ProfileDraft {
   spells: {
     /** Derive the round spell and the cures from the book. See `SpellsConfig`. */
     autoChoose: boolean;
+    autoChooseHeal: boolean;
     attack: string;
     areaAttack: string;
     areaMinMobs: number;
@@ -651,6 +653,8 @@ export interface StatlineDraft {
 export interface RemotesDraft {
   enabled: boolean;
   gangpath: boolean;
+  /** Join a party when its leader invites. See `RemotesConfig.autoJoin`. */
+  autoJoin: boolean;
   /** What anybody in this character's gang may ask for. Validated against `REMOTE_NAMES`. */
   gang: RemoteName[];
   /** What anybody who has joined this character's party may ask for. */
@@ -1066,6 +1070,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
     spells: {
       // Off unless said: it spends mana on a reading the player did not type.
       autoChoose: spells['autoChoose'] === true,
+      autoChooseHeal: spells['autoChooseHeal'] === true,
       // The whole name, unlike a command word: the server matches a spell on a
       // prefix, so `ice` would cast whatever begins with it.
       attack: typeof spells['attack'] === 'string' ? spells['attack'].trim().slice(0, 40) : '',
@@ -1147,6 +1152,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
     remotes: {
       enabled: remotes['enabled'] === true,
       gangpath: remotes['gangpath'] === true,
+      autoJoin: remotes['autoJoin'] === true,
       gang: remoteNames(remotes['gang']),
       party: remoteNames(remotes['party']),
       players: playerGrants(remotes['players'])
@@ -1283,6 +1289,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
       afk: asIf.afk,
       spells: {
         autoChoose: spells['autoChoose'] === true,
+        autoChooseHeal: spells['autoChooseHeal'] === true,
         attack: text(spells['attack']).slice(0, 40),
         areaAttack: text(spells['areaAttack']).slice(0, 40),
         areaMinMobs: Math.max(1, Math.min(99, Math.round(Number(spells['areaMinMobs']) || 3))),
@@ -1315,6 +1322,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
       remotes: {
         enabled: remotes['enabled'] === true,
         gangpath: remotes['gangpath'] === true,
+        autoJoin: remotes['autoJoin'] === true,
         gang: remoteNames(remotes['gang']),
         party: remoteNames(remotes['party']),
         players: playerGrants(remotes['players'])

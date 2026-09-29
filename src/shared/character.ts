@@ -1816,6 +1816,14 @@ export function ownGang(state: CharacterState): string | null | undefined {
  * the sentences the server volunteers, so a name not on it is a name not in the
  * party.
  */
+/** Everybody besides this character who has joined its party: an invitation is not membership. */
+export function joinedMembers(state: CharacterState): PartyMember[] {
+  const self = state.name?.toLowerCase() ?? null;
+  return state.party.members.filter(
+    (member) => !member.invited && member.name.toLowerCase() !== self
+  );
+}
+
 export function joinedTheParty(state: CharacterState, name: string | null): boolean {
   if (name === null) return false;
   const key = name.trim().toLowerCase();

@@ -627,6 +627,8 @@ interface CharacterForm {
   spellAreaAttack: string;
   /** Derive the round spell and the cures from the book. */
   spellAutoChoose: boolean;
+  /** *Auto Choose Best Heal*: each heal picked from the book. See `SpellsConfig.autoChooseHeal`. */
+  spellAutoChooseHeal: boolean;
   spellAreaMinMobs: string;
   spellAreaMinMana: string;
   /** The fallback once the round spell has no effect, and the per-target cast caps (0 is no limit). */
@@ -746,6 +748,8 @@ interface CharacterForm {
   rewrites: RewritesUiConfig;
   /** Whether the gang's own channel is one of the channels it answers on. */
   remoteGangpath: boolean;
+  /** Whether a leader's invitation is joined without waiting for `@join`. */
+  remoteAutoJoin: boolean;
   /** What anybody in this character's gang may ask for. */
   remoteGang: RemoteName[];
   /** Remotes anybody who has joined this character's party may ask for. */
@@ -835,6 +839,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     useWards: entry.health.useWards,
     spellAttack: entry.spells.attack,
     spellAutoChoose: entry.spells.autoChoose,
+    spellAutoChooseHeal: entry.spells.autoChooseHeal,
     spellAreaAttack: entry.spells.areaAttack,
     spellAreaMinMobs: String(entry.spells.areaMinMobs),
     spellAreaMinMana: percent(entry.spells.areaMinMana),
@@ -901,6 +906,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     afkReply: entry.afk.reply,
     answerRemotes: entry.remotes.enabled,
     remoteGangpath: entry.remotes.gangpath,
+    remoteAutoJoin: entry.remotes.autoJoin,
     remoteGang: [...entry.remotes.gang],
     remoteParty: [...entry.remotes.party],
     remotePlayers: entry.remotes.players,
@@ -1051,6 +1057,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
     spells: {
       attack: form.spellAttack.trim(),
       autoChoose: form.spellAutoChoose,
+      autoChooseHeal: form.spellAutoChooseHeal,
       areaAttack: form.spellAreaAttack.trim(),
       areaMinMobs: Math.max(1, Number.parseInt(form.spellAreaMinMobs, 10) || 3),
       areaMinMana: fractionOf(form.spellAreaMinMana),
@@ -1151,6 +1158,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
     remotes: {
       enabled: form.answerRemotes,
       gangpath: form.remoteGangpath,
+      autoJoin: form.remoteAutoJoin,
       gang: form.remoteGang,
       party: form.remoteParty,
       players: form.remotePlayers
@@ -1394,6 +1402,7 @@ function emptyForm(
     useWards: health.useWards,
     spellAttack: spells.attack,
     spellAutoChoose: spells.autoChoose,
+    spellAutoChooseHeal: spells.autoChooseHeal,
     spellAreaAttack: spells.areaAttack,
     spellAreaMinMobs: String(spells.areaMinMobs),
     spellAreaMinMana: percent(spells.areaMinMana),
@@ -1457,6 +1466,7 @@ function emptyForm(
     afkReply: afk.reply,
     answerRemotes: remotes.enabled,
     remoteGangpath: remotes.gangpath,
+    remoteAutoJoin: remotes.autoJoin,
     remoteGang: [...remotes.gang],
     remoteParty: [...remotes.party],
     remotePlayers: remotes.players,
@@ -3488,6 +3498,13 @@ export default function SettingsScreen({
 
                       <fieldset className="settings-menus" data-fieldset="spells-heal">
                         <legend>{t('settings.spells.healLegend')}</legend>
+                        <CheckField
+                          checked={form.spellAutoChooseHeal}
+                          hint={t('settings.spells.autoChooseHealHint')}
+                          label={t('settings.spells.autoChooseHeal')}
+                          name="spell-auto-choose-heal"
+                          onChange={(value) => patch({ spellAutoChooseHeal: value })}
+                        />
                         <div className="settings-inline">
                           <SpellField
                             hint={t('settings.spells.healHint')}
@@ -3963,6 +3980,13 @@ export default function SettingsScreen({
                             label={t('settings.remotes.gangpathLabel')}
                             name="remotes-gangpath"
                             onChange={(value) => patch({ remoteGangpath: value })}
+                          />
+                          <CheckField
+                            checked={form.remoteAutoJoin}
+                            hint={t('settings.remotes.autoJoinHint')}
+                            label={t('settings.remotes.autoJoinLabel')}
+                            name="remotes-auto-join"
+                            onChange={(value) => patch({ remoteAutoJoin: value })}
                           />
                           {/*
                             Nothing on the wire establishes who shares a gang

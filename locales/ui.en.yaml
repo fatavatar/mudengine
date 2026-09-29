@@ -190,6 +190,14 @@ notices:
         and {count} file was moved over to it: {fileList}'
       many: 'Using the vortexes and entering the Negative Power Plane are now the Keep Out Of list,
         and {count} files were moved over to it: {fileList}'
+    healChoiceStated:
+      many: 'Auto Choose Best Heal was added to {count} files, turned on where Auto Choose Best Spell
+        is on: {fileList}'
+      one: 'Auto Choose Best Heal was added to {fileList}, turned on where Auto Choose Best Spell is
+        on.'
+    autoJoinStated:
+      many: 'Join When Invited was added, off, to {count} files: {fileList}'
+      one: 'Join When Invited was added, off, to {fileList}'
     freedomCureStated:
       one: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
         default, and was written into the cures of {count} file: {fileList}'
@@ -3893,6 +3901,9 @@ settings:
     gangpathHint: 'A gangpath answer is spoken to the whole gang — “gb @exp” is answered “gb
       {Made…}” where every member sees both halves.'
     gangpathLabel: Allow Remotes on Gangpath
+    autoJoinHint: Joins a party as soon as its leader invites this character, without waiting for
+      @join. Only a leader allowed @join is joined, and never while already in a party.
+    autoJoinLabel: Join When Invited
     legend: Answering Other Players
     playerLegend: Permissions for {name}
     partyListNote:
@@ -4163,10 +4174,15 @@ settings:
     autoChoose: Auto Choose Best Spell
     autoChooseHint:
       Picks the round spell each round from your spellbook and the realm's figures — never one the
-      monster resists, the cheapest that would finish it, else the hardest hitter. Healing is
-      chosen the same way against the hit points actually missing, so a scratch is not mended with
-      a major heal, and the cures are picked where their boxes are blank. The spells below are cast
-      with this off, and with it on wherever the spellbook cannot answer.
+      monster resists, the cheapest that would finish it, else the hardest hitter. The cures are
+      picked where their boxes are blank. The spells below are cast with this off, and with it on
+      wherever the spellbook cannot answer.
+    autoChooseHeal: Auto Choose Best Heal
+    autoChooseHealHint:
+      Picks each heal from your spellbook and the realm's figures against the hit points actually
+      missing, so a scratch is not mended with a major heal, and casts a party heal like healing
+      rain when it does more than one heal on the worst hurt. The healing spells below are cast
+      with this off, or wherever it cannot choose.
     fallbackCastHint:
       Cast instead for the rest of the fight once the game says the combat spell has no effect on
       the target. Blank leaves the fight to the round attacks.
@@ -5014,6 +5030,7 @@ automation:
     reasonParty: 'heal: {memberName} is at {percent}%'
     reasonRequested: 'heal: {memberName} asked (@heal)'
     reasonSelf: 'heal: health is low'
+    reasonArea: 'heal: {count} in the party are hurt'
     requestHealOff: '{from} asked for a heal (@heal), and healing is off (Heal If Below is 0) — nothing is cast.'
     requestLapsed: '{from} asked for a heal (@heal) and none went out within {seconds}s.'
     requestLowMana: '{from} asked for a heal (@heal); it waits for mana over the floor.'
@@ -5024,6 +5041,11 @@ automation:
       cover the {deficit} hp missing.'
     choseMost: 'Healing with {spell} ({min}-{max}, about {expected} a cast, {cost} mana): the most
       one cast mends, and {deficit} hp are missing.'
+    choseArea:
+      many: 'Healing the party with {spell} ({min}-{max} each, {cost} mana): {count} are hurt,
+        and one heal on the worst does no better for the mana.'
+      one: 'Healing the party with {spell} ({min}-{max} each, {cost} mana): it does at least as
+        much as one heal for the mana.'
     noChoice: 'No heal in the spellbook fits, so {spell} is cast as configured.'
     noChoiceNoSpell: No heal in the spellbook fits, and none is configured, so nothing is cast.
     noFiguresSelf:
@@ -5211,6 +5233,11 @@ automation:
     reasonParEvery: 'the party listing, every {seconds}s (Par Every)'
     reasonParRound: the party listing after the round (Send par After Each Combat Round)
     ignoredParty: '{from} asked the party to "{command}"; Ignore @party If Following is on, so it was not sent.'
+    autoJoinInParty: '{from} invited this character; not joining, because it is already in a party.'
+    autoJoinDenied: '{from} invited this character; not joining, because @join is denied to {from}
+      by name.'
+    autoJoinNotGranted: '{from} invited this character; not joining, because {from} has not been
+      granted @join.{unresolvedClause}'
     ignoredWait: '{from} asked the party to wait; Ignore @wait If Leading is on, so the walk goes on.'
     waitedLongEnough: 'Waited {minutes} min for {who}; walking on, as Wait No Longer Than says.'
     peerIsOurs:
@@ -5238,6 +5265,7 @@ automation:
     reasonGetAll: '@get-all from {from}'
     reasonInvite: '@invite from {from}'
     reasonJoin: '@join from {from}'
+    reasonAutoJoin: 'invited by {from}'
     reasonParty: '@party from {from}'
     refusal:
       hangup: an unclean disconnect costs a percentage of maximum health and is fatal at low health;

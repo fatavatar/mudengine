@@ -1464,6 +1464,15 @@ export default function GlobalSettings({
             </fieldset>
             <fieldset className="settings-menus" data-fieldset="spells-heal">
               <legend>{t('settings.spells.healLegend')}</legend>
+              <CheckField
+                checked={draft.automation.spells.autoChooseHeal}
+                hint={t('settings.spells.autoChooseHealHint')}
+                label={t('settings.spells.autoChooseHeal')}
+                name="global-spell-auto-choose-heal"
+                onChange={(value) =>
+                  automation({ spells: { ...draft.automation.spells, autoChooseHeal: value } })
+                }
+              />
               <div className="settings-inline">
                 <SpellField
                   hint={t('settings.spells.healHint')}
@@ -2409,6 +2418,15 @@ export default function GlobalSettings({
                   name="global-remotes-gangpath"
                   onChange={(value) =>
                     automation({ remotes: { ...draft.automation.remotes, gangpath: value } })
+                  }
+                />
+                <CheckField
+                  checked={draft.automation.remotes.autoJoin}
+                  hint={t('settings.remotes.autoJoinHint')}
+                  label={t('settings.remotes.autoJoinLabel')}
+                  name="global-remotes-auto-join"
+                  onChange={(value) =>
+                    automation({ remotes: { ...draft.automation.remotes, autoJoin: value } })
                   }
                 />
                 <p className="settings-warn">{t('settings.remotes.gangWarning')}</p>

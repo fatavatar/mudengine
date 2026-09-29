@@ -3197,6 +3197,7 @@ export class Walker {
       // spell is the deadline, and standing still for a round is drowning.
       if (!this.leavingAFight && this.events.moveOnly?.(state) !== true && this.answerFight())
         return;
+      if (this.stepOutOfFight(state)) return;
     } else {
       // Out of it. Anything that starts from here is a fight nobody asked
       // about, and holds for it as usual.
@@ -3757,6 +3758,34 @@ export class Walker {
    * retreat is not counted: it ends a fight by walking out too, only later and
    * hurt, which is no reason to stand in the blows first.
    */
+  /**
+   * Whether the walk goes on through the fight around it: the one it was
+   * asked for in, or one nothing will end (`answerFight`). Resting heals
+   * nothing while something swings, so the health and mana holds give way.
+   */
+  private walksThrough(state: CharacterState): boolean {
+    if (!fightIsRunning(state)) return false;
+    return this.leavingAFight || (this.resumeAfterFight && !this.canEndAFight());
+  }
+
+  /**
+   * A fight the walk goes on through, found while it stands still for health
+   * or mana: the step goes now, not on the hold's next beat, which is a beat
+   * of blows taken standing (upstream 6f9ae7a: a route landed hurt among
+   * monsters that followed it, auto-combat off, and stood in their blows
+   * until the retreat pulled it back). True when it went.
+   */
+  private stepOutOfFight(state: CharacterState): boolean {
+    if (this.hold !== 'health' && this.hold !== 'mana') return false;
+    if (!this.walksThrough(state) || (this.events.pendingMoves?.() ?? 0) > 0) return false;
+    if (this.holdTimer !== null) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    if (!this.holdBeforeSending(state)) this.sendCurrent();
+    return true;
+  }
+
   private canEndAFight(): boolean {
     if (!this.config.enabled) return false;
     const fights = this.events.willFight?.();
@@ -4244,7 +4273,7 @@ export class Walker {
    * while too hurt to travel*.
    */
   private holdForHealth(state: CharacterState): boolean {
-    if (!this.wantsHealthHold(state)) {
+    if (this.walksThrough(state) || !this.wantsHealthHold(state)) {
       // Only its own hold: a walk standing still blind is not one whose health
       // has come back.
       if (this.hold === 'health') {
@@ -4286,6 +4315,7 @@ export class Walker {
     const { mana, manaMax } = state.vitals;
     const low =
       this.holdWhenHurt &&
+      !this.walksThrough(state) &&
       manaHolding(
         this.config.health,
         mana,
