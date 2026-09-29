@@ -3846,6 +3846,30 @@ describe('moving unseen', () => {
     expect(tracker.current.stealth).toBe('sneaking');
   });
 
+  /*
+   * A leader's move relays `Sneaking...` to each sneaking follower before the
+   * server knows the move will go (`MoveCommand.cs:86-95`, upstream c5391cc).
+   * Walked, the follower reads the follow and the room; left behind by a
+   * leader at a wall, nothing follows it, and the relay is no receipt.
+   */
+  it('spends a relayed Sneaking... only on the follow it announces', () => {
+    const walked = feeder();
+    walked.feed('[HP=33]:');
+    walked.feed('Sneaking...');
+    walked.feed('-- Following your Party leader east --');
+    walked.feed('Newhaven, Narrow Path');
+    walked.feed('Obvious exits: north, south, east, west');
+    expect(walked.tracker.current.stealth).toBe('sneaking');
+
+    const leftBehind = feeder();
+    leftBehind.feed('[HP=33]:');
+    leftBehind.feed('Sneaking...');
+    leftBehind.tracker.observeCommand('e');
+    leftBehind.feed('Newhaven, Narrow Path');
+    leftBehind.feed('Obvious exits: north, south, east, west');
+    expect(leftBehind.tracker.current.stealth).toBe('seen');
+  });
+
   it('is seen after a move the server did not announce', () => {
     const { tracker, feed } = feeder();
     feed('[HP=33]:');
