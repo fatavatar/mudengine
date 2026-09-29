@@ -746,6 +746,8 @@ interface CharacterForm {
   rewrites: RewritesUiConfig;
   /** Whether the gang's own channel is one of the channels it answers on. */
   remoteGangpath: boolean;
+  /** Whether a leader's invitation is joined without waiting for `@join`. */
+  remoteAutoJoin: boolean;
   /** What anybody in this character's gang may ask for. */
   remoteGang: RemoteName[];
   /** Remotes anybody who has joined this character's party may ask for. */
@@ -901,6 +903,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     afkReply: entry.afk.reply,
     answerRemotes: entry.remotes.enabled,
     remoteGangpath: entry.remotes.gangpath,
+    remoteAutoJoin: entry.remotes.autoJoin,
     remoteGang: [...entry.remotes.gang],
     remoteParty: [...entry.remotes.party],
     remotePlayers: entry.remotes.players,
@@ -1151,6 +1154,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
     remotes: {
       enabled: form.answerRemotes,
       gangpath: form.remoteGangpath,
+      autoJoin: form.remoteAutoJoin,
       gang: form.remoteGang,
       party: form.remoteParty,
       players: form.remotePlayers
@@ -1457,6 +1461,7 @@ function emptyForm(
     afkReply: afk.reply,
     answerRemotes: remotes.enabled,
     remoteGangpath: remotes.gangpath,
+    remoteAutoJoin: remotes.autoJoin,
     remoteGang: [...remotes.gang],
     remoteParty: [...remotes.party],
     remotePlayers: remotes.players,
@@ -3963,6 +3968,13 @@ export default function SettingsScreen({
                             label={t('settings.remotes.gangpathLabel')}
                             name="remotes-gangpath"
                             onChange={(value) => patch({ remoteGangpath: value })}
+                          />
+                          <CheckField
+                            checked={form.remoteAutoJoin}
+                            hint={t('settings.remotes.autoJoinHint')}
+                            label={t('settings.remotes.autoJoinLabel')}
+                            name="remotes-auto-join"
+                            onChange={(value) => patch({ remoteAutoJoin: value })}
                           />
                           {/*
                             Nothing on the wire establishes who shares a gang

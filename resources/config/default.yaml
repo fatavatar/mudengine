@@ -1122,9 +1122,14 @@ automation:
   #
   # There is no ground meaning "everybody", and the absence is deliberate: it is
   # not a reason, it is the absence of a gate.
+  #
+  # `autoJoin` joins a party when its leader invites you, without waiting for
+  # the @join the leader would telepath next. Only somebody granted @join
+  # above is joined, and never while you are already in a party.
   remotes:
     enabled: false
     gangpath: false
+    autoJoin: false
     gang: []
     party: [health, bless-expired, heal]
     players: {}

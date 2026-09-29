@@ -271,6 +271,7 @@ function migrateAll(options: MigrationOptions): void {
   statedTheMeditateTarget(home, note, options.template);
   statedTheFleeGoto(home, note, options.template);
   statedTheDrain(home, note, options.template);
+  statedTheAutoJoin(home, note);
 }
 
 /**
@@ -6356,6 +6357,42 @@ function statedTheConfusionWait(home: Home, note: (message: string) => void): vo
  * fourth exists, so it is written in after `disease`, where a player
  * reading the block will find it. Idempotent; nothing stated is overwritten.
  */
+/**
+ * `automation.remotes.autoJoin` into every file that states `remotes:` without
+ * it, off, after `gangpath` (upstream 759fc4d, ported 2026-09-29). Its
+ * explanation is in the template's block comment above `remotes:`, so the key
+ * carries none.
+ */
+function statedTheAutoJoin(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const remotes = document.getIn(['automation', 'remotes'], true);
+      if (!isMap(remotes) || remotes.has('autoJoin')) return false;
+      const pair = document.createPair(
+        'autoJoin',
+        DEFAULT_CONFIG.automation.remotes.autoJoin
+      ) as Pair;
+      const after = remotes.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'gangpath'
+      );
+      remotes.items.splice(after === -1 ? 0 : after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.autoJoinStated.one', params)
+      : t('notices.migration.autoJoinStated.many', params)
+  );
+}
+
 function statedTheFreedomCure(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
   const stated: string[] = [];

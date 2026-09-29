@@ -2411,6 +2411,15 @@ export default function GlobalSettings({
                     automation({ remotes: { ...draft.automation.remotes, gangpath: value } })
                   }
                 />
+                <CheckField
+                  checked={draft.automation.remotes.autoJoin}
+                  hint={t('settings.remotes.autoJoinHint')}
+                  label={t('settings.remotes.autoJoinLabel')}
+                  name="global-remotes-auto-join"
+                  onChange={(value) =>
+                    automation({ remotes: { ...draft.automation.remotes, autoJoin: value } })
+                  }
+                />
                 <p className="settings-warn">{t('settings.remotes.gangWarning')}</p>
                 <h4 className="settings-subhead">{t('settings.remotes.gangLegend')}</h4>
                 {/*
