@@ -118,21 +118,10 @@ export interface Intent {
    */
   typed?: boolean;
   /**
-   * Skip `pacing.minGapMs` between this command and whichever one is next
-   * due — not a standing exemption, just the one gap right behind this send.
-   *
-   * For a pair that must reach the server essentially back to back, where
-   * the ordinary floor is itself the bug. Measured live (2026-09-28): the
-   * party relay's `minGapMs` gap ahead of the leader's own move through a
-   * text exit was long enough — 676ms in one capture — for a follower's own
-   * client to hear the relay, replay it, and land in the new room *before*
-   * the leader's move even reached the wire. MegaMUD's own party-follow
-   * mechanic answers a follower standing somewhere the leader has not yet
-   * gone to by snapping them back toward the leader's last room, undoing a
-   * crossing that had actually worked. `minGapMs` exists to protect a real,
-   * measured server limit (`CommandQueue`'s own header) and stays in force
-   * for everything else; this is the one pairing where the gap it leaves
-   * causes a different, worse failure than the flood it guards against.
+   * Skip `pacing.minGapMs` before whichever command sends next: for a pair
+   * that must reach the server back to back. Only the party relay and the
+   * move behind it (`Walker.relayTextExit`): 676ms apart, a follower landed
+   * first and was pulled back (2026-09-28).
    */
   noGap?: boolean;
   /**
@@ -218,11 +207,7 @@ export class CommandQueue {
   private inFlight = 0;
   private seq = 0;
   private lastSentAt = 0;
-  /**
-   * Whether the last command actually written asked, via `noGap`, that the
-   * pacing floor be skipped for whatever sends next. Consumed by the next
-   * send either way — see `blockedFor` and `drain`.
-   */
+  /** Whether the last command written asked for no gap before the next. See `Intent.noGap`. */
   private skipNextGap = false;
   /**
    * What has been written to the socket lately, oldest first, so an intent can

@@ -2953,7 +2953,15 @@ export class SessionManager {
       stated: (held, started, ended) => {
         if (this.tracker.noteStated(held, started, ended)) this.reactToState();
       },
-      fired: (trigger) => this.onMessageFired(trigger)
+      fired: (trigger) => this.onMessageFired(trigger),
+      // MegaMUD's chase rows: after the leader this character follows, and
+      // not again where the leader's `@party` already sent it.
+      chase: (target, command) => {
+        if (!this.automationConfig.enabled) return false;
+        const leader = this.tracker.current.party.following;
+        if (leader === null || leader.toLowerCase() !== target.toLowerCase()) return false;
+        return !this.remotes.ranForParty(command);
+      }
     });
 
     /*
@@ -8939,18 +8947,6 @@ export class SessionManager {
     // The one door a person's stop comes through, so it is the one place that
     // can tell a hunt it was stopped *by somebody* rather than by the realm.
     this.hunt.noteStopped();
-  }
-
-  /**
-   * End an in-progress catch-up wait early, resuming movement at once.
-   *
-   * The leader's own override for the party relay's catch-up wait — the
-   * third way out CONTEXT.md's glossary names, beside everybody arriving and
-   * `catchUpWaitSeconds` running out. See `Walker.endCatchupWait` and ADR
-   * 0002. A no-op when nothing is waiting.
-   */
-  endCatchUpWait(): void {
-    this.walker.endCatchupWait();
   }
 
   /**

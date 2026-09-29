@@ -6888,6 +6888,12 @@ function theTuningBlockGainedKeys(
      * as an errand or left to the long way.
      */
     addKey('world', 'keyFetchTrips', DEFAULT_INTERNAL.tuning.world.keyFetchTrips);
+    /*
+     * How long a leader waits for the party through a text exit (2026-09-29,
+     * PR #35), in place of the `party.catchUpWaitSeconds` option it shipped as:
+     * a bound on a hold, which is what this block is for.
+     */
+    addKey('walk', 'partyCatchUpMs', DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {

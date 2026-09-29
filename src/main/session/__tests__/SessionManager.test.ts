@@ -4533,36 +4533,22 @@ describe('a follower pacing the loop', () => {
 });
 
 /*
- * Party relay, re-sneak, reinvite sweep and catch-up wait for a leader's own
- * Walker/Loop-driven crossing of a `Text:` exit — issue #5, ADR 0002. The
- * Walker-level mechanics (relay condition, re-sneak, reinvite arithmetic,
- * the hold itself) have their own focused tests in `Walker.test.ts`; these
- * exercise the same feature end to end, over a real socket, the way the
- * sibling leader-wait tests above do.
+ * A leader's crossing of a `Text:` exit end to end, over a real socket (PR #35).
+ * The hold itself is `Walker.test.ts`'s: `1/3 → 1/4` is a route's last step.
  */
 describe('a party relay crossing a text exit', () => {
-  /**
-   * Lines, not raw text: `.@party go manhole` ends in the same bytes as the
-   * bare `go manhole` that follows it, so a substring or an unanchored regex
-   * against the raw wire cannot tell the say from the move. Split on the
-   * wire's own terminator instead, and ask whether an exact line went out.
-   */
+  // Lines, not raw text: `.@party go manhole` ends in the bytes of `go manhole`.
   const wire = (socket: net.Socket): (() => string[]) => {
     const chunks: Buffer[] = [];
     socket.on('data', (chunk) => chunks.push(chunk));
     return () => Buffer.concat(chunks).toString('latin1').split('\r\n');
   };
 
-  function relayConfig(over: Partial<AutomationConfig['party']> = {}): AutomationConfig {
-    return {
-      ...DEFAULT_CONFIG.automation,
-      enabled: true,
-      // No pacing gap: these tests are about the relay/reinvite/wait
-      // sequence, not about how long the arbiter waits between sends.
-      pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 3000 },
-      party: { ...DEFAULT_CONFIG.automation.party, ...over }
-    };
-  }
+  const relayConfig = (): AutomationConfig => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 3000 }
+  });
 
   /** The party listing: Vaelor (self, leading) and Pip, both frontrank. */
   const partyListing =
@@ -4573,14 +4559,7 @@ describe('a party relay crossing a text exit', () => {
       '[HP=100/MA=50]:'
     ].join('\r\n') + PROMPT_REPAINT;
 
-  /**
-   * Connected, named, placed at Rat Lair (1/3), leading Pip — who is
-   * standing right there, not merely on the roster. Measured live
-   * (2026-09-28): the leader is never told a follower stopped following —
-   * only the follower's own client hears that — so `room.occupants`, not
-   * `party.members`, is what the reinvite sweep can actually see on either
-   * side of the crossing. See `relayTextExit`'s own comment.
-   */
+  /** Connected at Rat Lair (1/3), leading Pip, who is standing there too. */
   async function atTheCrossing(world: WorldGraph, config: AutomationConfig): Promise<net.Socket> {
     manager = new SessionManager(collect().sink, world, config);
     await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
@@ -4607,98 +4586,20 @@ describe('a party relay crossing a text exit', () => {
     expect(lines().indexOf('.@party go manhole')).toBeLessThan(lines().indexOf('go manhole'));
   });
 
-  it('re-invites whoever fell behind, says @join, and holds movement until they are seen', async () => {
-    const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 2 }));
-    const lines = wire(socket);
-
-    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
-    await until(() => lines().includes('go manhole'));
-
-    // Pip did not replay the exit: absent from the new room's own listing.
-    socket.write('Sewer\r\nObvious exits: up\r\n');
-    await until(() => manager!.character.room.number === 4);
-
-    await until(() => lines().includes('invite Pip'));
-    expect(lines()).toContain('.@join');
-    expect(manager!.walker.progress.hold).toBe('catchup');
-
-    // Pip catches up: seen in the room settles the wait on its own.
-    socket.write('Pip enters the room.\r\n');
-    await until(() => manager!.walker.progress.hold === null);
-  });
-
-  /*
-   * Measured live (2026-09-29), across two paired leader/follower sessions:
-   * MegaMUD drops the party's follow flag on a text-exit crossing even when
-   * the follower's own client replays it correctly and lands in the same
-   * room — `party` read "You are not in a party" with the follower's name
-   * still on the room's own listing. So the invite is unconditional on the
-   * snapshot; only the catch-up wait is conditional on presence.
-   */
-  it('re-invites even a member who did land in the new room, but holds nothing for them', async () => {
+  /* The realm drops the party through a text exit even for a follower who crossed (2026-09-29). */
+  it('invites whoever stood with the leader once it lands, and says no @join', async () => {
     const world = haven();
     const socket = await atTheCrossing(world, relayConfig());
     const lines = wire(socket);
 
     expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
     await until(() => lines().includes('go manhole'));
-
-    // Pip did make it — physically present in the new room regardless.
     socket.write('Sewer\r\nAlso here: Pip.\r\nObvious exits: up\r\n');
-    await until(() => manager!.character.room.number === 4);
-
     await until(() => lines().includes('invite Pip'));
-    expect(lines()).toContain('.@join');
-    expect(manager!.walker.progress.hold).toBeNull();
+    expect(lines().some((line) => line.includes('@join'))).toBe(false);
   });
 
-  it('resumes on its own once catchUpWaitSeconds elapses, with nobody chased further', async () => {
-    const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 1 }));
-    const lines = wire(socket);
-
-    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
-    await until(() => lines().includes('go manhole'));
-
-    const timers = vi.spyOn(globalThis, 'setTimeout');
-    socket.write('Sewer\r\nObvious exits: up\r\n');
-    await until(() => manager!.walker.progress.hold === 'catchup');
-    const giveUp = timers.mock.calls.find(([, delay]) => delay === 1000)?.[0];
-    timers.mockRestore();
-    expect(giveUp).toBeTypeOf('function');
-    (giveUp as () => void)();
-
-    expect(manager!.walker.progress.hold).toBeNull();
-  });
-
-  it('skips the wait entirely at catchUpWaitSeconds: 0, though it still invites and @joins', async () => {
-    const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 0 }));
-    const lines = wire(socket);
-
-    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
-    await until(() => lines().includes('go manhole'));
-    socket.write('Sewer\r\nObvious exits: up\r\n');
-    await until(() => manager!.character.room.number === 4);
-
-    await until(() => lines().includes('invite Pip'));
-    expect(manager!.walker.progress.hold).toBeNull();
-  });
-
-  it('lets the leader override the wait early, resuming movement at once', async () => {
-    const world = haven();
-    const socket = await atTheCrossing(world, relayConfig({ catchUpWaitSeconds: 5 }));
-
-    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
-    socket.write('Sewer\r\nObvious exits: up\r\n');
-    await until(() => manager!.walker.progress.hold === 'catchup');
-
-    manager!.endCatchUpWait();
-    expect(manager!.walker.progress.hold).toBeNull();
-  });
-
-  it('does not relay or reinvite a hand-typed crossing', async () => {
+  it('does not relay or invite for a hand-typed crossing', async () => {
     const world = haven();
     const socket = await atTheCrossing(world, relayConfig());
     const lines = wire(socket);
@@ -4706,6 +4607,73 @@ describe('a party relay crossing a text exit', () => {
     manager!.send('go manhole\r\n');
     await until(() => lines().includes('go manhole'));
     expect(lines().some((line) => line.includes('@party'))).toBe(false);
+  });
+});
+
+/*
+ * MegaMUD's chase rows, from its Messages.md: a follower sees its leader leave
+ * through a special exit and follows (`{target} enters a manhole in the
+ * ground!` → `go manhole`, Skinny Inc's table, 2026-09-29).
+ */
+describe('a follower chasing its leader through a special exit', () => {
+  const lines = (socket: net.Socket): (() => string[]) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1').split('\r\n');
+  };
+
+  const chasing = (over: Partial<AutomationConfig['remotes']> = {}): AutomationConfig => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 3000 },
+    remotes: { ...DEFAULT_CONFIG.automation.remotes, ...over }
+  });
+
+  async function following(config: AutomationConfig): Promise<net.Socket> {
+    manager = new SessionManager(collect().sink, undefined, config);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'chase (manhole)',
+          match: '{target} enters a manhole in the ground!',
+          response: 'go manhole',
+          chase: true
+        }
+      ]
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('Welcome back, Vaelor!\r\n');
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('You are following Pip.\r\n');
+    await until(() => manager!.character.party.following === 'Pip');
+    return socket;
+  }
+
+  it('follows the leader it is following, and nobody else', async () => {
+    const socket = await following(chasing());
+    const seen = lines(socket);
+    socket.write('Bob enters a manhole in the ground!\r\n');
+    socket.write('Pip enters a manhole in the ground!\r\n');
+    await until(() => seen().includes('go manhole'));
+    expect(seen().filter((line) => line === 'go manhole')).toHaveLength(1);
+    expect(manager!.automation.firings.at(-1)).toMatchObject({ commands: ['go manhole'] });
+  });
+
+  it('does not go twice when the leader’s @party already sent it', async () => {
+    const socket = await following(
+      chasing({ enabled: true, players: { pip: { allow: ['party'], deny: [] } } })
+    );
+    const seen = lines(socket);
+    socket.write('Pip says "@party go manhole"\r\n');
+    socket.write('Pip enters a manhole in the ground!\r\n');
+    await until(() => seen().includes('go manhole'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(seen().filter((line) => line === 'go manhole')).toHaveLength(1);
+    // The @party moved it; the chase row stood down.
+    expect(manager!.automation.firings.some((firing) => firing.rule.includes('chase'))).toBe(false);
   });
 });
 
