@@ -1828,6 +1828,47 @@ stops:
     expect(said).toEqual([]);
   });
 
+  /*
+   * A realm's own MegaMUD folder, imported, can walk the rooms a shelf loop
+   * walks and already hold the shelf's name for another loop (2026-09-29).
+   * Renamed, the realm held two loops of one name, and one was unreachable.
+   */
+  /*
+   * The shelf was recorded on Paradigm's bundled map. A realm with a database
+   * of its own imports its own MegaMUD folder, which walks many of the same
+   * rooms under the same areas and is none of it a copy of the shelf.
+   */
+  it('leaves the loops of a realm with its own database alone', () => {
+    write(home.server('mudrev').file, 'name: MudRev\ndatabase: /realms/mudrev.mdb\n');
+    const file = path.join(home.server('mudrev').loops, 'goblin-caves-refuse-pit.yaml');
+    write(
+      file,
+      "name: 'Goblin caves: Refuse Pit'\nstops:\n  - 'Huge Cave, Refuse Pit 1/1765'\n  - 'Huge Cave 1/1764'\n"
+    );
+
+    migrateWithShelf();
+
+    expect(nameIn(file)).toBe('Goblin caves: Refuse Pit');
+  });
+
+  it('does not rename onto a name the same scope already holds', () => {
+    const dir = home.server('mudrev').loops;
+    const imported = path.join(dir, 'goblin-caves-refuse-pit-up-down.yaml');
+    write(
+      imported,
+      "name: 'Goblin caves: Refuse Pit Up Down'\nstops:\n  - 'Huge Cave, Refuse Pit 1/1765'\n  - 'Huge Cave 1/1764'\n"
+    );
+    write(
+      path.join(dir, 'goblin-caves-slime-beast-loop.yaml'),
+      "name: 'Goblin caves: Slime Beast Loop'\nstops:\n  - 'Huge Cave 1/1764'\n  - 'Huge Cave 1/1763'\n"
+    );
+
+    migrateWithShelf();
+
+    expect(nameIn(imported)).toBe('Goblin caves: Refuse Pit Up Down');
+    expect(said).toEqual([]);
+  });
+
   it('is idempotent: a second run finds nothing left to rename', () => {
     const file = path.join(home.profile('vaelor').loops, 'slime-beast.yaml');
     write(file, COPIED);

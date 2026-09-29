@@ -82,8 +82,12 @@ import { asMonsterRules, type MonsterRule } from './monsterRules';
 
 const ENCODINGS: readonly StreamEncoding[] = ['cp437', 'utf8', 'latin1'];
 
-/** See `ProfileDraft.loops`: a ceiling on a payload, not a limit on a loop. */
-export const LOOP_LIMITS = { loops: 200, stops: 500 } as const;
+/**
+ * See `ProfileDraft.loops`: a ceiling on a payload, not a limit on a loop.
+ * Room for a whole MegaMUD folder on one realm (2026-09-29): MudRev's
+ * `Default` holds 282 loops and Paradigm's 488 recorded paths.
+ */
+export const LOOP_LIMITS = { loops: 1000, stops: 500 } as const;
 
 /**
  * One loop, from a payload that crossed the IPC boundary.

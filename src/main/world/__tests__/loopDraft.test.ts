@@ -5,7 +5,13 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 import { WorldGraph } from '../WorldGraph';
-import { draftLoop, LoopDraftCache, preferredEdges, reduceWaypoints } from '../loopDraft';
+import {
+  draftLoop,
+  LoopDraftCache,
+  preferredEdges,
+  reduceWaypoints,
+  reduceWaypointsYielding
+} from '../loopDraft';
 
 function makeWorld(rooms: Array<Record<string, unknown>>): WorldGraph {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-draft-'));
@@ -157,6 +163,21 @@ describe('reducing a path to waypoints', () => {
 
   it('is a single room for a single room', () => {
     expect(reduceWaypoints(makeWorld(corridor(2)), ['1/1'])).toEqual(['1/1']);
+  });
+
+  /* Handing the thread back between routes changes when, never what. */
+  it('reduces to the same waypoints when it yields between routes', async () => {
+    const graph = makeWorld(square());
+    const paths = [
+      [],
+      ['1/1'],
+      ['1/1', '1/2'],
+      ['1/1', '1/2', '1/4', '1/3', '1/1'],
+      ['1/1', '1/3', '1/4', '1/2', '1/1', '1/2', '1/4']
+    ];
+    for (const path of paths) {
+      expect(await reduceWaypointsYielding(graph, path)).toEqual(reduceWaypoints(graph, path));
+    }
   });
 });
 

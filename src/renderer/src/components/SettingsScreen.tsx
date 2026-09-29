@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { MessageImport, MessageTable, MessageTrigger } from '@shared/messageTriggers';
 import type { MonsterImport, MonsterRule, MonsterTable } from '@shared/monsterRules';
+import type { LoopImport, MegaMudPath } from '@shared/megamudPaths';
 import { asShippedWorld } from '@shared/worlds';
 import { DENOMINATIONS } from '@shared/character';
 import { STOCK_COINS } from '@shared/coins';
@@ -34,6 +35,7 @@ import { castsOnOthers, castsOnSelf } from '@shared/spellcraft';
 import FormActions from './FormActions';
 import GlobalSettings from './GlobalSettings';
 import LoopSection from './LoopSection';
+import MegaMudLoopImport from './MegaMudLoopImport';
 import RemoteList from './RemoteList';
 import RewritesDesigner from './RewriteDesigner';
 
@@ -309,6 +311,8 @@ export interface SettingsScreenProps {
   loadMonsters(realm: string): Promise<MonsterTable>;
   importMonsters(realm: string, fileName: string, monsters: MonsterRule[]): Promise<MonsterImport>;
   saveMonsters(realm: string, monsters: MonsterRule[]): Promise<string | null>;
+  /** A MegaMUD folder's loops onto a realm. See `MegaMudLoopImport`. */
+  importLoops(realm: string, paths: MegaMudPath[]): Promise<LoopImport>;
   /**
    * The loops the client ships, for the Movement tab to offer.
    *
@@ -1553,6 +1557,7 @@ export default function SettingsScreen({
   loadMonsters,
   importMonsters,
   saveMonsters,
+  importLoops,
   loadLoops,
   loadTrainers,
   loadBanks,
@@ -1971,6 +1976,18 @@ export default function SettingsScreen({
     setServerHistory((current) => withLoopToggled(current, loop, sameJson));
     setSaved(null);
   }, []);
+
+  /**
+   * A MegaMUD folder's loops were written beside this realm's: the page takes
+   * up the list on disk as it takes up a realm it opens -- a fresh history,
+   * not an edit, so Undo cannot take two hundred loops back off in one press.
+   */
+  const importedServerLoops = useCallback(async () => {
+    const next = await refresh();
+    const loops = serverPick === null ? undefined : next.loops.servers[serverPick];
+    if (loops === undefined) return;
+    setServerHistory((current) => (current ? begin({ ...current.present, loops }) : current));
+  }, [refresh, serverPick]);
 
   const chooseServer = useCallback(
     (name: string | null) => {
@@ -4802,7 +4819,14 @@ export default function SettingsScreen({
                     onOpenPicker={openPicker}
                     onToggle={toggleServerLoop}
                     picking={picking}
-                  />
+                  >
+                    <MegaMudLoopImport
+                      beforeImport={serverSave.flush}
+                      importLoops={importLoops}
+                      onImported={() => void importedServerLoops()}
+                      realm={serverPick === NEW_SERVER ? null : serverPick}
+                    />
+                  </LoopSection>
 
                   {/*
                     And what the place's sentences mean: a realm's message
