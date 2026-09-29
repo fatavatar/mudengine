@@ -1622,6 +1622,20 @@ export default function GlobalSettings({
                   value={String(draft.automation.party.waitNoLongerMinutes)}
                 />
                 <NumberField
+                  hint={t('settings.party.catchUpWaitHint')}
+                  label={t('settings.party.catchUpWaitLabel')}
+                  name="global-party-catch-up-wait-seconds"
+                  onChange={(value) =>
+                    automation({
+                      party: {
+                        ...draft.automation.party,
+                        catchUpWaitSeconds: Number.parseInt(value, 10) || 0
+                      }
+                    })
+                  }
+                  value={String(draft.automation.party.catchUpWaitSeconds)}
+                />
+                <NumberField
                   hint={t('settings.party.parEveryHint')}
                   label={t('settings.party.parEveryLabel')}
                   name="global-party-par-every"
