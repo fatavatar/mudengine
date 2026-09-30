@@ -49,7 +49,7 @@
  */
 import type { CommandQueue } from './CommandQueue';
 import { t } from '../app/i18n';
-import type { AutomationConfig } from '../../shared/config';
+import type { AutomationConfig, PartyRank } from '../../shared/config';
 import type { CharacterState } from '../../shared/character';
 import type { Block, BlockType } from '../../shared/blocks';
 import { READ, REFRESH, staleAfter, unread, type StaleFact } from '../../shared/staleness';
@@ -59,6 +59,13 @@ import { tuning } from '../app/tuning';
 export interface RoutineEvents {
   notice?(message: string): void;
 }
+
+/** The command each preferred rank answers to — the realm's own three words. */
+const RANK_COMMANDS: Record<PartyRank, string> = {
+  front: 'frontrank',
+  mid: 'midrank',
+  back: 'backrank'
+};
 
 export class Routines {
   /** Whether the realm-entry probe has already run this session. */
@@ -303,6 +310,52 @@ export class Routines {
       priority: 'probe',
       coalesceKey: 'probe:party',
       reason: t('automation.routines.reasonPartyChanged')
+    });
+  }
+
+  /**
+   * Keep this character at its preferred rank in its own party.
+   *
+   * Reads "am I already there?" the same way the party card does — this
+   * character's own row in `state.party.members` — rather than a separately
+   * tracked rank that could drift from what the card shows. A row not yet on
+   * the roster (this character has just followed a leader, and the listing
+   * that would add its own row has not landed) reads the same as one whose
+   * `rank` is still null: not known to match, so it is worth one attempt.
+   *
+   * Gated on being in a party at all — `following` set, or a roster that
+   * is not empty — on top of `automation.enabled` and `party.autoRank`, so
+   * this character leaving its own party (`party-left` fired about *this*
+   * character rather than a fellow member) finds nothing to correct rather
+   * than sending a rank command for a party it no longer belongs to.
+   *
+   * At most one command per call: the client cannot see whether the server
+   * took it, so there is nothing here to wait for or retry. The next trigger
+   * — the same four roster events this rides beside, or the two config
+   * changes that call this directly — reads the roster again and decides
+   * again.
+   *
+   * `movement` band, not `probe`: this is the character's own positioning,
+   * the same footing walking a planned route stands on, and it should not
+   * queue behind a housekeeping ask. Its own coalesce key, so it neither
+   * suppresses nor is suppressed by the roster refresh (`probe:party`) it
+   * rides beside.
+   */
+  checkPartyRank(state: CharacterState): void {
+    if (!this.config.enabled || !this.config.party.autoRank) return;
+    const inParty = state.party.following !== null || state.party.members.length > 0;
+    if (!inParty) return;
+
+    const name = state.name?.toLowerCase() ?? '';
+    const self = state.party.members.find((member) => member.name.toLowerCase() === name);
+    const preferred = this.config.party.preferredRank;
+    if ((self?.rank ?? null) === preferred) return;
+
+    this.queue.enqueue({
+      command: RANK_COMMANDS[preferred],
+      priority: 'movement',
+      coalesceKey: 'movement:party-rank',
+      reason: t('automation.party.reasonAutoRank', { rank: preferred })
     });
   }
 

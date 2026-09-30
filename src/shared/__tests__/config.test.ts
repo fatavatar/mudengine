@@ -738,6 +738,8 @@ describe('following somebody', () => {
       assistLeader: false,
       defendParty: false,
       restWithLeader: false,
+      autoRank: false,
+      preferredRank: 'mid',
       askForHealBelow: 0,
       waitForMembersBelow: 0,
       waitNoLongerMinutes: 0,
@@ -755,6 +757,8 @@ describe('following somebody', () => {
         assistLeader: true,
         defendParty: true,
         restWithLeader: true,
+        autoRank: true,
+        preferredRank: 'front',
         askForHealBelow: 0.4,
         waitForMembersBelow: 0.5,
         waitNoLongerMinutes: 5,
@@ -768,6 +772,8 @@ describe('following somebody', () => {
       assistLeader: true,
       defendParty: true,
       restWithLeader: true,
+      autoRank: true,
+      preferredRank: 'front',
       askForHealBelow: 0.4,
       waitForMembersBelow: 0.5,
       waitNoLongerMinutes: 5,
@@ -777,6 +783,15 @@ describe('following somebody', () => {
       parEverySeconds: 15,
       parAfterRound: true
     });
+  });
+
+  // Case-insensitive, like this file's other closed-enum settings, and a
+  // word the roster would not recognise falls back to Mid rather than
+  // passing through.
+  it('coerces preferredRank case-insensitively, and falls back on an unknown word', () => {
+    expect(party({ preferredRank: 'FRONT' }).preferredRank).toBe('front');
+    expect(party({ preferredRank: 'Back' }).preferredRank).toBe('back');
+    expect(party({ preferredRank: 'sideways' }).preferredRank).toBe('mid');
   });
 
   // The server acknowledges a command a status line; a listing every second

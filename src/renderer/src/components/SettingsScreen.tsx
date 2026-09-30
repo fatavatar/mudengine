@@ -43,7 +43,15 @@ import RewritesDesigner from './RewriteDesigner';
 import { keepFocus } from '../lib/focus';
 import { t } from '../lib/i18n';
 import { COIN_NAME } from '../lib/coins';
-import { barOf, figureOf, fractionOf, joinNames, percentOf, splitNames } from '../lib/form';
+import {
+  barOf,
+  figureOf,
+  fractionOf,
+  joinNames,
+  percentOf,
+  RANK_OPTIONS,
+  splitNames
+} from '../lib/form';
 import {
   begin,
   canRedo,
@@ -83,6 +91,7 @@ import {
   type LocateMethod,
   type LootConfig,
   type RetreatStrategy,
+  type PartyRank,
   type PvpAction,
   type RewritesUiConfig,
   type SearchConfig
@@ -620,6 +629,9 @@ interface CharacterForm {
   partyAssist: boolean;
   partyDefend: boolean;
   partyRest: boolean;
+  /** `party.autoRank`: keep this character at `partyPreferredRank`. */
+  partyAutoRank: boolean;
+  partyPreferredRank: PartyRank;
   /** `party.askForHealBelow`, as a percentage string. */
   partyAskHeal: string;
   /** `party.waitForMembersBelow`, as a percentage string. */
@@ -842,6 +854,8 @@ function formOf(entry: ProfileEditable): CharacterForm {
     partyAssist: entry.party.assistLeader,
     partyDefend: entry.party.defendParty,
     partyRest: entry.party.restWithLeader,
+    partyAutoRank: entry.party.autoRank,
+    partyPreferredRank: entry.party.preferredRank,
     partyAskHeal: percent(entry.party.askForHealBelow),
     partyWaitBelow: percent(entry.party.waitForMembersBelow),
     partyWaitMinutes: String(entry.party.waitNoLongerMinutes),
@@ -1063,6 +1077,8 @@ function draftOf(form: CharacterForm): ProfileDraft {
       assistLeader: form.partyAssist,
       defendParty: form.partyDefend,
       restWithLeader: form.partyRest,
+      autoRank: form.partyAutoRank,
+      preferredRank: form.partyPreferredRank,
       askForHealBelow: fractionOf(form.partyAskHeal),
       waitForMembersBelow: fractionOf(form.partyWaitBelow),
       waitNoLongerMinutes: Number.parseInt(form.partyWaitMinutes, 10) || 0,
@@ -1416,6 +1432,8 @@ function emptyForm(
     partyAssist: party.assistLeader,
     partyDefend: party.defendParty,
     partyRest: party.restWithLeader,
+    partyAutoRank: party.autoRank,
+    partyPreferredRank: party.preferredRank,
     partyAskHeal: percent(party.askForHealBelow),
     partyWaitBelow: percent(party.waitForMembersBelow),
     partyWaitMinutes: String(party.waitNoLongerMinutes),
@@ -3708,6 +3726,21 @@ export default function SettingsScreen({
                           label={t('settings.party.restLabel')}
                           name="party-rest"
                           onChange={(value) => patch({ partyRest: value })}
+                        />
+                        <CheckField
+                          checked={form.partyAutoRank}
+                          hint={t('settings.party.autoRankHint')}
+                          label={t('settings.party.autoRankLabel')}
+                          name="party-auto-rank"
+                          onChange={(value) => patch({ partyAutoRank: value })}
+                        />
+                        <SelectField
+                          hint={t('settings.party.preferredRankHint')}
+                          label={t('settings.party.preferredRankLabel')}
+                          name="party-preferred-rank"
+                          onChange={(value) => patch({ partyPreferredRank: value as PartyRank })}
+                          options={RANK_OPTIONS()}
+                          value={form.partyPreferredRank}
                         />
                         <CheckField
                           checked={form.partyIgnoreParty}
