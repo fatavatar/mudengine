@@ -964,3 +964,194 @@ describe('asking for what has not been read', () => {
     routines.dispose();
   });
 });
+
+/**
+ * Keeping this character at its preferred rank — issue #9.
+ *
+ * `checkPartyRank` is called directly with a constructed state, the same
+ * seam `Recovery.test.ts` and `AutoCombat.test.ts` use for `restWithLeader`
+ * and `defendParty`: whether the right command, if any, was proposed is what
+ * matters, not which of the four roster events reached it. The wiring that
+ * calls this on `party-joined` / `party-left` / `party-rank-changed`, and on
+ * the two config-change cases, is `SessionManager`'s job and is not repeated
+ * here.
+ */
+describe('keeping this character at its preferred rank', () => {
+  type Rank = 'front' | 'mid' | 'back' | null;
+
+  const partyMember = (name: string, rank: Rank = null) => ({
+    name,
+    className: null,
+    health: null,
+    mana: null,
+    rank,
+    activity: null,
+    invited: false,
+    vitals: null
+  });
+
+  /**
+   * This character, named `Skinny`, in a party. `selfRank` is this
+   * character's own row; omit it from the roster with `selfListed: false` for
+   * the moment it has followed a leader but the listing that would add its
+   * own row has not landed yet — read the same way a row with a null rank is.
+   */
+  function withParty(
+    selfRank: Rank,
+    others: ReadonlyArray<{ name: string; rank?: Rank }> = [],
+    selfListed = true
+  ): CharacterState {
+    return {
+      ...EMPTY_CHARACTER,
+      phase: 'in-game',
+      name: 'Skinny',
+      party: {
+        following: 'Fatty',
+        members: [
+          ...(selfListed ? [partyMember('Skinny', selfRank)] : []),
+          ...others.map((entry) => partyMember(entry.name, entry.rank ?? null))
+        ],
+        engaged: {},
+        threatened: {}
+      }
+    };
+  }
+
+  const alone: CharacterState = { ...EMPTY_CHARACTER, phase: 'in-game', name: 'Skinny' };
+
+  const rankRoutines = (party: Partial<AutomationConfig['party']> = {}) =>
+    make({
+      party: {
+        ...DEFAULT_CONFIG.automation.party,
+        autoRank: true,
+        preferredRank: 'front',
+        ...party
+      }
+    });
+
+  it('does nothing while overall automation is off', () => {
+    const { routines, queue } = make({
+      enabled: false,
+      party: { ...DEFAULT_CONFIG.automation.party, autoRank: true, preferredRank: 'front' }
+    });
+    routines.checkPartyRank(withParty('mid'));
+    expect(queue.snapshot.pending).toEqual([]);
+  });
+
+  it('does nothing while autoRank is off', () => {
+    const { routines, queue } = rankRoutines({ autoRank: false });
+    routines.checkPartyRank(withParty('mid'));
+    expect(queue.snapshot.pending).toEqual([]);
+  });
+
+  it('does nothing while not in a party', () => {
+    const { routines, queue } = rankRoutines();
+    routines.checkPartyRank(alone);
+    expect(queue.snapshot.pending).toEqual([]);
+  });
+
+  it('does nothing once this character is already at its preferred rank', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'front' });
+    routines.checkPartyRank(withParty('front', [{ name: 'Fatty', rank: 'mid' }]));
+    expect(queue.snapshot.pending).toEqual([]);
+  });
+
+  it.each([
+    ['front', 'frontrank'],
+    ['mid', 'midrank'],
+    ['back', 'backrank']
+  ] as const)('sends %s when the current rank is the other two', (preferred, command) => {
+    const other: Rank = preferred === 'front' ? 'back' : 'front';
+    const { routines, queue } = rankRoutines({ preferredRank: preferred });
+    routines.checkPartyRank(withParty(other));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual([command]);
+  });
+
+  it('sends the preferred rank’s command when the current rank is unknown', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'back' });
+    routines.checkPartyRank(withParty(null));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['backrank']);
+  });
+
+  // This character has just followed a leader: `following` is set, but the
+  // listing that would add its own row to the roster has not landed.
+  it('sends the preferred rank’s command the moment this character joins', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'front' });
+    routines.checkPartyRank(withParty(null, [], false));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['frontrank']);
+  });
+
+  it('re-attempts when another member joins and this character is still out of position', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'front' });
+    routines.checkPartyRank(withParty('mid', [{ name: 'Fatty', rank: 'mid' }, { name: 'Vaelor' }]));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['frontrank']);
+  });
+
+  it('re-attempts when another member leaves and this character is still out of position', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'front' });
+    routines.checkPartyRank(withParty('mid', [{ name: 'Fatty', rank: 'front' }]));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['frontrank']);
+  });
+
+  it('re-checks on any rank change, including this character’s own', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'back' });
+    routines.checkPartyRank(withParty('mid', [{ name: 'Fatty', rank: 'front' }]));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['backrank']);
+  });
+
+  // The server's own confirmation of the change this client just asked for —
+  // read again, the roster now agrees, and nothing goes out a second time.
+  it('does not loop once the server confirms the rank it was asked to take', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'back' });
+    routines.checkPartyRank(withParty('back', [{ name: 'Fatty', rank: 'front' }]));
+    expect(queue.snapshot.pending).toEqual([]);
+  });
+
+  // Changing the preference while already in a party and out of position:
+  // `SessionManager` calls this again right away rather than waiting for a
+  // roster event; at this seam that is simply calling it again with the new
+  // config.
+  it('fires again once the preferred rank changes, if still out of position', () => {
+    const state = withParty('mid');
+    const before = rankRoutines({ preferredRank: 'mid' });
+    before.routines.checkPartyRank(state);
+    expect(before.queue.snapshot.pending).toEqual([]);
+
+    const after = rankRoutines({ preferredRank: 'front' });
+    after.routines.checkPartyRank(state);
+    expect(after.queue.snapshot.pending.map((intent) => intent.command)).toEqual(['frontrank']);
+  });
+
+  // Switching the master toggle on while already in a party and out of
+  // position: same seam, the same call with the toggle now on.
+  it('fires again once autoRank is switched on, if still out of position', () => {
+    const state = withParty('mid');
+    const off = rankRoutines({ autoRank: false, preferredRank: 'front' });
+    off.routines.checkPartyRank(state);
+    expect(off.queue.snapshot.pending).toEqual([]);
+
+    const on = rankRoutines({ autoRank: true, preferredRank: 'front' });
+    on.routines.checkPartyRank(state);
+    expect(on.queue.snapshot.pending.map((intent) => intent.command)).toEqual(['frontrank']);
+  });
+
+  it('queues in the movement band, on its own coalesce key', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'front' });
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.checkPartyRank(withParty('mid'));
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'frontrank',
+        priority: 'movement',
+        coalesceKey: 'movement:party-rank'
+      })
+    );
+  });
+
+  it('proposes at most one command per call', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'front' });
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    routines.checkPartyRank(withParty('back', [{ name: 'Fatty', rank: 'back' }]));
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+});

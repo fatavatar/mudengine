@@ -9787,7 +9787,8 @@ tr:hover .row-action.worn,
   font-variant-numeric: tabular-nums;
 }
 
-.gang-gangpath {
+.gang-gangpath,
+.player-auto-invite {
   display: flex;
   align-items: center;
   gap: 6px;

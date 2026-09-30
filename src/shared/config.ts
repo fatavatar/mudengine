@@ -27,7 +27,12 @@ import { asLoops, mergeNamed, type Loop } from './loops';
  * edge is one-way and the module-cycle rule is untouched. See
  * `src/shared/__tests__/module-cycle.test.ts`.
  */
-import { DENOMINATIONS, type Denomination, type VitalThresholds } from './character';
+import {
+  DENOMINATIONS,
+  type Denomination,
+  type PartyMember,
+  type VitalThresholds
+} from './character';
 import { asCoinNames, type CoinNames } from './coins';
 import {
   DEFAULT_CONSOLE_PALETTE,
@@ -49,7 +54,7 @@ import {
   type AlertRule,
   type Severity
 } from './notifications';
-import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
+import { isRemoteName, type PlayerGrant, type RemoteName } from './remotes';
 import type { ConnectionTarget, StreamEncoding } from './types';
 import { mobKey } from './world';
 import { asMonsterRules, type MonsterRule } from './monsterRules';
@@ -1135,10 +1140,11 @@ export interface RemotesConfig {
    */
   party: RemoteName[];
   /**
-   * What each named player may and may not ask for, keyed by the **lower-cased**
-   * name, as `PlayerRegistry` keys it. Absent is an empty grant: nothing.
+   * What each named player may and may not ask for, plus Auto Invite when
+   * seen, keyed by the **lower-cased** name, as `PlayerRegistry` keys it.
+   * Absent is `NO_PLAYER_GRANT`: nothing granted, nothing automatic.
    */
-  players: Record<string, RemoteGrant>;
+  players: Record<string, PlayerGrant>;
 }
 
 /**
@@ -1159,6 +1165,13 @@ export interface RemotesConfig {
  * stopping an automation that works.
  */
 export type EncumbranceGate = 'never' | 'medium' | 'heavy';
+
+/**
+ * Where a party member stands, reused rather than re-declared: one definition
+ * of what a rank is allowed to be, derived from the roster's own field
+ * (`PartyMember['rank']`) so the two cannot drift apart.
+ */
+export type PartyRank = NonNullable<PartyMember['rank']>;
 
 export interface LootConfig {
   /** Pick up coins the moment they land, and any a look lists. */
@@ -2355,6 +2368,19 @@ export interface PartyConfig {
    */
   restWithLeader: boolean;
   /**
+   * Keep this character at `preferredRank`, sending `frontrank`/`midrank`/
+   * `backrank` once whenever the roster says it is standing somewhere else.
+   * Off, like every other card here: a character nobody has opted in keeps
+   * whatever rank it already has, with no unsolicited command going out.
+   */
+  autoRank: boolean;
+  /**
+   * The rank `autoRank` tries to keep this character at. Mid, MegaMUD's own
+   * rank for a character nobody has moved — front and back are both a
+   * deliberate choice, never a default anybody drifts into.
+   */
+  preferredRank: PartyRank;
+  /**
    * Say `@heal` in the room below this share of maximum health, while in a
    * party — MegaMUD's *Ask For Healing* (`PartyAskHeal%`). 0 never asks. Said
    * once on the crossing and again every `tuning.remotes.healAskAgainMs` while
@@ -2845,6 +2871,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       assistLeader: false,
       defendParty: false,
       restWithLeader: false,
+      autoRank: false,
+      preferredRank: 'mid',
       askForHealBelow: 0,
       waitForMembersBelow: 0,
       waitNoLongerMinutes: 0,
@@ -3029,6 +3057,7 @@ export const AUTOMATION_SWITCHES = {
   assistLeader: ['party', 'assistLeader'],
   defendParty: ['party', 'defendParty'],
   restWithLeader: ['party', 'restWithLeader'],
+  autoRank: ['party', 'autoRank'],
   remotes: ['remotes', 'enabled'],
   gangpath: ['remotes', 'gangpath'],
   lookAtPlayers: ['talk', 'lookAtPlayers'],
@@ -4021,18 +4050,21 @@ function remoteNames(value: unknown, fallback: RemoteName[]): RemoteName[] {
 
 function playerGrants(
   value: unknown,
-  fallback: Record<string, RemoteGrant>
-): Record<string, RemoteGrant> {
+  fallback: Record<string, PlayerGrant>
+): Record<string, PlayerGrant> {
   if (value === undefined) return fallback;
   if (!isRecord(value)) return {};
-  const out: Record<string, RemoteGrant> = {};
+  const out: Record<string, PlayerGrant> = {};
   for (const [name, grant] of Object.entries(value)) {
     const key = name.trim().toLowerCase();
     if (key.length === 0 || !isRecord(grant)) continue;
-    const held = out[key] ?? { allow: [], deny: [] };
+    const held = out[key] ?? { allow: [], deny: [], autoInviteWhenSeen: false };
     out[key] = {
       allow: [...new Set([...held.allow, ...remoteNames(grant['allow'], [])])],
-      deny: [...new Set([...held.deny, ...remoteNames(grant['deny'], [])])]
+      deny: [...new Set([...held.deny, ...remoteNames(grant['deny'], [])])],
+      // Union with any earlier entry for the same key, like the two lists
+      // above: `Soul:` and `soul:` both saying yes is one yes, not a fight.
+      autoInviteWhenSeen: held.autoInviteWhenSeen || bool(grant['autoInviteWhenSeen'], false)
     };
   }
   return out;
@@ -4089,6 +4121,14 @@ const GATES: readonly EncumbranceGate[] = ['never', 'medium', 'heavy'];
 function gate(value: unknown, fallback: EncumbranceGate): EncumbranceGate {
   const word = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return GATES.find((known) => known === word) ?? fallback;
+}
+
+/** The roster's own three ranks — an unrecognised word falls back rather than passing through. */
+const PARTY_RANKS: readonly PartyRank[] = ['front', 'mid', 'back'];
+
+function partyRank(value: unknown, fallback: PartyRank): PartyRank {
+  const word = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return PARTY_RANKS.find((known) => known === word) ?? fallback;
 }
 
 function normalizeDrop(value: unknown): DropConfig {
@@ -4367,6 +4407,8 @@ export function normalizeParty(value: unknown): PartyConfig {
     assistLeader: bool(raw['assistLeader'], d.assistLeader),
     defendParty: bool(raw['defendParty'], d.defendParty),
     restWithLeader: bool(raw['restWithLeader'], d.restWithLeader),
+    autoRank: bool(raw['autoRank'], d.autoRank),
+    preferredRank: partyRank(raw['preferredRank'], d.preferredRank),
     askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow),
     waitForMembersBelow: fraction(raw['waitForMembersBelow'], d.waitForMembersBelow),
     waitNoLongerMinutes: int(raw['waitNoLongerMinutes'], d.waitNoLongerMinutes, 0, 240),

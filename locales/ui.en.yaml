@@ -1017,6 +1017,7 @@ toolbar:
   quests: Auto-Quest (Run a Plan)
   gear: Auto-Gear (Equipment Sets)
   assistLeader: Auto-Assist Leader
+  autoRank: Auto-Rank (Preferred Rank)
   autoDeposit: Auto-Deposit (Bank Coins)
   automation: Auto (On/Off)
   autoBless: Auto-Bless (Buff Spells)
@@ -2167,6 +2168,10 @@ cards:
     access:
       allowedValue: '{granted} of {total}'
       answering: Answering
+      autoInviteHint: Invites them the moment they're seen in the room, whichever of you walks
+        in — nobody has to ask. Not the same as granting @invite above, which only answers
+        their own @invite request.
+      autoInviteLabel: Auto Invite when seen
       gang: Gang
       gangGrantsNothing: this character grants its gang nothing
       gangNotShared: not in {gang}
@@ -3915,6 +3920,10 @@ settings:
       same permissions beside the listing.
     answerHint: Off, an @ command is read and ignored — answering needs the other character to run
       mudengine too.
+    autoInviteHint: Invites them the moment they're seen in the room, whichever of you walks in —
+      nobody has to ask. Not the same as granting @invite below, which only answers their own
+      @invite request. Works even with Enable Remote Control off above.
+    autoInviteLabel: Auto Invite when seen
     channelWarning:
       A channel by which another player’s typing moves the character — it answers nobody
       until something below is granted, and @kill and @hangup are always refused.
@@ -3948,6 +3957,18 @@ settings:
       Swing at what the leader — whoever this character follows — was last seen hitting, while it
       is still in the room. Never a player; still under the combat health floor.
     assistLabel: Auto-Assist Leader
+    autoRankHint:
+      Keep this character at Preferred Rank below, sending frontrank/midrank/backrank once
+      whenever the party listing says it is standing somewhere else. No retry, and no error if the
+      realm refuses it — exactly like typing the command by hand.
+    autoRankLabel: Auto-Rank (Keep Preferred Rank)
+    preferredRankHint:
+      Where Auto-Rank tries to keep this character standing. Mid until set, the same rank MegaMUD
+      leaves a character at that nobody has moved.
+    preferredRankLabel: Preferred Rank
+    preferredRankFront: Front
+    preferredRankMid: Mid
+    preferredRankBack: Back
     blessingsMoved:
       Blessing the party lives on the Spells tab now — one list for self and party, in priority
       order, recast on wear-off events with a clock behind them.
@@ -5259,6 +5280,7 @@ automation:
     reasonDefend: 'defend: {target} is attacking {member}'
     reasonRestWithLeader: 'resting with {leader}'
     reasonMeditateWithLeader: 'meditating with {leader}'
+    reasonAutoRank: 'auto-rank: moving to {rank} rank'
   queue:
     fumbledResend: The realm threw away “{command}” — sending it again.
   search:
@@ -5310,6 +5332,7 @@ automation:
     reasonAnswering: answering {name}
     reasonAsking: asking {who} {body}
     reasonAskingHeal: 'asking the party for a heal (@heal): health is at {percent}%'
+    reasonAutoInvite: 'Auto Invite when seen: {name} is in the room'
     reasonDo: '@do from {from}'
     reasonDropAll: '@drop-all from {from}'
     reasonForget: '@forget from {from}'

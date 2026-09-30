@@ -43,7 +43,15 @@ import RewritesDesigner from './RewriteDesigner';
 import { keepFocus } from '../lib/focus';
 import { t } from '../lib/i18n';
 import { COIN_NAME } from '../lib/coins';
-import { barOf, figureOf, fractionOf, joinNames, percentOf, splitNames } from '../lib/form';
+import {
+  barOf,
+  figureOf,
+  fractionOf,
+  joinNames,
+  percentOf,
+  RANK_OPTIONS,
+  splitNames
+} from '../lib/form';
 import {
   begin,
   canRedo,
@@ -83,12 +91,13 @@ import {
   type LocateMethod,
   type LootConfig,
   type RetreatStrategy,
+  type PartyRank,
   type PvpAction,
   type RewritesUiConfig,
   type SearchConfig
 } from '@shared/config';
 import { TRAINED_ATTRIBUTES, type TrainedAttribute } from '@shared/training';
-import { ACTIONABLE_REMOTES, type RemoteGrant, type RemoteName } from '@shared/remotes';
+import { ACTIONABLE_REMOTES, type PlayerGrant, type RemoteName } from '@shared/remotes';
 import { errorMessage } from '@shared/values';
 
 /**
@@ -143,8 +152,8 @@ function PlayerGrants({
   grants,
   onChange
 }: {
-  grants: Record<string, RemoteGrant>;
-  onChange(next: Record<string, RemoteGrant>): void;
+  grants: Record<string, PlayerGrant>;
+  onChange(next: Record<string, PlayerGrant>): void;
 }) {
   const names = Object.keys(grants).sort();
   const [chosen, setChosen] = useState<string | null>(null);
@@ -153,13 +162,14 @@ function PlayerGrants({
   const who = chosen !== null && chosen in grants ? chosen : (names[0] ?? null);
   const grant = who === null ? null : grants[who]!;
 
-  const write = (key: string, next: RemoteGrant): void => {
+  const write = (key: string, next: PlayerGrant): void => {
     const rest = { ...grants };
     // An emptied grant is removed, exactly as `SettingsEditor` removes it from
     // the file: two places that disagreed about what "nothing" looks like would
     // leave a name in the form that vanished on the next load.
-    if (next.allow.length === 0 && next.deny.length === 0) delete rest[key];
-    else rest[key] = next;
+    if (next.allow.length === 0 && next.deny.length === 0 && !next.autoInviteWhenSeen) {
+      delete rest[key];
+    } else rest[key] = next;
     onChange(rest);
   };
 
@@ -177,7 +187,9 @@ function PlayerGrants({
           setChosen(key);
           // Created empty and kept only once something is granted, so a name
           // typed by mistake leaves nothing behind.
-          if (!(key in grants)) onChange({ ...grants, [key]: { allow: [], deny: [] } });
+          if (!(key in grants)) {
+            onChange({ ...grants, [key]: { allow: [], deny: [], autoInviteWhenSeen: false } });
+          }
         }}
         placeholder={t('settings.remotes.addPlayerPlaceholder')}
         spellCheck={false}
@@ -209,7 +221,7 @@ function PlayerGrants({
             <button
               className="chip toggle"
               data-level="critical"
-              onClick={() => write(who, { allow: [], deny: [] })}
+              onClick={() => write(who, { allow: [], deny: [], autoInviteWhenSeen: false })}
               onMouseDown={keepFocus}
               title={t('settings.remotes.removePlayerTitle', { name: who })}
               type="button"
@@ -223,6 +235,7 @@ function PlayerGrants({
             mode="player"
             onSet={(remote, stance) =>
               write(who, {
+                ...grant,
                 allow:
                   stance === 'allow'
                     ? [...grant.allow, remote]
@@ -234,14 +247,30 @@ function PlayerGrants({
               })
             }
             onSetAll={(stance) =>
-              write(
-                who,
-                stance === 'allow'
+              // Auto Invite when seen rides along untouched: it answers no
+              // request at all, so clearing or granting every `@` remote says
+              // nothing about whether this person is still invited on sight.
+              write(who, {
+                ...grant,
+                ...(stance === 'allow'
                   ? { allow: [...ACTIONABLE_REMOTES], deny: [] }
-                  : { allow: [], deny: [] }
-              )
+                  : { allow: [], deny: [] })
+              })
             }
             subject={who}
+          />
+
+          {/*
+            Its own control, apart from the grid above: "Invite" on that grid
+            answers this person's own `@invite` request; this fires with
+            nobody asking. See `CONTEXT.md` › Party › Auto Invite when seen.
+          */}
+          <CheckField
+            checked={grant.autoInviteWhenSeen === true}
+            hint={t('settings.remotes.autoInviteHint')}
+            label={t('settings.remotes.autoInviteLabel')}
+            name={`remotes-auto-invite-${who}`}
+            onChange={(value) => write(who, { ...grant, autoInviteWhenSeen: value })}
           />
         </>
       )}
@@ -600,6 +629,9 @@ interface CharacterForm {
   partyAssist: boolean;
   partyDefend: boolean;
   partyRest: boolean;
+  /** `party.autoRank`: keep this character at `partyPreferredRank`. */
+  partyAutoRank: boolean;
+  partyPreferredRank: PartyRank;
   /** `party.askForHealBelow`, as a percentage string. */
   partyAskHeal: string;
   /** `party.waitForMembersBelow`, as a percentage string. */
@@ -771,7 +803,7 @@ interface CharacterForm {
    * did not carry this would delete every per-player permission the moment
    * somebody pressed Save on an unrelated field.
    */
-  remotePlayers: Record<string, RemoteGrant>;
+  remotePlayers: Record<string, PlayerGrant>;
 }
 
 function formOf(entry: ProfileEditable): CharacterForm {
@@ -822,6 +854,8 @@ function formOf(entry: ProfileEditable): CharacterForm {
     partyAssist: entry.party.assistLeader,
     partyDefend: entry.party.defendParty,
     partyRest: entry.party.restWithLeader,
+    partyAutoRank: entry.party.autoRank,
+    partyPreferredRank: entry.party.preferredRank,
     partyAskHeal: percent(entry.party.askForHealBelow),
     partyWaitBelow: percent(entry.party.waitForMembersBelow),
     partyWaitMinutes: String(entry.party.waitNoLongerMinutes),
@@ -1043,6 +1077,8 @@ function draftOf(form: CharacterForm): ProfileDraft {
       assistLeader: form.partyAssist,
       defendParty: form.partyDefend,
       restWithLeader: form.partyRest,
+      autoRank: form.partyAutoRank,
+      preferredRank: form.partyPreferredRank,
       askForHealBelow: fractionOf(form.partyAskHeal),
       waitForMembersBelow: fractionOf(form.partyWaitBelow),
       waitNoLongerMinutes: Number.parseInt(form.partyWaitMinutes, 10) || 0,
@@ -1396,6 +1432,8 @@ function emptyForm(
     partyAssist: party.assistLeader,
     partyDefend: party.defendParty,
     partyRest: party.restWithLeader,
+    partyAutoRank: party.autoRank,
+    partyPreferredRank: party.preferredRank,
     partyAskHeal: percent(party.askForHealBelow),
     partyWaitBelow: percent(party.waitForMembersBelow),
     partyWaitMinutes: String(party.waitNoLongerMinutes),
@@ -3688,6 +3726,21 @@ export default function SettingsScreen({
                           label={t('settings.party.restLabel')}
                           name="party-rest"
                           onChange={(value) => patch({ partyRest: value })}
+                        />
+                        <CheckField
+                          checked={form.partyAutoRank}
+                          hint={t('settings.party.autoRankHint')}
+                          label={t('settings.party.autoRankLabel')}
+                          name="party-auto-rank"
+                          onChange={(value) => patch({ partyAutoRank: value })}
+                        />
+                        <SelectField
+                          hint={t('settings.party.preferredRankHint')}
+                          label={t('settings.party.preferredRankLabel')}
+                          name="party-preferred-rank"
+                          onChange={(value) => patch({ partyPreferredRank: value as PartyRank })}
+                          options={RANK_OPTIONS()}
+                          value={form.partyPreferredRank}
                         />
                         <CheckField
                           checked={form.partyIgnoreParty}

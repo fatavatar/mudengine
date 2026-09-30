@@ -66,7 +66,7 @@ import type {
   SupplyItem
 } from './config';
 import type { GlobalDraft, LoginStepDraft, ProfileDraft, ServerDraft } from './drafts';
-import type { RemoteGrant, RemoteName } from './remotes';
+import type { PlayerGrant, RemoteName } from './remotes';
 import type { CureGates, SpellTargeting } from './spellcraft';
 import type { ThemePreference } from './themes';
 import type { ProfileAccent } from './profiles';
@@ -1280,7 +1280,7 @@ export interface IpcApi {
    *
    * Resolves to why it refused, or null, like every other save here.
    */
-  setRemoteGrant(session: SessionId, name: string, grant: RemoteGrant): Promise<string | null>;
+  setRemoteGrant(session: SessionId, name: string, grant: PlayerGrant): Promise<string | null>;
   /** Writes this character's whole gang list, for the same reason. */
   setGangRemotes(session: SessionId, remotes: RemoteName[]): Promise<string | null>;
   /** Turns gangpath answering on or off for one character. */

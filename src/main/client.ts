@@ -112,7 +112,7 @@ import {
   type AppConfig
 } from '../shared/config';
 import { DEFAULT_INTERNAL } from '../shared/internal';
-import { isRemoteName, REMOTE_NAMES, type RemoteGrant, type RemoteName } from '../shared/remotes';
+import { isRemoteName, REMOTE_NAMES, type PlayerGrant, type RemoteName } from '../shared/remotes';
 import type { Profile } from '../shared/profiles';
 import {
   asMessageTriggers,
@@ -1089,13 +1089,13 @@ function asSupplyItems(value: unknown): SupplyItem[] | null {
 }
 
 /** One player's grant off the wire, or `null`. */
-function asGrant(value: unknown): RemoteGrant | null {
+function asGrant(value: unknown): PlayerGrant | null {
   if (typeof value !== 'object' || value === null) return null;
   const record = value as Record<string, unknown>;
   const allow = asRemoteNames(record['allow']);
   const deny = asRemoteNames(record['deny']);
   if (allow === null || deny === null) return null;
-  return { allow, deny };
+  return { allow, deny, autoInviteWhenSeen: record['autoInviteWhenSeen'] === true };
 }
 
 /** Every character on disk, and whether a session is open for it. */

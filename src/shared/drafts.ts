@@ -77,7 +77,7 @@ import {
 import type { TrainedAttribute } from './training';
 import type { StreamEncoding } from './types';
 import { isRecord } from './values';
-import { isRemoteName, type RemoteGrant, type RemoteName } from './remotes';
+import { isRemoteName, type PlayerGrant, type RemoteName } from './remotes';
 import { asMonsterRules, type MonsterRule } from './monsterRules';
 
 const ENCODINGS: readonly StreamEncoding[] = ['cp437', 'utf8', 'latin1'];
@@ -675,7 +675,7 @@ export interface RemotesDraft {
   /** What anybody who has joined this character's party may ask for. */
   party: RemoteName[];
   /** Per-player grants, carried through untouched. See above. */
-  players: Record<string, RemoteGrant>;
+  players: Record<string, PlayerGrant>;
 }
 
 function text(value: unknown): string {
@@ -1421,13 +1421,17 @@ function remoteNames(value: unknown): RemoteName[] {
 }
 
 /** The per-player grants, keyed lower-case and bounded like every other list here. */
-function playerGrants(value: unknown): Record<string, RemoteGrant> {
+function playerGrants(value: unknown): Record<string, PlayerGrant> {
   if (!isRecord(value)) return {};
-  const out: Record<string, RemoteGrant> = {};
+  const out: Record<string, PlayerGrant> = {};
   for (const [name, grant] of Object.entries(value).slice(0, 256)) {
     const key = text(name).toLowerCase().slice(0, 64);
     if (key.length === 0 || !isRecord(grant)) continue;
-    out[key] = { allow: remoteNames(grant['allow']), deny: remoteNames(grant['deny']) };
+    out[key] = {
+      allow: remoteNames(grant['allow']),
+      deny: remoteNames(grant['deny']),
+      autoInviteWhenSeen: grant['autoInviteWhenSeen'] === true
+    };
   }
   return out;
 }

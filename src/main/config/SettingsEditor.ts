@@ -3,7 +3,7 @@ import path from 'node:path';
 import { isMap, isSeq, parse, Scalar } from 'yaml';
 
 import { editYaml, removeYaml, type EditResult } from './YamlFile';
-import type { RemoteGrant, RemoteName } from '../../shared/remotes';
+import type { PlayerGrant, RemoteName } from '../../shared/remotes';
 import { LoopStore, readLoops } from './LoopStore';
 import { ServerStore } from './ServerStore';
 import { directoryNames } from './dirs';
@@ -450,8 +450,10 @@ export class SettingsEditor {
   }
 
   /**
-   * One player's whole grant on one character — what they may ask for, and what
-   * they may never ask for whatever the gang says.
+   * One player's whole grant on one character — what they may ask for, what
+   * they may never ask for whatever the gang says, and whether this character
+   * invites them unasked on sight (Auto Invite when seen — a different trigger
+   * entirely, riding along on the same per-name entry; see `PlayerGrant`).
    *
    * Narrow on purpose, and narrow in the dimension that matters: a flyout holds
    * one name and knows nothing about the rest of that character's settings, so
@@ -469,15 +471,15 @@ export class SettingsEditor {
    * wrong; `deny` wins, so a remote in both arrives here already resolved by
    * dropping it from `allow`.
    *
-   * **An emptied grant is removed, not left as two empty lists.** A `players:`
-   * map that accumulated a key per person anybody ever clicked would grow
-   * without bound and would read, in the user's own file, as a list of people
-   * with permissions — when what it holds is people with none.
+   * **An emptied grant is removed, not left as two empty lists and a false.**
+   * A `players:` map that accumulated a key per person anybody ever clicked
+   * would grow without bound and would read, in the user's own file, as a
+   * list of people with permissions — when what it holds is people with none.
    *
    * Comments survive, like every write here: `editYaml` uses `parseDocument`,
    * and the file being edited is full of the user's own notes.
    */
-  setRemoteGrant(id: string, name: string, grant: RemoteGrant): EditResult {
+  setRemoteGrant(id: string, name: string, grant: PlayerGrant): EditResult {
     const who = name.trim();
     if (who.length === 0) return { ok: false, error: t('errors.settings.remoteNameRequired') };
     const file = this.profilePath(id);
@@ -492,10 +494,11 @@ export class SettingsEditor {
     const key = who.toLowerCase();
     const deny = [...new Set(grant.deny)];
     const allow = [...new Set(grant.allow)].filter((remote) => !deny.includes(remote));
+    const autoInviteWhenSeen = grant.autoInviteWhenSeen === true;
 
     return editYaml(file, {
       mutate: (document) => {
-        if (allow.length === 0 && deny.length === 0) {
+        if (allow.length === 0 && deny.length === 0 && !autoInviteWhenSeen) {
           document.deleteIn(['automation', 'remotes', 'players', key]);
           /*
            * And the map itself once the last name comes off it, so a file that
@@ -510,7 +513,7 @@ export class SettingsEditor {
         }
         document.setIn(
           ['automation', 'remotes', 'players', key],
-          document.createNode({ allow, deny })
+          document.createNode({ allow, deny, autoInviteWhenSeen })
         );
         /*
          * Block style, explicitly, because the map this writes into is usually
