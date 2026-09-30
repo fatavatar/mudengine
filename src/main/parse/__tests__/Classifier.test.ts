@@ -1899,6 +1899,24 @@ describe('the cheap eight', () => {
     ).toContain('now be warned');
   });
 
+  /* Skinny's kit, 2026-09-30: item names carry hyphens and apostrophes. */
+  it('reads wearing, holding and removing a name that is not all words', () => {
+    expect(
+      expectType('You are now holding jewel-encrusted warhammer.', 'user-equipped')['item']
+    ).toBe('jewel-encrusted warhammer');
+    expect(expectType("You are now wearing dented wizard's hat.", 'user-equipped')['item']).toBe(
+      "dented wizard's hat"
+    );
+    expect(expectType("You have removed dented wizard's hat.", 'user-removed')['item']).toBe(
+      "dented wizard's hat"
+    );
+    expect(
+      expectType('You have removed jewel-encrusted lantern and extinguished it.', 'user-removed')[
+        'item'
+      ]
+    ).toBe('jewel-encrusted lantern');
+  });
+
   it('reads the refusal to ready what is already in hand, captured live', () => {
     expect(
       expectType('You do not have quarterstaff left unequipped.', 'user-equipped-failed')['item']

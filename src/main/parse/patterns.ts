@@ -1871,7 +1871,12 @@ export const RULES: Rule[] = [
   { type: 'player-gets', pattern: /^You took (?:(?<count>\d+) )?(?<item>.+)\./ },
   { type: 'player-drops', pattern: /^(?<player>\w+) drops (?<item>.+)\./ },
   { type: 'player-drops', pattern: /^You dropped (?:(?<count>\d+) )?(?<item>.+)\./ },
-  { type: 'user-equipped', pattern: /^You are now wearing (?<item>[\w ]+)\.$/ },
+  /*
+   * Item names are not words: `jewel-encrusted warhammer` and `dented wizard's
+   * hat` are both on skinny, and a `[\w ]+` name left the warhammer's swap
+   * unread and the kit wearing it again every half minute (2026-09-30).
+   */
+  { type: 'user-equipped', pattern: /^You are now wearing (?<item>.+?)\.$/ },
   /*
    * Wielding, captured beside the wearing line it mirrors:
    *
@@ -1884,8 +1889,8 @@ export const RULES: Rule[] = [
    * type would be a second thing for every consumer to handle for no fact it
    * could then state.
    */
-  { type: 'user-equipped', pattern: /^You are now holding (?<item>[\w ]+)\.$/ },
-  { type: 'user-equipped', pattern: /^You lit the (?<item>[\w ]+)\.$/ },
+  { type: 'user-equipped', pattern: /^You are now holding (?<item>.+?)\.$/ },
+  { type: 'user-equipped', pattern: /^You lit the (?<item>.+?)\.$/ },
   { type: 'user-equipped-failed', pattern: /^You may not wear that item!/ },
   // `wear` for something already on, captured live while recovering a kit.
   { type: 'user-equipped-failed', pattern: /^You are already wearing (?<item>.+?)!$/ },
@@ -1896,7 +1901,7 @@ export const RULES: Rule[] = [
   },
   {
     type: 'user-removed',
-    pattern: /^You have removed (?<item>[\w ]+?)(?: and extinguished it)?\.$/
+    pattern: /^You have removed (?<item>.+?)(?: and extinguished it)?\.$/
   },
   /*
    * A readied light burning down, in the two spellings on record: `Your torch

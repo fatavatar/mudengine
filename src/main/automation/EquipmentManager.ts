@@ -109,8 +109,16 @@ export class EquipmentManager {
    * it is the one half of the situation that is not on the wire, and `sitting`
    * is `Recovery`'s, which keeps a character sitting through the casts that
    * break a rest (`Recovery.seated`).
+   *
+   * `aboutToFight` is `AutoCombat` about to open one: the fighting kit goes on
+   * first, because putting a weapon on ends a fight on this realm.
    */
-  onCharacter(state: CharacterState, moving: boolean, sitting: GearSituation['sitting']): void {
+  onCharacter(
+    state: CharacterState,
+    moving: boolean,
+    sitting: GearSituation['sitting'],
+    aboutToFight = false
+  ): void {
     if (!this.acting || state.phase !== 'in-game') return;
     /*
      * An unlisted pack is not an empty one. Nothing is worn off a listing
@@ -121,7 +129,7 @@ export class EquipmentManager {
 
     const now: GearSituation = {
       moving,
-      fighting: state.inCombat || state.combat.attackers.length > 0,
+      fighting: aboutToFight || state.inCombat || state.combat.attackers.length > 0,
       sitting,
       target: state.combat.target
     };

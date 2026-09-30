@@ -169,6 +169,15 @@ export interface AutoCombatEvents {
    * this one and spend a use count doing it.
    */
   round?(state: CharacterState): void;
+  /**
+   * Whether the kit for fighting is on, asked before a fight is opened.
+   * Asking has the equipment manager dress for the fight first, and false
+   * means a swap is on its way: the fight waits for it, as a step waits
+   * (`WalkerEvents.kitReady`). On this realm putting a weapon on ends a
+   * fight, so a swap sent after `*Combat Engaged*` cancelled the opening
+   * cast and left the fight off (skinny's warhammer, 2026-09-30).
+   */
+  kitReady?(state: CharacterState): boolean;
 }
 
 /**
@@ -224,8 +233,16 @@ const REFUSED_WORDS: Record<string, readonly string[]> = {
 interface CastProposal {
   spell: string;
   at: number;
-  /** When `You cast … on …` confirmed it; it counts against its cap once. */
+  /** When `You cast … on …` answered it, so that line is not counted as a repeat. */
   confirmedAt: number | null;
+}
+
+/** What one monster has been cast at and refused. See `AutoCombat.books`. */
+interface MonsterBook {
+  /** Casts sent at it, by configured spell, and the server's repeats of them. */
+  casts: Map<string, number>;
+  /** Spells the server said have no effect on it. */
+  refused: Set<string>;
 }
 
 /** How full the mana pool is, 0–1, or null when its maximum is unknown. */
@@ -399,10 +416,48 @@ export class AutoCombat {
   private proposed: CastProposal[] = [];
   /** Whether the drain spells stand in for the attack spells — `drainHolding`'s latch. */
   private draining = false;
-  /** Spells the server has said have no effect on the current target, this fight. */
-  private readonly ineffective = new Set<string>();
-  /** Confirmed casts against the current target, by configured spell — `attackCasts` / `areaCasts`. */
-  private readonly casts = new Map<string, number>();
+  /**
+   * What each monster in the room has been cast at and refused, by `mobKey`:
+   * `attackCasts` / `areaCasts`, and `Your spell has no effect on …`.
+   *
+   * Per monster and not per fight, because a fight here is interrupted all
+   * the time. A heal or a buff is answered by `*Combat Off*`, and a count kept
+   * per fight was wiped by it: the fight re-opened with soul rip already
+   * spent. A bodyguard (`moves to protect`) taking the spell and dying did
+   * the same (skinny, 2026-09-30). A book goes when fewer of that monster
+   * stand in the room, or the room changes. See `forgetGone`.
+   */
+  private readonly books = new Map<string, MonsterBook>();
+  /** How many of each monster the last room read held. See `forgetGone`. */
+  private present = new Map<string, number>();
+  /** The last room's name and ways out. See `forgetGone`. */
+  private roomSeen: string | null = null;
+  /**
+   * The cast sent and not yet gone off: the spell, and the monster it counts
+   * against.
+   *
+   * **A cast counts when it goes off, not when it is sent.** A heal, a buff
+   * or a weapon swap answered by `*Combat Off*` before the spell went off
+   * cancelled it. Counted on the send, the re-opened fight went to the
+   * weapon with the spell never cast (skinny, 2026-09-30). It goes off on
+   * this character's own round after the send: the spell's hit or miss is
+   * that round, whatever message the spell prints. A `You cast … on …`
+   * frame or a `no effect` refusal says the same. A fizzle is not a cast,
+   * and `*Combat Off*` drops it uncounted.
+   *
+   * While it is in flight the fight's action is not changed. The monster
+   * swings first as often as not, and `a` sent on its swing replaced the
+   * spell before it went off (skinny's giants swing four times between
+   * `srip` and the rip).
+   */
+  private inFlight: { spell: string; target: string } | null = null;
+  /**
+   * The monster a fight is waiting to open on until the kit is on (`kitReady`),
+   * by `mobKey`. Read by the session as part of the kit's situation
+   * (`awaitingKit`), so every pass dresses for the fight and not only the one
+   * the swing asked for. Let go when the fight opens, or the monster goes.
+   */
+  private kitFor: string | null = null;
   /**
    * What the fight is repeating: the spell it was engaged with, null for the
    * melee verb, undefined when nothing here knows (no fight, or one this
@@ -684,12 +739,22 @@ export class AutoCombat {
     this.draining = false;
     this.clearAreaTimer();
     this.lastDecision = null;
+    this.books.clear();
+    this.present = new Map();
+    this.roomSeen = null;
+    this.inFlight = null;
+    this.kitFor = null;
     this.clearRound();
   }
 
   dispose(): void {
     this.clearRound();
     this.clearAreaTimer();
+  }
+
+  /** Whether a fight is waiting for the kit to go on. See `kitFor`. */
+  get awaitingKit(): boolean {
+    return this.kitFor !== null;
   }
 
   /** Whether a route is being walked, which decides whether to start anything. */
@@ -1084,13 +1149,18 @@ export class AutoCombat {
   onBlock(block: Block, answering: string | null = null): void {
     switch (block.type) {
       case 'combat-status':
-        if (block.groups['status'] === 'Off') this.fightBrokenBy(answering);
+        if (block.groups['status'] === 'Off') {
+          // The cast in flight went with the fight, never having gone off.
+          this.inFlight = null;
+          this.fightBrokenBy(answering);
+        }
         return;
 
       case 'user-hits':
       case 'user-misses':
       case 'mob-hits':
       case 'mob-misses':
+        if (block.type === 'user-hits' || block.type === 'user-misses') this.wentOff();
         // A round of the room spell is a round like any: it is still going.
         if (this.areaEngaged && this.dealtBy(block)) this.areaSeenAt = Date.now();
         this.armRound();
@@ -1108,7 +1178,12 @@ export class AutoCombat {
           if (this.state !== null) this.breakOffEmptyRoom(this.state);
           return;
         }
-        this.noteIneffective();
+        this.wentOff();
+        this.noteIneffective(block.groups['target'] ?? this.state?.combat.target ?? null);
+        return;
+      case 'spell-failed':
+        // A fizzle is not a cast: the next round may send it again.
+        this.inFlight = null;
         return;
       case 'spell-cast':
         this.noteCast(block);
@@ -1185,24 +1260,18 @@ export class AutoCombat {
   onCharacter(state: CharacterState): void {
     const was = this.state;
     this.state = state;
-    /*
-     * A new target opens the per-target book again: the casts spent and the
-     * spells found to have no effect are facts about the monster that *was* in
-     * front of the character, and the next one may well take the spell the
-     * last one shrugged off. MegaMUD's `ClearOnceEngaged`, read literally.
-     *
-     * Opened on *leaving* a target, not on gaining one: a fight opened with a
-     * spell (`openingCast`) has that cast confirmed around the same moment
-     * `*Combat Engaged*` names the target, and clearing on the name would
-     * forget the first cast against the row's cap whenever the confirmation
-     * came first. Nothing else is counted while there is no target.
-     */
+    this.forgetGone(state);
+    // The monster the kit was going on for has gone: nothing to dress for.
+    if (
+      this.kitFor !== null &&
+      !state.room.occupants.some((who) => who.kind === 'mob' && mobKey(who.name) === this.kitFor)
+    ) {
+      this.kitFor = null;
+    }
+    // A new target: what the fight repeats against it is nobody's to say.
     const switching = this.stillSwitching(state);
     const before = was?.combat.target ?? null;
     if (!switching && before !== null && before !== state.combat.target) {
-      this.ineffective.clear();
-      this.casts.clear();
-      // And what the fight repeats against the next one is nobody's to say.
       this.combatAction = undefined;
     }
 
@@ -2403,6 +2472,11 @@ export class AutoCombat {
     const key = mobKey(target);
     const asked = this.opened.get(key);
     if (asked !== undefined && now - asked < cooldown) return false;
+    if (this.state !== null && this.events.kitReady !== undefined) {
+      this.kitFor = key;
+      if (!this.events.kitReady(this.state)) return false;
+    }
+    this.kitFor = null;
 
     const opener = this.opener(this.state, target);
     const aimed = this.aimedAt(target);
@@ -2432,6 +2506,7 @@ export class AutoCombat {
         priority: 'combat',
         coalesceKey: `pre-attack:${key}`,
         expiresAt: now + tuning().combat.engageCooldownMs,
+        onSent: this.sentCast(pre.spell, target),
         reason: t('automation.combat.reasonPreAttackSpell', { why, spell: pre.spell })
       });
       this.proposeCast(pre.spell, now);
@@ -2457,6 +2532,7 @@ export class AutoCombat {
       // Worthless if it arrives late: by then the thing has moved, died, or is
       // already fighting somebody else, and the command opens a *new* fight.
       expiresAt: now + tuning().combat.engageCooldownMs,
+      ...(cast === null ? {} : { onSent: this.sentCast(cast.spell, target) }),
       reason:
         cast === null
           ? t('automation.combat.reason', { why })
@@ -2520,15 +2596,18 @@ export class AutoCombat {
     target: string
   ): { spell: string; command: string } | null {
     const pre = this.ruleOf(target)?.preAttack;
-    if (pre === undefined || !this.preAttackOwed(pre)) return null;
+    if (pre === undefined || !this.preAttackOwed(pre, target)) return null;
     if (!this.aboveFloor(manaFraction(aimed))) return null;
     const command = this.castCommand(aimed, { spell: pre.spell, area: false }, target);
     return command === null ? null : { spell: pre.spell, command };
   }
 
   /** Whether a pre-attack spell still has casts to spend on this target. */
-  private preAttackOwed(pre: MonsterSpell): boolean {
-    return !this.ineffective.has(pre.spell) && !this.capped(pre.spell, pre.max > 0 ? pre.max : 1);
+  private preAttackOwed(pre: MonsterSpell, target: string): boolean {
+    return (
+      !this.bookOf(target).refused.has(pre.spell) &&
+      !this.capped(pre.spell, pre.max > 0 ? pre.max : 1, target)
+    );
   }
 
   /**
@@ -2708,7 +2787,7 @@ export class AutoCombat {
    */
   private roundSpell(state: CharacterState): void {
     const target = state.combat.target;
-    if (target === null) return;
+    if (target === null || this.inFlight !== null) return;
     const cast = this.castable(state, { preAttack: false });
     const command = cast === null ? null : this.castCommand(state, cast, target);
     const want = cast === null || command === null ? null : cast.spell;
@@ -2736,6 +2815,7 @@ export class AutoCombat {
       priority: 'combat',
       coalesceKey: 'round-attack',
       expiresAt: now + tuning().combat.roundMs * 20,
+      onSent: this.sentCast(cast.spell, target),
       reason: cast.area
         ? t('automation.combat.reasonRoundAreaSpell')
         : t('automation.combat.reasonRoundSpell')
@@ -2903,8 +2983,8 @@ export class AutoCombat {
     const area = draining && areaDrain.length > 0 ? areaDrain : this.spells.areaAttack.trim();
     if (
       area.length > 0 &&
-      !this.ineffective.has(area) &&
-      !this.capped(area, this.spells.areaCasts)
+      !this.bookOf(state.combat.target).refused.has(area) &&
+      !this.capped(area, this.spells.areaCasts, state.combat.target)
     ) {
       const costly = state.room.occupants.some(
         (who) => who.kind === 'mob' && who.costly === 'always'
@@ -2980,9 +3060,10 @@ export class AutoCombat {
      * the round attacks carry it: the fallback is never cast *first*, because
      * it is what is cast when the first choice cannot be, not a second spell.
      */
-    const spell = this.ineffective.has(attack) ? this.spells.attackFallback.trim() : attack;
-    if (spell.length === 0 || this.ineffective.has(spell)) return null;
-    if (this.capped(spell, this.spells.attackCasts)) return null;
+    const refused = this.bookOf(state.combat.target).refused;
+    const spell = refused.has(attack) ? this.spells.attackFallback.trim() : attack;
+    if (spell.length === 0 || refused.has(spell)) return null;
+    if (this.capped(spell, this.spells.attackCasts, state.combat.target)) return null;
     if (this.spells.minMana <= 0) return { spell, area: false };
     if (fraction === null) return { spell, area: false };
     return fraction < this.spells.minMana ? null : { spell, area: false };
@@ -3004,12 +3085,14 @@ export class AutoCombat {
   ): { spell: string; area: boolean } | null | undefined {
     const rule = this.ruleOf(target);
     const pre = rule?.preAttack;
-    if (preAttack && pre !== undefined && this.preAttackOwed(pre)) {
+    if (preAttack && pre !== undefined && this.preAttackOwed(pre, target)) {
       return this.aboveFloor(fraction) ? { spell: pre.spell, area: false } : null;
     }
     const own = rule?.attack;
-    if (own !== undefined && !this.ineffective.has(own.spell)) {
-      if (this.capped(own.spell, own.max > 0 ? own.max : this.spells.attackCasts)) return null;
+    if (own !== undefined && !this.bookOf(target).refused.has(own.spell)) {
+      if (this.capped(own.spell, own.max > 0 ? own.max : this.spells.attackCasts, target)) {
+        return null;
+      }
       return this.aboveFloor(fraction) ? { spell: own.spell, area: false } : null;
     }
     return undefined;
@@ -3057,7 +3140,11 @@ export class AutoCombat {
       if (!this.aboveFloor(fraction)) return null;
       return this.chosenSpell(state, true) ?? undefined;
     }
-    if (this.ineffective.has(drain) || this.capped(drain, this.spells.attackCasts))
+    const target = state.combat.target;
+    if (
+      this.bookOf(target).refused.has(drain) ||
+      this.capped(drain, this.spells.attackCasts, target)
+    )
       return undefined;
     return this.aboveFloor(fraction) ? { spell: drain, area: false } : null;
   }
@@ -3067,9 +3154,9 @@ export class AutoCombat {
     return this.spells.minMana <= 0 || fraction === null || fraction >= this.spells.minMana;
   }
 
-  /** Whether a per-target cap has been spent on this spell. 0 is no cap. */
-  private capped(spell: string, cap: number): boolean {
-    return cap > 0 && (this.casts.get(spell) ?? 0) >= cap;
+  /** Whether a per-monster cap has been spent on this spell. 0 is no cap. */
+  private capped(spell: string, cap: number, target: string | null): boolean {
+    return cap > 0 && (this.bookOf(target).casts.get(spell) ?? 0) >= cap;
   }
 
   /**
@@ -3088,9 +3175,10 @@ export class AutoCombat {
     drainsOnly = false
   ): { spell: string; area: boolean } | null {
     const { combat, magery, family } = this.realmClass();
-    const excluded = new Set<string>(this.ineffective);
+    const spent = this.bookOf(state.combat.target);
+    const excluded = new Set<string>(spent.refused);
     if (this.spells.attackCasts > 0) {
-      for (const [spell, count] of this.casts) {
+      for (const [spell, count] of spent.casts) {
         if (count >= this.spells.attackCasts) excluded.add(spell);
       }
     }
@@ -3222,21 +3310,22 @@ export class AutoCombat {
    * decision a person should be able to read back. The server's own sentence,
    * with the target in it, is on the Alerts card; this states the consequence.
    */
-  private noteIneffective(): void {
+  private noteIneffective(target: string | null): void {
     const proposal = this.refusedCast();
     this.proposed = this.proposed.filter((entry) => entry !== proposal);
     // A refusal of the server's own repeat is about what the fight is casting.
     const doing = this.combatAction;
     const cast = proposal ?? (typeof doing === 'string' ? { spell: doing } : undefined);
     if (cast === undefined) return;
-    if (this.ineffective.has(cast.spell)) return;
-    this.ineffective.add(cast.spell);
+    const refused = this.bookOf(target).refused;
+    if (refused.has(cast.spell)) return;
+    refused.add(cast.spell);
     const fallback = this.spells.attackFallback.trim();
     if (this.isArea(cast.spell)) {
       this.events.notice?.(t('automation.combat.spellIneffectiveArea', { spell: cast.spell }));
     } else if (this.sameSpell(cast.spell, this.spells.drain.trim() || null)) {
       this.events.notice?.(t('automation.combat.drainIneffective', { spell: cast.spell }));
-    } else if (fallback.length > 0 && fallback !== cast.spell && !this.ineffective.has(fallback)) {
+    } else if (fallback.length > 0 && fallback !== cast.spell && !refused.has(fallback)) {
       this.events.notice?.(
         t('automation.combat.spellIneffective', { spell: cast.spell, fallback })
       );
@@ -3248,13 +3337,18 @@ export class AutoCombat {
   }
 
   /**
-   * A cast the server confirmed, counted against the spell this module
-   * proposed — and only that one. The confirmation names the spell in full
-   * (`You cast magic missile on giant rat!`) where the configuration may hold
-   * the short word, so every spelling the resolver knows for the proposed
-   * spell is accepted and nothing else is: a heal confirmed in the same
-   * window is a different spell and must not spend the round spell's count.
-   * A fizzle (`spell-failed`) confirms nothing and so counts nothing.
+   * `You cast … on …`: the answer to a cast this module sent, or the server's
+   * own repeat of the spell the fight is engaged with.
+   *
+   * The answer is the cast going off (`wentOff`), and is matched to the
+   * proposal so it is not then read as a repeat as well. It names the spell in full where the
+   * configuration may hold the short word, so every spelling the resolver
+   * knows is accepted.
+   *
+   * A repeat is a cast nothing here sent, once a round (`combatAction`), and
+   * the whole of what spends a cap above one. It is counted only from this
+   * frame: a spell's own message (`You begin to chant in a fierce tone!`) is
+   * not read as a cast.
    */
   private noteCast(block: Block): void {
     if (block.groups['caster'] !== 'You' || block.groups['announced'] !== undefined) return;
@@ -3265,18 +3359,30 @@ export class AutoCombat {
     );
     if (cast !== undefined) {
       cast.confirmedAt = Date.now();
-      this.casts.set(cast.spell, (this.casts.get(cast.spell) ?? 0) + 1);
+      // Its send fizzled and this is the server casting it again: a cast all the same.
+      if (this.inFlight === null) this.countCast(cast.spell, this.state?.combat.target ?? null);
+      else this.wentOff();
       return;
     }
-    /*
-     * Or the server's own repeat of the spell the fight is engaged with — a
-     * cast nothing here sent, once a round (`combatAction`), and the whole of
-     * what spends a row's count after the first.
-     */
     const doing = this.combatAction;
     if (typeof doing === 'string' && this.sameSpell(doing, said)) {
-      this.casts.set(doing, (this.casts.get(doing) ?? 0) + 1);
+      this.countCast(doing, this.state?.combat.target ?? null);
     }
+  }
+
+  /** The queue's word that a cast at `target` went out: in flight until it goes off. */
+  private sentCast(spell: string, target: string): () => void {
+    return () => {
+      this.inFlight = { spell, target };
+    };
+  }
+
+  /** The cast in flight went off: one cast of it, against its monster. See `inFlight`. */
+  private wentOff(): void {
+    const cast = this.inFlight;
+    if (cast === null) return;
+    this.inFlight = null;
+    this.countCast(cast.spell, cast.target);
   }
 
   private armRound(): void {
@@ -3331,9 +3437,56 @@ export class AutoCombat {
     this.combatAction = undefined;
     this.switching = null;
     this.proposed = [];
-    this.ineffective.clear();
-    this.casts.clear();
+    this.inFlight = null;
     this.clearRound();
+  }
+
+  /**
+   * The books of monsters no longer here. A monster's book goes when fewer of
+   * its name stand in the room than on the last read: one died or left, and
+   * the one still standing may be a second of the same name, not yet cast at.
+   * A book for a name nobody in the room answers to goes too, unless it is
+   * the target. And a new room is new monsters.
+   */
+  private forgetGone(state: CharacterState): void {
+    const room = `${state.room.name ?? ''}|${state.room.exits.map((exit) => exit.direction).join(',')}`;
+    const counts = new Map<string, number>();
+    for (const who of state.room.occupants) {
+      if (who.kind !== 'mob') continue;
+      const key = mobKey(who.name);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    if (room !== this.roomSeen) {
+      this.books.clear();
+    } else {
+      const target = state.combat.target === null ? null : mobKey(state.combat.target);
+      for (const key of [...this.books.keys()]) {
+        const now = counts.get(key) ?? 0;
+        if (now < (this.present.get(key) ?? 0) || (now === 0 && key !== target)) {
+          this.books.delete(key);
+        }
+      }
+    }
+    this.roomSeen = room;
+    this.present = counts;
+  }
+
+  /** A monster's book, made on first use. A cast with no target has nobody's. */
+  private bookOf(target: string | null): MonsterBook {
+    if (target === null) return { casts: new Map(), refused: new Set() };
+    const key = mobKey(target);
+    let book = this.books.get(key);
+    if (book === undefined) {
+      book = { casts: new Map(), refused: new Set() };
+      this.books.set(key, book);
+    }
+    return book;
+  }
+
+  /** One cast of `spell` at `target`: sent, or repeated by the server. */
+  private countCast(spell: string, target: string | null): void {
+    const casts = this.bookOf(target).casts;
+    casts.set(spell, (casts.get(spell) ?? 0) + 1);
   }
 
   /** The monster table's row for a name, reaching through the realm's modifiers. */

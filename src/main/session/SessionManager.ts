@@ -1855,6 +1855,19 @@ export class SessionManager {
         // The round beat, for the one thing that rides it without being a
         // cast: the equipment manager's off-round invocation (todo 00).
         round: (state) => this.gear.round(state),
+        // The fighting kit before the fight, as a step waits for its kit
+        // (`kitReady` on the walker): a weapon put on ends a fight here.
+        kitReady: (state) => {
+          if (this.tracker.pendingMoves === 0) {
+            this.gear.onCharacter(
+              state,
+              this.walker.walking || this.loops.progress.status === 'running',
+              null,
+              true
+            );
+          }
+          return !this.gear.dressing;
+        },
         /*
          * The trace, not the console. A refusal to open a fight is not news
          * the *game's* surface should carry — it happens in every corridor and
@@ -5698,7 +5711,8 @@ export class SessionManager {
       this.gear.onCharacter(
         state,
         this.walker.walking || this.loops.progress.status === 'running',
-        this.recovery.recovering
+        this.recovery.recovering,
+        this.combat.awaitingKit
       );
     }
   }
