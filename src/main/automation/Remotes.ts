@@ -627,6 +627,15 @@ export class Remotes {
    * The only question left to ask at the moment of arrival is whether they
    * are already spoken for — joined, or already holding a pending invite from
    * this character — which `joinedTheParty` and `party.members` already know.
+   *
+   * **`invite` and the `@join` telepath that follows it are gated
+   * differently, on purpose.** `invite` is a plain in-game command — it works
+   * on anybody, whether or not they run this client — and stays independent
+   * of `remotes.enabled` like the rest of this method. The `@join` telepath
+   * only does anything for a peer running this client with its own remote
+   * control on, so it respects `remotes.enabled` the same way `askParty` and
+   * the `@wait`/`@ok` follower logic already do: that switch is the boundary
+   * of the whole peer `@` channel, not only the inbound half.
    */
   private autoInvite(state: CharacterState): void {
     // Keyed by the lower-cased name, like every grant, but carrying the
@@ -658,6 +667,28 @@ export class Remotes {
         coalesceKey: `remote:auto-invite:${key}`,
         reason: t('automation.remotes.reasonAutoInvite', { name })
       });
+      /*
+       * The peer-protocol nudge, so their own client — if it is one — can
+       * accept unattended, same idea as the reinvite sweep's broadcast
+       * `.@join` but aimed at just this one name.
+       *
+       * Enqueued directly, at the invite's own `probe` priority, rather than
+       * through the shared `ask()` (which sends at the `user` band): the
+       * queue sorts strictly by priority first (`CommandQueue`'s `pending`
+       * sort), and `user` outranks `probe` — so a `@join` sent through `ask()`
+       * would have jumped the not-yet-sent `invite` ahead of it and reached
+       * the wire first, asking them to join a party they have not been
+       * invited to yet. The same priority as the invite it follows keeps the
+       * two in the order they were queued.
+       */
+      if (this.config.remotes.enabled) {
+        this.queue.enqueue({
+          command: `/${name} @join`,
+          priority: 'probe',
+          coalesceKey: `remote:auto-invite-join:${key}`,
+          reason: t('automation.remotes.reasonAsking', { who: name, body: '@join' })
+        });
+      }
     }
   }
 

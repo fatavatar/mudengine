@@ -1716,7 +1716,7 @@ describe('Auto Invite when seen', () => {
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
   });
 
   it('invites them just the same when this character is the one who walks in on them', () => {
@@ -1727,7 +1727,7 @@ describe('Auto Invite when seen', () => {
     character.onCharacter(withOccupants(emptyRoom, 'Rend'));
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
   });
 
   it('sends nothing for a name not granted Auto Invite when seen', () => {
@@ -1787,7 +1787,7 @@ describe('Auto Invite when seen', () => {
     character.onCharacter(lapsed);
     character.onCharacter(withOccupants(lapsed, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
   });
 
   it('invites again after they simply leave and come back, having never been invited before', () => {
@@ -1795,12 +1795,12 @@ describe('Auto Invite when seen', () => {
     character.onCharacter(emptyRoom);
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
 
     character.onCharacter(emptyRoom);
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul', 'invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join', 'invite Soul', '/Soul @join']);
   });
 
   it('grants nothing else — Auto Invite when seen alone never answers their own @invite request', () => {
@@ -1830,7 +1830,7 @@ describe('Auto Invite when seen', () => {
     character.onCharacter(leading);
     character.onCharacter(withOccupants(leading, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
   });
 
   it('still invites while in no party at all', () => {
@@ -1838,15 +1838,29 @@ describe('Auto Invite when seen', () => {
     character.onCharacter(emptyRoom);
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     drain();
-    expect(sent).toEqual(['invite Soul']);
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
   });
 
-  it('fires even with Enable Remote Control off, since it never answers a request', () => {
+  it('sends the invite but not the @join telepath with Enable Remote Control off', () => {
+    // `invite` is a plain game command, independent of this switch. The
+    // `@join` telepath only does anything for a peer also running this
+    // client with its own remote control on, so — like every other outgoing
+    // telepath (`askParty`, `@wait`/`@ok`) — it respects the switch.
     const character = new Remotes(grantedTo('Soul', { enabled: false }), queue);
     character.onCharacter(emptyRoom);
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));
     drain();
     expect(sent).toEqual(['invite Soul']);
+  });
+
+  it('does not resend the @join telepath on a later tick without a fresh invite', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul', '/Soul @join']);
   });
 
   it('is independent of the reactive @invite grant — granted alone, it does nothing on sight', () => {
