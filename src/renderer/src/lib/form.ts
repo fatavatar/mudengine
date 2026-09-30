@@ -24,7 +24,7 @@ export const GRADE_OPTIONS = (): Array<{ value: EncumbranceGate; label: string }
 ];
 
 /**
- * The three formation ranks, in the roster's own order — front to back — so
+ * The three party ranks, in the roster's own order — front to back — so
  * the one select offering them agrees with the party card's own layout.
  */
 export const RANK_OPTIONS = (): Array<{ value: PartyRank; label: string }> => [

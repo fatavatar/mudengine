@@ -327,7 +327,7 @@ export class Routines {
    * is not empty — on top of `automation.enabled` and `party.autoRank`, so
    * this character leaving its own party (`party-left` fired about *this*
    * character rather than a fellow member) finds nothing to correct rather
-   * than sending a rank command for a formation it no longer belongs to.
+   * than sending a rank command for a party it no longer belongs to.
    *
    * At most one command per call: the client cannot see whether the server
    * took it, so there is nothing here to wait for or retry. The next trigger
