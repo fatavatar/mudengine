@@ -2156,6 +2156,10 @@ cards:
     access:
       allowedValue: '{granted} of {total}'
       answering: Answering
+      autoInviteHint: Invites them the moment they're seen in the room, whichever of you walks
+        in — nobody has to ask. Not the same as granting @invite above, which only answers
+        their own @invite request.
+      autoInviteLabel: Auto Invite when seen
       gang: Gang
       gangGrantsNothing: this character grants its gang nothing
       gangNotShared: not in {gang}
@@ -3903,6 +3907,10 @@ settings:
       same permissions beside the listing.
     answerHint: Off, an @ command is read and ignored — answering needs the other character to run
       mudengine too.
+    autoInviteHint: Invites them the moment they're seen in the room, whichever of you walks in —
+      nobody has to ask. Not the same as granting @invite below, which only answers their own
+      @invite request. Works even with Enable Remote Control off above.
+    autoInviteLabel: Auto Invite when seen
     channelWarning:
       A channel by which another player’s typing moves the character — it answers nobody
       until something below is granted, and @kill and @hangup are always refused.
@@ -5275,6 +5283,7 @@ automation:
     reasonAnswering: answering {name}
     reasonAsking: asking {who} {body}
     reasonAskingHeal: 'asking the party for a heal (@heal): health is at {percent}%'
+    reasonAutoInvite: 'Auto Invite when seen: {name} is in the room'
     reasonDo: '@do from {from}'
     reasonDropAll: '@drop-all from {from}'
     reasonForget: '@forget from {from}'
