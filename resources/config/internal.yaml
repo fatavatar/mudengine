@@ -522,6 +522,15 @@ tuning:
     # How long a heal proposal stays worth sending.
     healExpiresMs: 3000
 
+    # How far short of its maximum mana has to be, in points, before the mana
+    # regen spell is cast. MegaMUD's own figure.
+    manaRegenShortfall: 20
+
+    # How long mana may go without rising before that counts as a tick of
+    # nothing, for Min Flux Rate: the mana regen spell is cast again when a tick
+    # brings less than that setting. MegaMUD waits 34 seconds.
+    manaTickWaitMs: 34000
+
     # Long enough for the next status line to say whether the heal worked.
     healCooldownMs: 6000
 
@@ -853,6 +862,13 @@ tuning:
     # Paid only where something could follow: a room the character left empty
     # settles for nothing.
     followSettleMs: 350
+
+    # How long a leader stands in the room a text exit led to (go manhole, go
+    # portal), waiting for the party members who stood with it to arrive. The
+    # realm carries followers through a direction and not through a phrase, so
+    # each crosses on their own client; one who has not arrived by then is
+    # walked on without, and the walk says so.
+    partyCatchUpMs: 30000
 
     # How far the character may have wandered from what it was walking before
     # pressing play asks about it first.

@@ -30,6 +30,7 @@ import Advanced from './Advanced';
 import CarrySections from './CarrySections';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
+import RegenFields from './RegenFields';
 import SpellField, { castableOn, drainsIn, refusesTarget } from './SpellPicker';
 import { castsOnOthers, castsOnSelf } from '@shared/spellcraft';
 import FormActions from './FormActions';
@@ -65,7 +66,8 @@ import type {
   ProfileDraft,
   ServerDraft,
   BlessingDraft,
-  CuresDraft
+  CuresDraft,
+  RegenDraft
 } from '@shared/drafts';
 import type { Loop, ScopedLoop } from '@shared/loops';
 import type { ProfileEditable, SessionId, SettingsSnapshot } from '@shared/ipc';
@@ -518,6 +520,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'spells-round', label: t('settings.spells.legend') },
     { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
+    { id: 'spells-regen', label: t('settings.spells.regenLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
   ],
@@ -622,8 +625,6 @@ interface CharacterForm {
   /** `party.waitForMembersBelow`, as a percentage string. */
   partyWaitBelow: string;
   partyWaitMinutes: string;
-  /** `party.catchUpWaitSeconds`, as a seconds string. */
-  partyCatchUpWaitSeconds: string;
   partyIgnoreWait: boolean;
   partyIgnoreParty: boolean;
   partyRequestHealth: boolean;
@@ -683,6 +684,8 @@ interface CharacterForm {
   spellMinMana: string;
   /** Cures by affliction, and the blessings kept up by events. */
   spellCures: CuresDraft;
+  /** MegaMUD's regen and when-full spells. */
+  spellRegen: RegenDraft;
   spellBlessings: BlessingDraft[];
   spellNotifyWearOff: boolean;
   spellAutoBless: boolean;
@@ -842,7 +845,6 @@ function formOf(entry: ProfileEditable): CharacterForm {
     partyAskHeal: percent(entry.party.askForHealBelow),
     partyWaitBelow: percent(entry.party.waitForMembersBelow),
     partyWaitMinutes: String(entry.party.waitNoLongerMinutes),
-    partyCatchUpWaitSeconds: String(entry.party.catchUpWaitSeconds),
     partyIgnoreWait: entry.party.ignoreWaitWhenLeading,
     partyIgnoreParty: entry.party.ignorePartyWhenFollowing,
     partyRequestHealth: entry.party.requestPartyHealth,
@@ -885,6 +887,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     spellHealParty: entry.spells.healParty,
     spellMinMana: percent(entry.spells.minMana),
     spellCures: { ...entry.spells.cures },
+    spellRegen: { ...entry.spells.regen },
     spellBlessings: entry.spells.blessings.map((blessing) => ({ ...blessing })),
     spellNotifyWearOff: entry.spells.notifyPartyOnWearOff,
     spellAutoBless: entry.spells.autoBless,
@@ -1063,7 +1066,6 @@ function draftOf(form: CharacterForm): ProfileDraft {
       askForHealBelow: fractionOf(form.partyAskHeal),
       waitForMembersBelow: fractionOf(form.partyWaitBelow),
       waitNoLongerMinutes: Number.parseInt(form.partyWaitMinutes, 10) || 0,
-      catchUpWaitSeconds: Number.parseInt(form.partyCatchUpWaitSeconds, 10) || 0,
       ignoreWaitWhenLeading: form.partyIgnoreWait,
       ignorePartyWhenFollowing: form.partyIgnoreParty,
       requestPartyHealth: form.partyRequestHealth,
@@ -1108,6 +1110,13 @@ function draftOf(form: CharacterForm): ProfileDraft {
         poison: form.spellCures.poison.trim(),
         disease: form.spellCures.disease.trim(),
         freedom: form.spellCures.freedom.trim()
+      },
+      regen: {
+        ...form.spellRegen,
+        hp: form.spellRegen.hp.trim(),
+        mana: form.spellRegen.mana.trim(),
+        hpFull: form.spellRegen.hpFull.trim(),
+        manaFull: form.spellRegen.manaFull.trim()
       },
       blessings: form.spellBlessings.map((blessing) => ({
         ...blessing,
@@ -1410,7 +1419,6 @@ function emptyForm(
     partyAskHeal: percent(party.askForHealBelow),
     partyWaitBelow: percent(party.waitForMembersBelow),
     partyWaitMinutes: String(party.waitNoLongerMinutes),
-    partyCatchUpWaitSeconds: String(party.catchUpWaitSeconds),
     partyIgnoreWait: party.ignoreWaitWhenLeading,
     partyIgnoreParty: party.ignorePartyWhenFollowing,
     partyRequestHealth: party.requestPartyHealth,
@@ -1450,6 +1458,7 @@ function emptyForm(
     spellHealParty: spells.healParty,
     spellMinMana: percent(spells.minMana),
     spellCures: { ...spells.cures },
+    spellRegen: { ...spells.regen },
     spellBlessings: spells.blessings.map((blessing) => ({ ...blessing })),
     spellNotifyWearOff: spells.notifyPartyOnWearOff,
     spellAutoBless: spells.autoBless,
@@ -3610,6 +3619,17 @@ export default function SettingsScreen({
                         />
                       </fieldset>
 
+                      <fieldset className="settings-menus" data-fieldset="spells-regen">
+                        <legend>{t('settings.spells.regenLegend')}</legend>
+                        <p className="settings-note">{t('settings.spells.regenNote')}</p>
+                        <RegenFields
+                          namePrefix="character"
+                          onChange={(spellRegen) => patch({ spellRegen })}
+                          regen={form.spellRegen}
+                          spells={shownBook.selfHeals}
+                        />
+                      </fieldset>
+
                       <fieldset className="settings-menus" data-fieldset="spells-cures">
                         <legend>{t('settings.spells.cureLegend')}</legend>
                         <p className="settings-note">{t('settings.spells.cureNote')}</p>
@@ -3716,13 +3736,6 @@ export default function SettingsScreen({
                             name="party-wait-minutes"
                             onChange={(value) => patch({ partyWaitMinutes: value })}
                             value={form.partyWaitMinutes}
-                          />
-                          <NumberField
-                            hint={t('settings.party.catchUpWaitHint')}
-                            label={t('settings.party.catchUpWaitLabel')}
-                            name="party-catch-up-wait-seconds"
-                            onChange={(value) => patch({ partyCatchUpWaitSeconds: value })}
-                            value={form.partyCatchUpWaitSeconds}
                           />
                           <NumberField
                             hint={t('settings.party.parEveryHint')}

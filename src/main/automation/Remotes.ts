@@ -292,6 +292,8 @@ export class Remotes {
   private seen = false;
   /** The leader a `join` went to (`joinKey`), until the next prompt, which follows its answer. */
   private joinSentTo: string | null = null;
+  /** The last command a leader's `@party` had this character run, and when. See `ranForParty`. */
+  private partyRan: { command: string; at: number } | null = null;
 
   /**
    * Who stood in this character's room as of the last tick, lower-cased. See
@@ -872,6 +874,20 @@ export class Remotes {
     this.wantsHeal = false;
     this.seen = false;
     this.joinSentTo = null;
+    this.partyRan = null;
+  }
+
+  /**
+   * Whether a leader's `@party` has just had this character run `command`.
+   * A leader relaying a text exit says it ahead of the move, so the departure
+   * line a chase row answers arrives straight after, for the same crossing.
+   */
+  ranForParty(command: string, now = Date.now()): boolean {
+    return (
+      this.partyRan !== null &&
+      this.partyRan.command === command.trim().toLowerCase() &&
+      now - this.partyRan.at < tuning().messages.responseGapMs
+    );
   }
 
   /**
@@ -1296,6 +1312,7 @@ export class Remotes {
           priority: 'movement',
           reason: t('automation.remotes.reasonParty', { from })
         });
+        this.partyRan = { command: command.argument.trim().toLowerCase(), at: Date.now() };
         this.events.notice?.(t('automation.remotes.ranParty', { from, command: command.argument }));
         return;
       }

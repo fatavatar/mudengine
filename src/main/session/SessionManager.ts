@@ -66,6 +66,7 @@ import { Blessings } from '../automation/Blessings';
 import { CombatLease } from '../automation/CombatLease';
 import type { AutomationSwitch } from '../../shared/config';
 import { Cures } from '../automation/Cures';
+import { Regen } from '../automation/Regen';
 import { Potions } from '../automation/Potions';
 import { LoopRunner } from '../automation/LoopRunner';
 import type { LoopProgress } from '../../shared/loops';
@@ -1056,6 +1057,8 @@ export class SessionManager {
   private readonly heal: AutoHeal;
   private readonly potions: Potions;
   private readonly cures: Cures;
+  /** MegaMUD's regen and when-full spells. See `Regen`. */
+  private readonly regen: Regen;
   /** Blessings kept up by events on this character and the party. */
   private readonly blessings: Blessings;
   /** Asking a carried item for the blessing it can cast. See `AutoInvoke`. */
@@ -1723,6 +1726,14 @@ export class SessionManager {
       // come back. The same kind of fact as a move in flight, and refused for
       // the same reason -- see `Recovery.restInFlight` and todo 14.
       restInFlight: () => this.recovery.restInFlight,
+      // The kit before the step. The step is what ends sitting, so asking
+      // stands the sitting kit down, and the step waits for the swap that
+      // makes -- MegaMUD's post-rest command, sent before its move.
+      kitReady: (state) => {
+        this.recovery.stand();
+        if (this.tracker.pendingMoves === 0) this.gear.onCharacter(state, true, null);
+        return !this.gear.dressing;
+      },
       // A room being read again after a monster came, went or died.
       roomUnsettled: () => this.roomUnsettled(),
       /*
@@ -1916,7 +1927,8 @@ export class SessionManager {
          * so a MajorMUD server running a converted GreaterMUD realm does not
          * have it, and null is not `greatermud`.
          */
-        poisonRefusesRest: () => poisonRefusesRest(this.capabilities(), this.serverFamily)
+        poisonRefusesRest: () => poisonRefusesRest(this.capabilities(), this.serverFamily),
+        beforeRest: (state) => this.regen.beforeRest(state)
       }
     );
     /*
@@ -2723,6 +2735,13 @@ export class SessionManager {
       realmSpell,
       { notice: (message) => this.sink.notice(message) }
     );
+    this.regen = new Regen(
+      automation.spells,
+      automation.health,
+      automation.enabled,
+      this.queue,
+      realmSpell
+    );
     this.blessings = new Blessings(
       automation.spells,
       automation.enabled,
@@ -2756,6 +2775,7 @@ export class SessionManager {
     };
     this.heal.useCastGate(gate);
     this.cures.useCastGate(gate);
+    this.regen.useCastGate(gate);
     this.blessings.useCastGate(gate);
     /*
      * And the blessing a carried item can give, which is not a cast at all:
@@ -2953,7 +2973,15 @@ export class SessionManager {
       stated: (held, started, ended) => {
         if (this.tracker.noteStated(held, started, ended)) this.reactToState();
       },
-      fired: (trigger) => this.onMessageFired(trigger)
+      fired: (trigger) => this.onMessageFired(trigger),
+      // MegaMUD's chase rows: after the leader this character follows, and
+      // not again where the leader's `@party` already sent it.
+      chase: (target, command) => {
+        if (!this.automationConfig.enabled) return false;
+        const leader = this.tracker.current.party.following;
+        if (leader === null || leader.toLowerCase() !== target.toLowerCase()) return false;
+        return !this.remotes.ranForParty(command);
+      }
     });
 
     /*
@@ -3503,6 +3531,7 @@ export class SessionManager {
     this.roomOwed = null;
     this.potions.reset();
     this.cures.reset();
+    this.regen.reset();
     this.blessings.reset();
     this.combatLease.reset();
     this.invoke.reset();
@@ -4089,6 +4118,7 @@ export class SessionManager {
     this.roomOwed = null;
     this.potions.reset();
     this.cures.reset();
+    this.regen.reset();
     this.blessings.reset();
     this.combatLease.reset();
     this.invoke.reset();
@@ -4535,6 +4565,7 @@ export class SessionManager {
     this.heal.configure(automation.spells, automation.enabled);
     this.potions.configure(automation.health, automation.enabled);
     this.cures.configure(automation.spells, automation.enabled);
+    this.regen.configure(automation.spells, automation.health, automation.enabled);
     this.blessings.configure(automation.spells, automation.enabled);
     this.invoke.configure(automation.enabled && automation.spells.invokeItems);
     this.events.configure(automation.events, automation.enabled);
@@ -5321,6 +5352,10 @@ export class SessionManager {
      * shows. See `isPrompt`.
      */
     if (isPrompt(block.type)) this.queue.notePrompt();
+    // A meditation that ended by itself -- `You awake from deep meditation
+    // feeling stronger!`, the rest line with no state -- is MegaMUD's other
+    // post-meditate moment (`Recovery.seated`).
+    if (block.type === 'user-rests' && block.groups['state'] === undefined) this.recovery.stand();
     /*
      * Which command the next answer is about: the status line's own echo.
      *
@@ -5553,8 +5588,12 @@ export class SessionManager {
     // A cure is a heal chosen by a sentence rather than a number; a buff is
     // the least urgent thing here and refuses combat by itself. Neither on
     // the way out of a room, for the reason above.
+    // Regen and the when-full spells are one action a line, as MegaMUD's rest
+    // decision is: a line that cast one does not also sit the character down.
+    let regenCast = false;
     if (!this.isRetreating()) {
       this.cures.onCharacter(state);
+      regenCast = this.regen.onCharacter(state);
       this.blessings.onCharacter(state);
       // And the same question asked of the pack rather than the spellbook.
       // After the casts, because a bless this character can cast is the one
@@ -5577,18 +5616,6 @@ export class SessionManager {
       // unread purse for itself — never while an errand is carrying cash it
       // has just withdrawn to a shop.
       if (this.supplies.current === null) this.deposit.onCharacter(state);
-    }
-    /*
-     * And the kit, which is not under the escape guard above.
-     *
-     * Running away is a direction and dressing is not a command spent on the
-     * way out of a room: a swap proposed while an escape is in flight is
-     * queued behind it in a lower band and answered in the room it lands
-     * in, where the situation is asked again. What it must not cross is a
-     * move of this client's own, which is the guard it does have.
-     */
-    if (this.tracker.pendingMoves === 0) {
-      this.gear.onCharacter(state, this.walker.walking || this.loops.progress.status === 'running');
     }
     /*
      * And not while a route is being walked.
@@ -5619,7 +5646,27 @@ export class SessionManager {
      * safe neighbour, where the rest goes ahead, said once.
      */
     const away = this.restAway.consider(state, this.recovery.wouldRest(state));
-    if (away !== 'took-over' && this.mayRest()) this.restNow(state);
+    if (!regenCast && away !== 'took-over' && this.mayRest()) this.restNow(state);
+    /*
+     * And the kit, which is not under the escape guard above.
+     *
+     * Running away is a direction and dressing is not a command spent on the
+     * way out of a room: a swap proposed while an escape is in flight is
+     * queued behind it in a lower band and answered in the room it lands
+     * in, where the situation is asked again. What it must not cross is a
+     * move of this client's own, which is the guard it does have.
+     *
+     * After the rest, so the kit for sitting goes out with the `rest` that
+     * sat the character down — MegaMUD's pre-rest command goes before it
+     * (`Recovery.seated`) — rather than a status line later.
+     */
+    if (this.tracker.pendingMoves === 0) {
+      this.gear.onCharacter(
+        state,
+        this.walker.walking || this.loops.progress.status === 'running',
+        this.recovery.recovering
+      );
+    }
   }
 
   /**
@@ -5871,8 +5918,9 @@ export class SessionManager {
     this.heal.onCharacter(state);
     this.potions.onCharacter(state);
     this.cures.onCharacter(state);
+    const regenCast = this.regen.onCharacter(state);
     const away = this.restAway.consider(state, this.recovery.wouldRest(state));
-    if (away !== 'took-over' && this.mayRest()) this.restNow(state);
+    if (!regenCast && away !== 'took-over' && this.mayRest()) this.restNow(state);
   }
 
   /**
@@ -8939,18 +8987,6 @@ export class SessionManager {
     // The one door a person's stop comes through, so it is the one place that
     // can tell a hunt it was stopped *by somebody* rather than by the realm.
     this.hunt.noteStopped();
-  }
-
-  /**
-   * End an in-progress catch-up wait early, resuming movement at once.
-   *
-   * The leader's own override for the party relay's catch-up wait — the
-   * third way out CONTEXT.md's glossary names, beside everybody arriving and
-   * `catchUpWaitSeconds` running out. See `Walker.endCatchupWait` and ADR
-   * 0002. A no-op when nothing is waiting.
-   */
-  endCatchUpWait(): void {
-    this.walker.endCatchupWait();
   }
 
   /**

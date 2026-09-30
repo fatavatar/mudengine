@@ -583,6 +583,68 @@ describe('the resting ceiling', () => {
   });
 });
 
+/*
+ * What the kit dresses for (`GearSituation.sitting`), timed as `megamud.exe`
+ * times its Pre/Post Rest commands: on with the `rest`, off just before the
+ * next step or the fight — never at a health figure, and never for a heal
+ * cast between two sit-downs.
+ */
+describe('the seat the kit dresses for', () => {
+  it('is taken with the rest or meditation asked for, before the flag arrives', () => {
+    const recovery = make(health({ restBelow: 0.5, restTo: 0.9 }));
+    expect(recovery.recovering).toBeNull();
+    recovery.onCharacter(state({ hp: 30, hpMax: 80 }));
+    expect(recovery.recovering).toBe('resting');
+    const meditator = make(health({ meditateBelow: 0.5 }));
+    meditator.onCharacter(state({ mana: 10, manaMax: 100 }));
+    expect(meditator.recovering).toBe('meditating');
+  });
+
+  /* A rest the player typed, as MegaMUD's own `You are now resting` hook takes it. */
+  it('is taken when the flag rises on a rest this client did not ask for', () => {
+    const recovery = make(health());
+    recovery.observe(state({ hp: 80, hpMax: 80, resting: true }));
+    expect(recovery.recovering).toBe('resting');
+    recovery.observe(state({ mana: 9, manaMax: 10, meditating: true }));
+    expect(recovery.recovering).toBe('meditating');
+  });
+
+  /*
+   * The reviewed bug, the other way up: a finished rest used to keep the kit
+   * for sitting on into the lap that followed, below `restTo`.
+   */
+  it('is kept through a cast that broke the rest, and past restTo, until the step', () => {
+    const recovery = make(health({ restBelow: 0.5, restTo: 0.9 }));
+    recovery.observe(state({ hp: 30, hpMax: 80, resting: true }));
+    recovery.observe(state({ hp: 48, hpMax: 80 }));
+    expect(recovery.recovering).toBe('resting');
+    recovery.observe(state({ hp: 76, hpMax: 80, resting: true }));
+    expect(recovery.recovering).toBe('resting');
+    recovery.stand();
+    // The step has not gone yet, so the flag is still up: it does not re-arm.
+    recovery.observe(state({ hp: 76, hpMax: 80, resting: true }));
+    expect(recovery.recovering).toBeNull();
+    recovery.observe(state({ hp: 50, hpMax: 80 }));
+    expect(recovery.recovering).toBeNull();
+  });
+
+  it('is given up to a fight here', () => {
+    const recovery = make(health());
+    recovery.observe(state({ hp: 70, hpMax: 80, resting: true }));
+    recovery.observe(
+      state({ hp: 70, hpMax: 80, inCombat: true, combat: fighting({ attackers: ['cave worm'] }) })
+    );
+    expect(recovery.recovering).toBeNull();
+  });
+
+  it('is forgotten on reset', () => {
+    const recovery = make(health());
+    recovery.observe(state({ hp: 70, hpMax: 80, resting: true }));
+    recovery.reset();
+    expect(recovery.recovering).toBeNull();
+  });
+});
+
 describe('meditating', () => {
   it('meditates on low mana', () => {
     make(health({ meditateBelow: 0.5 })).onCharacter(state({ mana: 10, manaMax: 100 }));

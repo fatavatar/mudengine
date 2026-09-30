@@ -550,8 +550,17 @@ export const RULES: Rule[] = [
   onsetRule('held'),
   { type: 'user-held-ends', pattern: /^You can move again!$/ },
   onsetRule('confused'),
-  /* `You are now resting.` — the flag the next status line will carry, said first. */
-  { type: 'user-rests', pattern: /^You are now (?<state>resting|meditating)\.$/ },
+  /*
+   * `You are now resting.` — the flag the next status line will carry, said
+   * first. And its end when a meditation ends by itself, with no `state`:
+   * `You awake from deep meditation feeling stronger!` at full mana, and the
+   * next prompt without `(Meditating)` (`logs/2026-09-23_19-49-12_skinny.log`).
+   */
+  {
+    type: 'user-rests',
+    pattern:
+      /^You (?:are now (?<state>resting|meditating)\.|awake from deep meditation feeling stronger!)$/
+  },
 
   /* ----------------------------------------------------------- combat */
   { type: 'combat-status', pattern: /^\*Combat (?<status>Engaged|Off)\*/ },

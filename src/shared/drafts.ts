@@ -265,6 +265,7 @@ export interface GlobalDraft {
       healParty: boolean;
       minMana: number;
       cures: CuresDraft;
+      regen: RegenDraft;
       blessings: BlessingDraft[];
       notifyPartyOnWearOff: boolean;
       autoBless: boolean;
@@ -315,6 +316,15 @@ export interface CuresDraft {
   poison: string;
   disease: string;
   freedom: string;
+}
+
+/** MegaMUD's regen and when-full spells; see `RegenConfig`. */
+export interface RegenDraft {
+  hp: string;
+  mana: string;
+  manaMinTick: number;
+  hpFull: string;
+  manaFull: string;
 }
 
 /** A blessing kept up by events with a clock behind it; see `BlessingConfig`. */
@@ -588,6 +598,7 @@ export interface ProfileDraft {
     healParty: boolean;
     minMana: number;
     cures: CuresDraft;
+    regen: RegenDraft;
     blessings: BlessingDraft[];
     notifyPartyOnWearOff: boolean;
     autoBless: boolean;
@@ -1105,6 +1116,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       healParty: spells['healParty'] === true,
       minMana: unit(spells['minMana']),
       cures: asCures(spells['cures']),
+      regen: asRegen(spells['regen']),
       blessings: asBlessings(spells['blessings']),
       notifyPartyOnWearOff: spells['notifyPartyOnWearOff'] === true,
       // `!== false`: on unless it was turned off. See the field.
@@ -1313,6 +1325,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
         healParty: spells['healParty'] === true,
         minMana: unit(spells['minMana']),
         cures: asCures(spells['cures']),
+        regen: asRegen(spells['regen']),
         blessings: asBlessings(spells['blessings']),
         notifyPartyOnWearOff: spells['notifyPartyOnWearOff'] === true,
         autoBless: spells['autoBless'] !== false,
@@ -1446,6 +1459,17 @@ function asCures(value: unknown): CuresDraft {
     poison: text(raw['poison']).slice(0, 40),
     disease: text(raw['disease']).slice(0, 40),
     freedom: text(raw['freedom']).slice(0, 40)
+  };
+}
+
+function asRegen(value: unknown): RegenDraft {
+  const raw = isRecord(value) ? value : {};
+  return {
+    hp: text(raw['hp']).slice(0, 40),
+    mana: text(raw['mana']).slice(0, 40),
+    manaMinTick: Math.max(0, Math.min(9999, Math.round(Number(raw['manaMinTick']) || 0))),
+    hpFull: text(raw['hpFull']).slice(0, 40),
+    manaFull: text(raw['manaFull']).slice(0, 40)
   };
 }
 

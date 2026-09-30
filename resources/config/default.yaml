@@ -1409,11 +1409,21 @@ automation:
   # overlaid by whichever other set applies, so `Moving` is one line about boots
   # rather than a second copy of everything the character owns.
   #
-  # `when` is `always`, `moving` (a route or a lap under way) or `fighting`
-  # (anything swinging). A fighting set may add `mob:` to apply against one
+  # `when` is `always`, `moving` (a route or a lap under way), `resting` or
+  # `meditating` (sitting for recovery), or `fighting` (anything swinging). A fighting set may add `mob:` to apply against one
   # monster only -- the lap fought with throwing hammers and the one boss that
-  # wants the magic weapon. Most specific wins, and two sets that match equally
-  # are decided by the order they are written in.
+  # wants the magic weapon. Most specific wins, in that order, and two sets that
+  # match equally are decided by the order they are written in.
+  #
+  # The resting and meditating sets are MegaMUD's Pre/Post Rest and Pre/Post
+  # Meditate commands, and are timed the way MegaMUD times them: on with the
+  # `rest` or `med`, kept through the heals cast between sit-downs, and off
+  # just before the next step -- which waits for it -- or the fight that ends
+  # the sitting, or when a meditation ends by itself. A health figure never
+  # takes them off. Where only one of the two is written, it serves both. The
+  # amulet comes back because the base set names it, which is why the base
+  # below names the amulet the stone replaces. Putting something on does not
+  # break a rest.
   #
   # The off-hand comes off before a two-handed weapon goes on, and the weapon
   # hand is sent before the rest, so coming back the other way frees the hand
@@ -1423,7 +1433,7 @@ automation:
   #   sets:
   #     - name: Default
   #       when: always
-  #       wear: [plate boots, golden chalice, lifestealer]
+  #       wear: [plate boots, golden chalice, lifestealer, golden ruby-eyed amulet]
   #     - name: Moving
   #       when: moving
   #       wear: [brown leather boots]
@@ -1431,6 +1441,9 @@ automation:
   #       when: fighting
   #       mob: nasty sandworm
   #       wear: [nexus spear]
+  #     - name: Resting
+  #       when: resting
+  #       wear: [healing stone]
   gear:
     enabled: false
     sets: []
@@ -1644,6 +1657,23 @@ automation:
       poison: ''
       disease: ''
       freedom: ''
+
+    # MegaMUD's regen and when-full spells, timed as megamud.exe times them.
+    # `hp` is cast before a rest while health is short, with at least minMana
+    # left; the rest follows on the next line. `mana` is cast out of
+    # meditation whenever mana is 20 or more short of its maximum. Neither is
+    # cast again while a row of the realm's message table says it is still
+    # working, or, where the realm never says it ended, until health and mana
+    # have both been full. `manaMinTick` recasts `mana` while it is up when a
+    # tick brings less than this (or nothing for 34 seconds); 0 never does.
+    # `hpFull` and `manaFull` are cast once each time health reaches restTo and
+    # mana reaches meditateTo. Blank casts nothing.
+    regen:
+      hp: ''
+      mana: ''
+      manaMinTick: 0
+      hpFull: ''
+      manaFull: ''
 
     # Blessings kept up on this character and the party, in priority order --
     # the first entry is recast first when several are down. The spell names

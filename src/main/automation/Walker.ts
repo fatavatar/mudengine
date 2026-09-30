@@ -73,7 +73,7 @@ import {
 } from '../../shared/world';
 import type { Block } from '../../shared/blocks';
 import { REREAD_ROOM } from '../../shared/commands';
-import { isBlinding, type CharacterState, type PartyMember } from '../../shared/character';
+import { isBlinding, type CharacterState } from '../../shared/character';
 import { healthHolding, manaHolding, type AutomationConfig } from '../../shared/config';
 import { splitSpells } from '../../shared/spell-messages';
 import { t } from '../app/i18n';
@@ -290,6 +290,21 @@ export interface WalkerEvents {
    * before it existed.
    */
   restInFlight?(): boolean;
+  /**
+   * Whether the kit is on for the step about to go out: false while a swap
+   * for it is still on its way.
+   *
+   * MegaMUD sends its post-rest command before the move that ends the rest,
+   * and the move waits for it (`megamud.exe` `0x413c50`, from the path step
+   * and the move, 2026-09-29). This is that wait, and a moving set's boots
+   * get it too, where they used to go on after the first step. Being asked
+   * is also how the session learns the step is coming, so the kit for
+   * sitting stands down (`Recovery.stand`). Bounded by the swap's own expiry
+   * (`EquipmentManager.dressing`), so a swallowed `wear` cannot pin a walk.
+   *
+   * Absent, nothing waits.
+   */
+  kitReady?(state: CharacterState): boolean;
   /** A room re-read owed after a monster came, went or died. See `holdForRoom`. */
   roomUnsettled?(): boolean;
   /**
@@ -616,27 +631,27 @@ export class Walker {
    */
   private hold: WalkHold = null;
   /**
-   * The party roster (member names) right before a text-exit crossing's move
-   * went out, or null between crossings. Captured in `relayTextExit` and
-   * consumed the moment the step lands, so it never survives past the one
-   * crossing it was taken for.
+   * A party crossing a `Text:` exit behind this character, and how far its
+   * regrouping has got (`holdForParty`). Due when `index` reaches `due` on
+   * `route`, the room that phase's step leads to; any other room drops it, so
+   * a refused or replanned step waits for nobody.
+   *
+   * - `landing`: the relayed step's room. `members` are invited and waited for.
+   * - `listing`: the next step's room. Joined members came with it, so a `par`
+   *   there says who did not rejoin.
+   * - `returning`: the way back to the room they were left in (`regroup`).
+   * - `rejoin`: that room, with `route` the way on to `onTo`; nothing goes until
+   *   they have joined again.
    */
-  private catchupSnapshot: string[] | null = null;
-  /**
-   * The catch-up wait itself, while `hold === 'catchup'`, or null between
-   * crossings. `waiting` is the lower-cased names still missing from the
-   * room; `wasLeaving` and `step` are what `finishStep` needs to run the same
-   * arrival tail it would have run immediately, had nobody been missing —
-   * the three only ever change together, so one field rather than three.
-   */
-  private catchupWait: { waiting: Set<string>; wasLeaving: boolean; step: RouteStep } | null = null;
-  /**
-   * `catchupWait`'s own clock, a fixed span of seconds rather than
-   * `holdTimer`'s repeating beat — see `startCatchupWait`. Folded into
-   * `clearTimer()` rather than kept as a second cleanup call, the way
-   * `holdTimer` already is.
-   */
-  private catchupTimer: NodeJS.Timeout | null = null;
+  private crossing: {
+    phase: 'landing' | 'listing' | 'returning' | 'rejoin';
+    route: Route;
+    due: number;
+    members: string[];
+    since: number | null;
+    listing: 'unasked' | 'asked' | 'read';
+    onTo: RoomId | null;
+  } | null = null;
   /**
    * When the walk began waiting for a light, or null while it is not.
    *
@@ -1287,9 +1302,8 @@ export class Walker {
   stop(reason: string, quiet = false): void {
     if (this.status !== 'walking') return;
     this.clearTimer();
-    this.catchupSnapshot = null;
-    this.catchupWait = null;
     this.checking = null;
+    this.crossing = null;
     // The outstanding step is not going to be answered as this step any more,
     // so the clock it was being timed against goes with it. See `answers`.
     this.stepSentAt = null;
@@ -1317,8 +1331,7 @@ export class Walker {
     this.answers = [];
     this.stepSentAt = null;
     this.clearTimer();
-    this.catchupSnapshot = null;
-    this.catchupWait = null;
+    this.crossing = null;
     this.route = null;
     this.index = 0;
     // And the journey's own counter with it: `walked` survives a redrawn plan
@@ -1465,6 +1478,14 @@ export class Walker {
     if (block.type === 'user-dies') {
       this.stop(t('automation.walk.reasonDied'));
       return;
+    }
+
+    // The listing `holdForParty` asked for: who the realm still has in the party.
+    if (
+      (block.type === 'party-roster' || block.type === 'party-alone') &&
+      this.crossing?.listing === 'asked'
+    ) {
+      this.crossing.listing = 'read';
     }
 
     // A room printed after the check's Enter: what is on screen is now the
@@ -3175,14 +3196,6 @@ export class Walker {
 
     if (this.status !== 'walking' || this.route === null) return;
 
-    // Standing still for the party to catch up: the only thing a state push
-    // can mean here is somebody arriving (or not yet), so read the room and
-    // nothing else in `onCharacter` until the wait lets go.
-    if (this.hold === 'catchup') {
-      this.checkCatchupArrivals(state);
-      return;
-    }
-
     if (fightIsRunning(state)) {
       this.fightClearedAt = null;
       /*
@@ -3445,32 +3458,10 @@ export class Walker {
      */
     const wasLeaving = this.leavingAFight;
     this.leavingAFight = false;
+    this.inviteCrossed();
 
-    // The step that just landed was a text-exit crossing this client relayed
-    // to the party — take up the reinvite sweep and its catch-up wait before
-    // anything below decides whether the route is finished or takes another
-    // step. `catchupSnapshot` alone is the right test: only `relayTextExit`
-    // ever sets it, and only for the step it was just sent against. See
-    // `startCatchupWait`.
-    if (this.catchupSnapshot !== null) {
-      const snapshot = this.catchupSnapshot;
-      this.catchupSnapshot = null;
-      if (this.startCatchupWait(state, snapshot, wasLeaving, step)) return;
-    }
-
-    this.finishStep(state, wasLeaving, step);
-  }
-
-  /**
-   * What happens once a step is confirmed and nothing is holding it: finish
-   * the route, or take the next step. Split from `onCharacter`'s arrival
-   * branch so the catch-up wait above can run the same tail later, once it
-   * lets go, against the state as it is by then rather than the state the
-   * step landed in.
-   */
-  private finishStep(state: CharacterState, wasLeaving: boolean, step: RouteStep): void {
-    if (this.route === null) return;
     if (this.index >= this.route.steps.length) {
+      if (this.finishRegroup(state)) return;
       /*
        * Unless this walk came here for a lever, in which case arriving is the
        * middle of the journey and not the end of it. Ahead of everything
@@ -3661,6 +3652,8 @@ export class Walker {
      * into 4.5 seconds later.
      */
     if (fightIsRunning(state) && !this.leavingAFight) return this.answerFight();
+    // The party a relayed text exit left behind, once nothing is fighting.
+    if (this.holdForParty(state)) return true;
     /*
      * A hidden exit the room has not printed yet — todo 04's first point,
      * *"do not try the direction first unless it is available"*. Sending the
@@ -3674,8 +3667,10 @@ export class Walker {
       this.holdSearching(step);
       return true;
     }
-    if (this.holds >= tuning().walk.maxHolds) return false;
-    if (this.events.holdAt?.(state) !== true) return false;
+    if (this.holds >= tuning().walk.maxHolds || this.events.holdAt?.(state) !== true) {
+      // Last, because asking stands the character up: see `kitReady`.
+      return this.holdForKit(state);
+    }
     this.holds += 1;
     this.publish();
     this.holdTimer = setTimeout(() => {
@@ -3694,6 +3689,27 @@ export class Walker {
        * quarry nothing will engage costs 4.5 seconds and then the walk goes
        * on, which is the whole reason there is a bound rather than a wait.
        */
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  /**
+   * The kit before the step — see `WalkerEvents.kitReady`.
+   *
+   * Silent, like the fight hold: it lasts one `wear`, and the server says
+   * `You are now wearing` in its own words. Outside the beat's budget,
+   * because what bounds it is the swap's own expiry.
+   */
+  private holdForKit(state: CharacterState): boolean {
+    if (this.events.kitReady?.(state) !== false) return false;
+    // Another hold's beat is already running, and it asks again.
+    if (this.holdTimer !== null) return true;
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
       if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
       this.sendCurrent();
     }, tuning().walk.holdMs);
@@ -4276,214 +4292,6 @@ export class Walker {
     });
   }
 
-  /** Everyone in the party but this character — `Party.members` counts self in. */
-  private partyOthers(state: CharacterState): PartyMember[] {
-    const self = state.name?.toLowerCase();
-    return state.party.members.filter((member) => member.name.toLowerCase() !== self);
-  }
-
-  /**
-   * Before a text-exit crossing's move goes out: say it to the party first, as
-   * `@party <command>`, so followers' own clients can replay it — and undo the
-   * stealth that say costs, if the leader was sneaking a moment ago.
-   *
-   * **Ahead of `sneakFirst`, on purpose, not through `stepping`.** `sneakFirst`
-   * has already run by the point `stepping` fires (see its own comment), so
-   * hanging the relay off that hook would read `state.stealth` after the relay
-   * itself had broken it. Called one line earlier in `sendCurrent` instead, on
-   * the state from before either command goes out — see ADR 0002.
-   *
-   * A say, not a telepath: MegaMUD does not act on an `@party` sent by
-   * telepath, and saying it after the move would be saying it in the room the
-   * leader just left. `.` is this client's own convention for typing a say —
-   * see `Remotes.askForHeal`.
-   *
-   * Nothing is said solo, or while following somebody else's lead: a follower
-   * is not who this relay is for, and a leader with nobody following has
-   * nobody to tell. Skipped for every step but a `Text:` exit — a follower
-   * already sees `X leaves north` unaided.
-   *
-   * **`requirement.commands`, not `requirement.kind` and not
-   * `direction === 'portal'`.** Neither of the other two is the right test.
-   * `direction === 'portal'` is `PortalExit`'s own direction — a room-script
-   * teleport resolved by coordinates rather than an exit (`dive pool`) — and
-   * misses an ordinary `Text:` exit sitting on a cardinal slot entirely:
-   * measured live against `haven()`'s own `1/3 → 1/4`, `Text: go manhole`,
-   * whose route step keeps `direction: 'd'`. `requirement.kind === 'text'`
-   * is closer but still wrong: `WorldGraph.linkPortals` prices a *gated*
-   * room-script portal (`go portal` behind a `minlevel`/`maxlevel`) as
-   * `kind: 'level'` — "a level gate prices and blocks exactly as an exit's
-   * `Level:` does" — while still handing the phrase over as
-   * `requirement.commands`, exactly as an ungated one does. Reported live
-   * (2026-09-28): a leader crossing a level-gated `go portal` got no relay,
-   * no reinvite and no wait, because `kind` had become `'level'` on a step
-   * that still needed the phrase, not the bare direction, to cross. Testing
-   * for the phrase itself — `requirement.commands`, non-empty — is what
-   * `Requirement.commands`'s own doc comment already promises: "Commands
-   * that traverse this exit instead of the bare direction."
-   */
-  private relayTextExit(step: RouteStep, state: CharacterState): void {
-    if (!step.requirement?.commands?.length || state.party.following !== null) return;
-    const others = this.partyOthers(state);
-    if (others.length === 0) return;
-    const wasSneaking = state.stealth === 'sneaking';
-    /*
-     * `noGap` on both: measured live (2026-09-28) at 676ms behind the
-     * ordinary `minGapMs` floor, long enough for a follower's own client to
-     * hear the relay, replay it, and land in the new room before the
-     * leader's own move even reached the wire — which MegaMUD's own
-     * party-follow mechanic answers by snapping the follower back toward
-     * the leader's last (pre-crossing) room, undoing a crossing that had
-     * actually worked. See `Intent.noGap`.
-     */
-    this.queue.enqueue({
-      command: `.@party ${step.command}`,
-      priority: 'movement',
-      noGap: true,
-      reason: t('automation.walk.reasonPartyRelay', { command: step.command })
-    });
-    if (wasSneaking) {
-      // No wait behind this: `SneakCommand` replies the same sentence whether
-      // it worked or failed, so there is nothing meaningful to wait for — see
-      // ADR 0002. Coalesced with `sneakFirst`'s own key, since by the time
-      // that runs `state.stealth` is still `'sneaking'` here and it no-ops.
-      this.queue.enqueue({
-        command: 'sn',
-        priority: 'movement',
-        coalesceKey: 'sneak',
-        noGap: true,
-        reason: t('automation.walk.reasonSneak')
-      });
-    }
-    /*
-     * Physical presence, not the roster — measured live (2026-09-28): a
-     * follower whose own client fails to replay the exit gets told *You are
-     * no longer following Ishi* directly, but the **leader** is never sent
-     * the mirror sentence (`party-left`'s other half) for this. `state.party
-     * .members` on this side is therefore stale for exactly the case this
-     * exists to catch, and a snapshot taken from it never sees anyone
-     * missing. `state.room.occupants` is the fact this client actually gets
-     * told, on both sides of the crossing — see `startCatchupWait`.
-     *
-     * Taken now, right before the move reaches the wire, rather than at
-     * arrival: anyone not standing here with the leader this moment — having
-     * left the party, wandered off, or never been in the room at all — is
-     * simply not a candidate, which is what keeps a voluntary departure out
-     * of the reinvite sweep below without this having to know *why* they
-     * are not here.
-     */
-    const present = new Set(state.room.occupants.map((occupant) => occupant.name.toLowerCase()));
-    this.catchupSnapshot = others
-      .filter((member) => present.has(member.name.toLowerCase()))
-      .map((member) => member.name);
-  }
-
-  /**
-   * Once a text-exit crossing lands: invite everyone `relayTextExit`'s
-   * snapshot named, say `@join` so their clients can accept it unattended,
-   * and hold movement — only movement — for whoever is not yet physically
-   * here. Returns whether a wait was actually taken; `wasLeaving`/`step` are
-   * only kept for that case, to resume through `finishStep` once it lets go.
-   *
-   * **Every name in the snapshot, not a "missing" subset.** Measured live
-   * (2026-09-29), twice, across two sessions: MegaMUD's own party-follow
-   * flag does not survive a text-exit crossing even when the follower's own
-   * client replays it correctly and lands in the same room — `party` asked
-   * right after read `You are not in a party at the present time` with
-   * `Also here: Thom` still on screen from the room block two lines above.
-   * The realm's command table has no entry for a `Text:` exit (see
-   * `mudengine-automation`'s own glossary), so its native auto-follow — which
-   * works by re-issuing the leader's command for the follower — has nothing
-   * to re-issue and drops the relationship outright, regardless of whether
-   * this client's own relay-and-replay got the follower there anyway.
-   * Comparing to room presence for *whom to invite* was the wrong test: the
-   * party breaks whether or not the room holds them, so there is nobody to
-   * meaningfully exclude by presence alone, and only a genuinely voluntary
-   * departure — already filtered out of the snapshot by `relayTextExit`,
-   * before this ever runs — should be. Room presence stays the right test
-   * for the *wait* below, a different question: not "are they still
-   * following" but "have they physically caught up."
-   *
-   * One invite per name, once, whether or not it turns out to have been
-   * needed: no retry loop while the wait runs. See `mudengine-automation` ›
-   * Reinvite sweep, and ADR 0002's amendment on this.
-   */
-  private startCatchupWait(
-    state: CharacterState,
-    before: string[],
-    wasLeaving: boolean,
-    step: RouteStep
-  ): boolean {
-    if (before.length === 0) return false;
-    for (const name of before) {
-      this.queue.enqueue({
-        command: `invite ${name}`,
-        priority: 'movement',
-        reason: t('automation.walk.reasonReinvite', { name })
-      });
-    }
-    this.queue.enqueue({
-      command: '.@join',
-      priority: 'movement',
-      reason: t('automation.walk.reasonJoinCall')
-    });
-    // Only the wait cares whether anyone is actually missing from the room —
-    // the invites above already went out to everyone, unconditionally.
-    const here = new Set(state.room.occupants.map((occupant) => occupant.name.toLowerCase()));
-    const missing = before.filter((name) => !here.has(name.toLowerCase()));
-    if (missing.length === 0) return false;
-    const seconds = this.config.party.catchUpWaitSeconds;
-    // 0 means skip the wait entirely — the opposite of `waitNoLongerMinutes`'s
-    // "0 means forever" — so the invites above still go out, but nothing holds.
-    if (seconds <= 0) return false;
-    this.catchupWait = {
-      waiting: new Set(missing.map((name) => name.toLowerCase())),
-      wasLeaving,
-      step
-    };
-    this.hold = 'catchup';
-    this.publish();
-    this.catchupTimer = setTimeout(() => this.endCatchupWait(), seconds * 1000);
-    this.catchupTimer.unref?.();
-    return true;
-  }
-
-  /**
-   * A state push during the catch-up wait: let go the moment everyone it is
-   * holding for has been seen in this room. Settles on `room.occupants`
-   * (physical presence), not the party roster — see the glossary entry.
-   */
-  private checkCatchupArrivals(state: CharacterState): void {
-    if (this.catchupWait === null) return;
-    for (const occupant of state.room.occupants) {
-      this.catchupWait.waiting.delete(occupant.name.toLowerCase());
-    }
-    if (this.catchupWait.waiting.size === 0) this.endCatchupWait(state);
-  }
-
-  /**
-   * Let the catch-up wait go, whether everyone arrived, the timer ran out, or
-   * the leader overrode it — the three ways `mudengine-automation`'s glossary
-   * names. Resumes movement silently: no confirmation prompt, matching every
-   * other hold letting go.
-   *
-   * `freshState` is what `checkCatchupArrivals` already has in hand when
-   * presence settles the wait; the timeout and a manual override have nothing
-   * of their own, so they fall back to `stateNow`.
-   */
-  endCatchupWait(freshState?: CharacterState): void {
-    if (this.hold !== 'catchup') return;
-    this.clearTimer();
-    const resume = this.catchupWait;
-    this.catchupWait = null;
-    this.hold = null;
-    this.publish();
-    if (resume === null || this.status !== 'walking') return;
-    const state = freshState ?? this.events.stateNow?.();
-    if (state === undefined) return;
-    this.finishStep(state, resume.wasLeaving, resume.step);
-  }
-
   /**
    * Ask again in a beat, against the state as it will be then.
    *
@@ -4610,6 +4418,270 @@ export class Walker {
     }, tuning().walk.holdMs);
     this.holdTimer.unref?.();
     return true;
+  }
+
+  /**
+   * Leading across a `Text:` exit, say the phrase to the party first, as
+   * `@party <command>`: the realm carries followers through a direction and
+   * not through a phrase, so each must cross on their own client. MegaMUD
+   * does the same for a path step written `@party <command>`, the say going
+   * out ahead of the move (`megamud.exe` 0x40a0eb). Both skip the pacing gap
+   * (`Intent.noGap`): 676ms behind it, a follower landed first and was
+   * pulled back to the room the leader had not yet left (2026-09-28).
+   *
+   * Keyed on the phrase, `requirement.commands`, rather than the exit's kind:
+   * a level-gated `go portal` is priced `kind: 'level'` and still needs it
+   * (2026-09-28). Once per step, so a retry is not a second relay. The members
+   * standing here go to `holdForParty`, by room rather than roster, because
+   * a leader is not told when the crossing drops somebody (2026-09-28).
+   */
+  private relayTextExit(step: RouteStep, state: CharacterState): void {
+    // Once per step, and not on the way back to regroup (`regroup`).
+    if (this.crossing?.route === this.route) {
+      const { phase, due } = this.crossing;
+      if ((phase === 'landing' && due === this.index + 1) || phase === 'returning') return;
+    }
+    if (!step.requirement?.commands?.length || state.party.following !== null) return;
+    if (this.route === null) return;
+    const self = state.name?.toLowerCase();
+    const here = new Set(state.room.occupants.map((who) => who.name.toLowerCase()));
+    const members = state.party.members
+      .filter((member) => !member.invited)
+      .map((member) => member.name)
+      .filter((name) => name.toLowerCase() !== self && here.has(name.toLowerCase()));
+    if (members.length === 0) return;
+    this.crossing = {
+      phase: 'landing',
+      route: this.route,
+      due: this.index + 1,
+      members,
+      since: null,
+      listing: 'unasked',
+      onTo: null
+    };
+    this.queue.enqueue({
+      command: `.@party ${step.command}`,
+      priority: 'movement',
+      noGap: true,
+      reason: t('automation.walk.reasonPartyRelay', { command: step.command })
+    });
+    // The say breaks a sneak, and `sneakFirst` reads the state from before it.
+    if (state.stealth === 'sneaking') {
+      this.queue.enqueue({
+        command: 'sn',
+        priority: 'movement',
+        coalesceKey: 'sneak',
+        noGap: true,
+        reason: t('automation.walk.reasonSneak')
+      });
+    }
+  }
+
+  /** Whether the room just reached is the one the crossing's phase is due in. */
+  private crossingDue(): boolean {
+    return this.crossing?.route === this.route && this.crossing.due === this.index;
+  }
+
+  /**
+   * The crossing has landed: invite everybody who stood with the leader, once.
+   * The realm drops the party through a text exit even for a follower who
+   * crossed (2026-09-29, twice), and the follower's `autoJoin` answers. One
+   * `invite` each rather than MegaMUD's telepathed `@join` as well
+   * (`megamud.exe` 0x408050 sends one or the other): `Remotes` reads the
+   * two as one join.
+   */
+  private inviteCrossed(): void {
+    if (this.crossing?.phase === 'landing' && this.crossingDue())
+      this.invite(this.crossing.members);
+  }
+
+  private invite(names: readonly string[]): void {
+    for (const name of names) {
+      this.queue.enqueue({
+        command: `invite ${name}`,
+        priority: 'movement',
+        reason: t('automation.walk.reasonReinvite', { name })
+      });
+    }
+  }
+
+  /**
+   * The party a relayed text exit may have split, regathered before the walk
+   * goes on — MegaMUD's *Invite To Party If Seen*, which re-invites a member
+   * left behind and waits for them. Each phase of `crossing` holds in its own
+   * room, bounded by `tuning.walk.partyCatchUpMs`; a member still missing
+   * then is walked on without, and said so.
+   */
+  private holdForParty(state: CharacterState): boolean {
+    const crossing = this.crossing;
+    if (crossing === null) return false;
+    if (crossing.route !== this.route || crossing.due < this.index) return this.letPartyGo();
+    if (crossing.due !== this.index || crossing.phase === 'returning') return false;
+    // Walking out of a fight nothing here will end: standing still is the one thing it must not do.
+    if (this.leavingAFight) return this.letPartyGo();
+
+    const here = new Set(state.room.occupants.map((who) => who.name.toLowerCase()));
+    const joined = new Set(
+      state.party.members
+        .filter((member) => !member.invited)
+        .map((member) => member.name.toLowerCase())
+    );
+    const now = Date.now();
+    crossing.since ??= now;
+    const late = now - crossing.since >= tuning().walk.partyCatchUpMs;
+
+    if (crossing.phase === 'landing') {
+      const missing = crossing.members.filter((name) => !here.has(name.toLowerCase()));
+      if (missing.length > 0 && !late) return this.holdPartyBeat(state, 'partyHolding', missing);
+      if (missing.length > 0) return this.walkOnWithout(missing);
+      // Everybody is here; the next step's room says who is still in the party.
+      crossing.phase = 'listing';
+      crossing.due += 1;
+      crossing.since = null;
+      return this.releasePartyHold();
+    }
+
+    if (crossing.phase === 'listing') {
+      if (crossing.listing === 'unasked') {
+        crossing.listing = 'asked';
+        this.queue.enqueue({
+          command: 'party',
+          priority: 'probe',
+          coalesceKey: 'walk:par',
+          reason: t('automation.walk.reasonPartyListing')
+        });
+      }
+      if (crossing.listing !== 'read') {
+        return late ? this.letPartyGo() : this.holdPartyBeat(state, null, []);
+      }
+      const missing = crossing.members.filter(
+        (name) => !here.has(name.toLowerCase()) || !joined.has(name.toLowerCase())
+      );
+      return missing.length === 0 ? this.letPartyGo() : this.regroup(state, missing);
+    }
+
+    // `rejoin`: back where they were left, invited again.
+    const missing = crossing.members.filter(
+      (name) => !here.has(name.toLowerCase()) || !joined.has(name.toLowerCase())
+    );
+    if (missing.length === 0) return this.letPartyGo();
+    if (late) return this.walkOnWithout(missing);
+    return this.holdPartyBeat(state, 'partyRejoining', missing);
+  }
+
+  /** One beat of `holdForParty`, said once on the way in when `say` names what it is for. */
+  private holdPartyBeat(
+    state: CharacterState,
+    say: 'partyHolding' | 'partyRejoining' | null,
+    names: readonly string[]
+  ): true {
+    if (this.hold !== 'party') {
+      this.hold = 'party';
+      if (say !== null && !this.quiet) {
+        this.events.notice?.(
+          say === 'partyHolding'
+            ? t('automation.walk.partyHolding', { names: names.join(', ') })
+            : t('automation.walk.partyRejoining', { names: names.join(', ') })
+        );
+      }
+      this.publish();
+    }
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  private walkOnWithout(missing: readonly string[]): false {
+    if (!this.quiet) {
+      this.events.notice?.(t('automation.walk.partyLeftBehind', { names: missing.join(', ') }));
+    }
+    return this.letPartyGo();
+  }
+
+  /**
+   * Members the listing says did not come on with the party: walk back to the
+   * room they were left in, once, planned rather than reversed since the step
+   * may have no opposite. `finishRegroup` takes it from there. A way back the
+   * planner cannot give is walked on from, and said so.
+   */
+  private regroup(state: CharacterState, missing: readonly string[]): boolean {
+    const route = this.route;
+    const left = route?.steps[this.index - 1]?.from;
+    const onTo = route?.steps.at(-1)?.to;
+    if (route === null || left === undefined || onTo === undefined) return this.letPartyGo();
+    const back = this.events.replan?.(left, this.shortest);
+    if (back === undefined || typeof back === 'string' || back.blocked || back.steps.length === 0) {
+      return this.walkOnWithout(missing);
+    }
+    if (!this.quiet) {
+      this.events.notice?.(t('automation.walk.partyGoingBack', { names: missing.join(', ') }));
+    }
+    this.walked += this.index;
+    this.route = back;
+    this.index = 0;
+    this.crossing = {
+      phase: 'returning',
+      route: back,
+      due: back.steps.length,
+      members: [...missing],
+      since: null,
+      listing: 'unasked',
+      onTo
+    };
+    this.forgetBarrier();
+    this.forgetLock();
+    this.barrierRounds = 0;
+    this.carryOn(state);
+    return true;
+  }
+
+  /**
+   * Back in the room the missing members were left in: invite them again and
+   * plan the way on, whose first step `holdForParty` holds until they have
+   * joined. The one arrival that is not the journey's — `finishErrand`'s rule.
+   */
+  private finishRegroup(state: CharacterState): boolean {
+    const crossing = this.crossing;
+    if (crossing?.phase !== 'returning' || crossing.onTo === null || !this.crossingDue()) {
+      return false;
+    }
+    const on = this.events.replan?.(crossing.onTo, this.shortest);
+    if (on === undefined || typeof on === 'string' || on.blocked) {
+      this.crossing = null;
+      this.stop(typeof on === 'string' ? on : (on?.reason ?? t('automation.walk.refusalNoRoute')));
+      return true;
+    }
+    if (on.steps.length === 0) {
+      this.crossing = null;
+      return false;
+    }
+    this.invite(crossing.members);
+    this.walked += this.index;
+    this.route = on;
+    this.index = 0;
+    this.crossing = { ...crossing, phase: 'rejoin', route: on, due: 0, since: null };
+    this.carryOn(state);
+    return true;
+  }
+
+  /** A phase is settled and the next is armed: the hold, not the crossing, lets go. */
+  private releasePartyHold(): false {
+    if (this.hold === 'party') {
+      this.hold = null;
+      this.publish();
+    }
+    return false;
+  }
+
+  /** The crossing is settled, one way or another: nothing holds for it now. */
+  private letPartyGo(): false {
+    this.crossing = null;
+    return this.releasePartyHold();
   }
 
   /**
@@ -5310,10 +5382,6 @@ export class Walker {
     if (this.holdTimer !== null) {
       clearTimeout(this.holdTimer);
       this.holdTimer = null;
-    }
-    if (this.catchupTimer !== null) {
-      clearTimeout(this.catchupTimer);
-      this.catchupTimer = null;
     }
     if (!this.timer) return;
     clearTimeout(this.timer);

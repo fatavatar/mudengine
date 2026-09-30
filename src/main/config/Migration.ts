@@ -274,6 +274,7 @@ function migrateAll(options: MigrationOptions): void {
   statedTheDrain(home, note, options.template);
   statedTheAutoJoin(home, note);
   statedTheHealChoice(home, note, options.template);
+  statedTheRegenSpells(home, note, options.template);
 }
 
 /**
@@ -6449,6 +6450,47 @@ function statedTheHealChoice(
 }
 
 /**
+ * `automation.spells.regen` into every file that states `spells:` without it,
+ * blank, after `cures` and with the template's comment (2026-09-29): MegaMUD's
+ * regen and when-full spells, which cast nothing until one is named.
+ */
+function statedTheRegenSpells(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.regen');
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('regen')) return false;
+      const pair = document.createPair('regen', {
+        ...DEFAULT_CONFIG.automation.spells.regen
+      }) as Pair;
+      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'cures'
+      );
+      if (after === -1) spells.items.push(pair);
+      else spells.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.regenSpellsStated.one', params)
+      : t('notices.migration.regenSpellsStated.many', params)
+  );
+}
+
+/**
  * `automation.remotes.autoJoin` into every file that states `remotes:` without
  * it, off, after `gangpath` (upstream 759fc4d, ported 2026-09-29). Its
  * explanation is in the template's block comment above `remotes:`, so the key
@@ -6888,6 +6930,18 @@ function theTuningBlockGainedKeys(
      * as an errand or left to the long way.
      */
     addKey('world', 'keyFetchTrips', DEFAULT_INTERNAL.tuning.world.keyFetchTrips);
+    /*
+     * How long a leader waits for the party through a text exit (2026-09-29,
+     * PR #35), in place of the `party.catchUpWaitSeconds` option it shipped as:
+     * a bound on a hold, which is what this block is for.
+     */
+    addKey('walk', 'partyCatchUpMs', DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs);
+    /*
+     * MegaMUD's two fixed figures for mana regen (2026-09-29): how far short
+     * mana must be, and how long a tick of nothing takes. Read from megamud.exe.
+     */
+    addKey('spells', 'manaRegenShortfall', DEFAULT_INTERNAL.tuning.spells.manaRegenShortfall);
+    addKey('spells', 'manaTickWaitMs', DEFAULT_INTERNAL.tuning.spells.manaTickWaitMs);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {

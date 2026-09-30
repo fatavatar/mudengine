@@ -79,6 +79,12 @@ export interface MessageTriggersEvents {
    * on, because each of those belongs to a module this one does not own.
    */
   fired?(trigger: MessageTrigger): void;
+  /**
+   * Whether a chase row may answer: `target` is who the realm says went, and
+   * `command` the row's response. The session answers yes for the leader this
+   * character follows, unless the leader's `@party` already had it go.
+   */
+  chase?(target: string, command: string): boolean;
 }
 
 export class MessageTriggers {
@@ -101,7 +107,7 @@ export class MessageTriggers {
    */
   load(triggers: readonly MessageTrigger[]): void {
     this.compiled = triggers
-      .filter((trigger) => trigger.enabled && !trigger.chase)
+      .filter((trigger) => trigger.enabled)
       .map((trigger) => ({
         trigger,
         onset: compileSentence(trigger.match),
@@ -159,6 +165,7 @@ export class MessageTriggers {
       if (conversation && !entry.trigger.conversations) continue;
       const captures = matchSentence(entry.onset, text);
       if (captures === null) continue;
+      if (entry.trigger.chase && !this.chases(entry.trigger, captures)) continue;
       started = this.fire(entry, captures, now);
       fired = entry.trigger;
       break;
@@ -232,7 +239,8 @@ export class MessageTriggers {
         steps.forEach((step, index) => {
           const sent = this.queue.enqueue({
             command: step.command,
-            priority: 'combat',
+            // A chase is a step, and goes in the walk's band.
+            priority: trigger.chase ? 'movement' : 'combat',
             coalesceKey: `message:${key}:${index}`,
             reason: t('automation.messages.reason', { name: trigger.name }),
             ...(step.delayMs > 0 ? { notBefore: now + step.delayMs } : {})
@@ -245,6 +253,19 @@ export class MessageTriggers {
 
     if (noted.length > 0) this.record(now, trigger, noted);
     return started;
+  }
+
+  /**
+   * MegaMUD's chase rows (`MEGAMUD_CHASE`): a player leaving through a special
+   * exit, and the command that follows them. The realm carries a follower
+   * through a direction but not through a phrase, so these are how a party
+   * stays together at `go manhole`. Only ever said about somebody else, and
+   * only answered for the one `events.chase` names.
+   */
+  private chases(trigger: MessageTrigger, captures: Readonly<Record<string, string>>): boolean {
+    const target = captures['target'];
+    if (target === undefined || target.length === 0) return false;
+    return this.events.chase?.(target, trigger.response) === true;
   }
 
   private list(): StatedEffect[] {

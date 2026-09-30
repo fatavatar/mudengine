@@ -5728,17 +5728,53 @@ describe('a step that hands the character to a draw', () => {
   });
 });
 
-/**
- * Party relay, re-sneak, reinvite sweep and catch-up wait for a leader's own
- * Walker/Loop-driven crossing of a `Text:` exit — issue #5, ADR 0002.
+/*
+ * MegaMUD sends its post-rest command before the move that ends the rest,
+ * and the move waits for it (`megamud.exe` `0x413c50`, 2026-09-29).
  */
+describe('the kit before the step', () => {
+  it('waits for a swap on its way, then steps', async () => {
+    let ready = false;
+    const walk = new Walker(config, queue, {
+      notice: (m) => notices.push(m),
+      kitReady: () => ready,
+      stateNow: () => at(1, 1)
+    });
+    expect(walk.start(ROUTE, at(1, 1))).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(moves(sent)).toEqual([]);
+    ready = true;
+    await vi.advanceTimersByTimeAsync(TUNING.walk.holdMs);
+    expect(moves(sent)).toEqual(['e']);
+    walk.dispose();
+  });
+
+  /* Asking stands the sitting kit down, so a walk resting for health must not ask. */
+  it('does not ask while it stands still for health', async () => {
+    let asked = 0;
+    const hurt = at(1, 1, {
+      vitals: { ...structuredClone(EMPTY_CHARACTER.vitals), hp: 10, hpMax: 100 }
+    });
+    const walk = new Walker(config, queue, {
+      notice: (m) => notices.push(m),
+      kitReady: () => {
+        asked += 1;
+        return true;
+      },
+      stateNow: () => hurt
+    });
+    expect(walk.start(ROUTE, hurt)).toBeNull();
+    await vi.advanceTimersByTimeAsync(TUNING.walk.holdMs * 2);
+    expect(walk.progress.hold).toBe('health');
+    expect(asked).toBe(0);
+    expect(moves(sent)).toEqual([]);
+    walk.dispose();
+  });
+});
+
+/** A leader's crossing of a `Text:` exit: the relay, the invites and the wait (PR #35). */
 describe('a text-exit party relay', () => {
-  /**
-   * A `Text:` exit on a cardinal slot — `haven()`'s own `1/3 → 1/4`, measured
-   * live: its route step keeps `direction: 'd'` and carries the phrase in
-   * `requirement.commands`, unlike a `PortalExit`'s script teleport (whose
-   * `direction` really is `'portal'` — see `relayTextExit`'s own comment).
-   */
+  /** A `Text:` exit on a cardinal slot, as `haven()`'s `1/3 → 1/4` is: `direction: 'd'`. */
   const PORTAL: Route = {
     cost: 1,
     blocked: false,
@@ -5806,9 +5842,7 @@ describe('a text-exit party relay', () => {
       },
       ...over
     });
-    // After `at()`, which is what actually resolves `map`/`number` onto the
-    // room — folding occupants into `over.room` directly would spread
-    // `EMPTY_CHARACTER.room`'s own null map/number back over them.
+    // After `at()`, whose room `over.room` would otherwise replace.
     return { ...state, room: { ...state.room, occupants: roomOccupants } };
   }
 
@@ -5824,21 +5858,17 @@ describe('a text-exit party relay', () => {
       free: false
     }));
 
-  /**
-   * A walker whose `stateNow` tracks whatever was last pushed to it — every
-   * hold this feature takes re-sends through a bare `sendCurrent()`, which
-   * reads `now` from `stateNow` rather than from an argument.
-   */
-  function trackedWalker(over: Partial<AutomationConfig> = {}): {
+  /** A walker whose `stateNow` is whatever was last pushed, as a hold's re-ask reads it. */
+  function trackedWalker(
+    over: Partial<AutomationConfig> = {},
+    events: Partial<WalkerEvents> = {}
+  ): {
     walker: Walker;
     begin: (route: Route, state: CharacterState) => string | null;
     push: (state: CharacterState) => void;
   } {
     let current: CharacterState | null = null;
-    // Its own queue, with a wide pacing window: these scenarios chain more
-    // commands (relay, move, invites, join, the next step) than the shared
-    // fixture's window allows in flight without an ack, and pacing itself is
-    // not what these tests are about.
+    // A window wide enough for the relay, the move, the invites and the next step unanswered.
     const wideConfig = {
       ...config,
       pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 1000 },
@@ -5848,7 +5878,8 @@ describe('a text-exit party relay', () => {
     const w = new Walker(wideConfig, wideQueue, {
       notice: (m) => notices.push(m),
       // Never called before `current` is set: every scenario `begin`s first.
-      stateNow: () => current!
+      stateNow: () => current!,
+      ...events
     });
     return {
       walker: w,
@@ -5863,39 +5894,23 @@ describe('a text-exit party relay', () => {
     };
   }
 
-  it('says @party before the move, for a text exit while leading with others', () => {
+  it('says @party before the move, for a text exit while leading with others here', () => {
     const { begin } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip']));
+    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     expect(sent).toEqual(['.@party go crimson portal', 'go crimson portal']);
   });
 
-  /*
-   * Reported live (2026-09-28): the ordinary pacing floor between the relay
-   * and the leader's own move (676ms, one capture) was long enough for a
-   * follower's own client to hear the relay, replay it, and land in the new
-   * room before the leader's move even reached the wire — which MegaMUD's
-   * own party-follow mechanic answered by snapping the follower back to the
-   * leader's last room. `relayTextExit` marks both the relay and (were the
-   * leader sneaking) the re-sneak with `noGap`, so the move behind either
-   * one sends without waiting out a real, non-zero pacing gap — proven here
-   * by never advancing the fake clock at all.
-   */
+  /* 676ms behind the pacing floor, a follower landed first and was pulled back (2026-09-28). */
   it('sends the move right behind the relay, with no wait for a real pacing gap', () => {
     const { begin } = trackedWalker({
       pacing: { window: 20, minGapMs: 500, ackTimeoutMs: 3000 }
     });
-    begin(PORTAL, leading(1, 1, ['Pip']));
+    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     expect(sent).toEqual(['.@party go crimson portal', 'go crimson portal']);
   });
 
-  /*
-   * Reported live (2026-09-28): a level-gated `go portal` relayed nothing.
-   * `WorldGraph.linkPortals` prices a gated room-script portal as
-   * `requirement.kind: 'level'`, not `'text'`, even though the step still
-   * needs the phrase — see `relayTextExit`'s own comment on why the test is
-   * `requirement.commands`, not `kind`.
-   */
-  it('says @party before a level-gated portal too, kind: level and all', () => {
+  /* A level-gated portal is priced `kind: 'level'` and still needs its phrase (2026-09-28). */
+  it('says @party before a level-gated portal too', () => {
     const GATED_PORTAL: Route = {
       cost: 1,
       blocked: false,
@@ -5917,149 +5932,125 @@ describe('a text-exit party relay', () => {
       ]
     };
     const { begin } = trackedWalker();
-    begin(GATED_PORTAL, leading(1, 1, ['Pip']));
+    begin(GATED_PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     expect(sent).toEqual(['.@party go portal', 'go portal']);
   });
 
   it('says nothing for a cardinal direction', () => {
     const { begin } = trackedWalker();
-    begin(ROUTE, leading(1, 1, ['Pip']));
+    begin(ROUTE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     expect(sent).toEqual(['e']);
   });
 
-  it('says nothing leading nobody', () => {
+  it('says nothing leading nobody, or nobody standing here to hear it', () => {
     const { begin } = trackedWalker();
     begin(PORTAL, leading(1, 1, []));
-    expect(sent).toEqual(['go crimson portal']);
+    begin(PORTAL, leading(1, 1, ['Pip']));
+    expect(sent).toEqual(['go crimson portal', 'go crimson portal']);
   });
 
   it('says nothing while following somebody else', () => {
     const { begin } = trackedWalker();
-    const state = leading(1, 1, ['Pip']);
+    const state = leading(1, 1, ['Pip'], {}, occupants('Pip'));
     state.party.following = 'Someone';
     begin(PORTAL, state);
     expect(sent).toEqual(['go crimson portal']);
   });
 
-  it('re-sneaks after the relay and before the move, whatever the general sneak setting says', () => {
+  it('sneaks again after the relay and before the move', () => {
     const { begin } = trackedWalker({ movement: { ...config.movement, sneak: false } });
-    begin(PORTAL, leading(1, 1, ['Pip'], { stealth: 'sneaking' }));
+    begin(PORTAL, leading(1, 1, ['Pip'], { stealth: 'sneaking' }, occupants('Pip')));
     expect(sent).toEqual(['.@party go crimson portal', 'sn', 'go crimson portal']);
   });
 
-  it('does not re-sneak when not sneaking', () => {
-    const { begin } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip'], { stealth: 'seen' }));
-    expect(sent).toEqual(['.@party go crimson portal', 'go crimson portal']);
-  });
-
-  it('re-invites whoever the crossing left behind, and says @join once', () => {
-    const { begin, push } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
-    sent.length = 0;
-    push(leading(1, 2, []));
-    expect(sent).toEqual(['invite Pip', '.@join']);
-  });
-
-  /*
-   * MegaMUD drops the follow flag on a text-exit crossing whether or not the
-   * follower's own client lands in the new room — measured live (2026-09-29):
-   * `party` read "You are not in a party" with `Also here: Thom` still on
-   * screen. So the invite fires for everyone in the snapshot regardless of
-   * presence; only the *wait* is conditional on it.
-   */
-  it('invites everyone in the snapshot even when they already crossed, but holds nothing', () => {
+  /* The realm drops the party through a text exit even for a follower who crossed (2026-09-29). */
+  it('invites everybody who stood with the leader once the crossing lands, and holds for nobody here', () => {
     const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
-    expect(sent).toEqual(['invite Pip', '.@join']);
+    expect(sent).toEqual(['invite Pip', 'e']);
     expect(w.progress.hold).toBeNull();
   });
 
-  it('does not re-invite somebody who had already left before the crossing', () => {
-    const { begin, push } = trackedWalker();
-    begin(PORTAL, leading(1, 1, []));
+  it('invites at the end of a route as well, where there is nothing to hold', () => {
+    const { begin, push, walker: w } = trackedWalker();
+    begin(PORTAL, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
-    expect(sent).toEqual([]);
+    expect(sent).toEqual(['invite Pip']);
+    expect(w.progress.status).toBe('arrived');
   });
 
-  /*
-   * Physical presence gates the snapshot itself, not only the arrival side:
-   * a party member who is nowhere near the leader was never a candidate to
-   * begin with, whatever the roster says.
-   */
-  it('does not chase a party member who was never standing with the leader', () => {
-    const { begin, push } = trackedWalker();
-    begin(PORTAL, leading(1, 1, ['Pip']));
-    sent.length = 0;
-    push(leading(1, 2, []));
-    expect(sent).toEqual([]);
-  });
-
-  it('holds movement — only movement — until the missing member is seen', () => {
+  it('holds the next step until the member is here, then walks on at the next beat', async () => {
     const { begin, push, walker: w } = trackedWalker();
     begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
-    expect(w.progress.hold).toBe('catchup');
-    expect(sent).toEqual(['invite Pip', '.@join']);
+    expect(w.progress.hold).toBe('party');
+    expect(sent).toEqual(['invite Pip']);
+    expect(notices.at(-1)).toContain('Pip');
 
-    // A state push that is not Pip arriving changes nothing.
     push(leading(1, 2, [], {}, occupants('Somebody Else')));
-    expect(w.progress.hold).toBe('catchup');
-    expect(sent).toEqual(['invite Pip', '.@join']);
-  });
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+    expect(w.progress.hold).toBe('party');
 
-  it('lets movement go the instant the missing member is seen in the room', () => {
-    const { begin, push, walker: w } = trackedWalker();
-    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
-    sent.length = 0;
-    push(leading(1, 2, []));
     push(leading(1, 2, [], {}, occupants('Pip')));
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
     expect(w.progress.hold).toBeNull();
-    expect(sent).toEqual(['invite Pip', '.@join', 'e']);
+    expect(sent).toEqual(['invite Pip', 'e']);
   });
 
-  it('resumes on its own once catchUpWaitSeconds elapses, with no confirmation', async () => {
+  it('walks on without whoever has not come through by partyCatchUpMs, and says so', async () => {
     const { begin, push, walker: w } = trackedWalker();
     begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
-    expect(w.progress.hold).toBe('catchup');
-    await vi.advanceTimersByTimeAsync(config.party.catchUpWaitSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(
+      DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs + DEFAULT_INTERNAL.tuning.walk.holdMs
+    );
     expect(w.progress.hold).toBeNull();
-    expect(sent).toEqual(['invite Pip', '.@join', 'e']);
+    expect(sent.slice(0, 2)).toEqual(['invite Pip', 'e']);
+    expect(notices.at(-1)).toContain('walking on without them');
   });
 
-  it('skips the wait entirely at catchUpWaitSeconds: 0, but still invites and @joins', () => {
+  it('waits for nobody when a crossing was replanned before it landed', () => {
+    const { begin, push } = trackedWalker();
+    begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+    begin(ROUTE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+    sent.length = 0;
+    push(leading(1, 2, []));
+    expect(sent).toEqual(['e']);
+  });
+
+  it('answers a fight that starts while it waits for the party', async () => {
     const {
       begin,
       push,
       walker: w
     } = trackedWalker({
-      party: { ...config.party, catchUpWaitSeconds: 0 }
+      combat: { ...config.combat, enabled: true }
     });
     begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
-    sent.length = 0;
     push(leading(1, 2, []));
-    expect(w.progress.hold).toBeNull();
-    expect(sent).toEqual(['invite Pip', '.@join', 'e']);
+    expect(w.progress.hold).toBe('party');
+    push(leading(1, 2, [], { inCombat: true }));
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+    expect(w.progress.hold).toBe('fight');
   });
 
-  it('lets the leader override the wait early, resuming movement at once', () => {
+  it('stops waiting for the party to walk out of a fight nothing will end', async () => {
     const { begin, push, walker: w } = trackedWalker();
     begin(PORTAL_THEN_MORE, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
     push(leading(1, 2, []));
-    expect(w.progress.hold).toBe('catchup');
-    w.endCatchupWait();
+    push(leading(1, 2, [], { inCombat: true }));
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
     expect(w.progress.hold).toBeNull();
-    expect(sent).toEqual(['invite Pip', '.@join', 'e']);
+    expect(sent).toContain('e');
   });
 
-  it('runs a fresh sweep and wait on a second crossing, independent of the first', () => {
+  it('takes each crossing on its own', () => {
     const TWO_PORTALS: Route = {
       cost: 2,
       blocked: false,
@@ -6080,19 +6071,116 @@ describe('a text-exit party relay', () => {
         }
       ]
     };
-    const { begin, push, walker: w } = trackedWalker();
+    const { begin, push } = trackedWalker();
     begin(TWO_PORTALS, leading(1, 1, ['Pip'], {}, occupants('Pip')));
     sent.length = 0;
-    // First crossing: Pip is right there, so nothing is held — but the
-    // invite still goes out, since presence never says the follow survived.
     push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
-    expect(sent).toEqual(['invite Pip', '.@join', '.@party go second portal', 'go second portal']);
-    expect(w.progress.hold).toBeNull();
+    expect(sent).toEqual(['invite Pip', '.@party go second portal', 'go second portal']);
     sent.length = 0;
-
-    // Second crossing: this time Pip does not make it.
     push(leading(1, 3, []));
-    expect(w.progress.hold).toBe('catchup');
-    expect(sent).toEqual(['invite Pip', '.@join']);
+    expect(sent).toEqual(['invite Pip']);
+  });
+  /*
+   * The first step after the crossing is where a rejoin shows: the realm
+   * carries joined members through a direction, so a `par` in the room it
+   * leads to says who did not rejoin (the player, 2026-09-29).
+   */
+  describe('after the first step on', () => {
+    const step = (from: string, to: string, command: string, name: string): RouteStep => ({
+      from,
+      to,
+      direction: command as Direction,
+      command,
+      name,
+      requirement: null,
+      dark: false
+    });
+    const ON: Route = {
+      cost: 3,
+      blocked: false,
+      steps: [
+        PORTAL.steps[0]!,
+        step('1/2', '1/3', 'e', 'Third Room'),
+        step('1/3', '1/4', 'e', 'End')
+      ]
+    };
+    const roster = () => block('party-roster');
+
+    it('asks the listing before stepping on, and walks on when everybody came', async () => {
+      const { begin, push, walker: w } = trackedWalker();
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      sent.length = 0;
+      push(leading(1, 3, ['Pip'], {}, occupants('Pip')));
+      expect(sent).toEqual(['party']);
+      expect(w.progress.hold).toBe('party');
+      w.onBlock(roster());
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(sent).toEqual(['party', 'e']);
+      expect(w.progress.hold).toBeNull();
+    });
+
+    it('goes back for a member who did not rejoin, invites them, and waits for the join', async () => {
+      const replanned: string[] = [];
+      const {
+        begin,
+        push,
+        walker: w
+      } = trackedWalker(
+        {},
+        {
+          replan: (to) => {
+            replanned.push(to);
+            return to === '1/2'
+              ? { cost: 1, blocked: false, steps: [step('1/3', '1/2', 'w', 'Sewer')] }
+              : { cost: 2, blocked: false, steps: ON.steps.slice(1) };
+          }
+        }
+      );
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 3, []));
+      w.onBlock(roster());
+      sent.length = 0;
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(replanned).toEqual(['1/2']);
+      expect(sent).toEqual(['w']);
+      expect(notices.at(-1)).toContain('going back');
+
+      // Back where Pip was left: invited again, and held until Pip has joined.
+      push(leading(1, 2, [], {}, occupants('Pip')));
+      expect(replanned).toEqual(['1/2', '1/4']);
+      expect(sent).toEqual(['w', 'invite Pip']);
+      expect(w.progress.hold).toBe('party');
+
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(sent).toEqual(['w', 'invite Pip', 'e']);
+      expect(w.progress.hold).toBeNull();
+    });
+
+    it('walks on without them when there is no way back', async () => {
+      const { begin, push, walker: w } = trackedWalker({}, { replan: () => 'no way' });
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 3, []));
+      w.onBlock(roster());
+      sent.length = 0;
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs);
+      expect(sent).toEqual(['e']);
+      expect(notices.at(-1)).toContain('walking on without them');
+    });
+
+    it('does not wait for a listing that never comes past partyCatchUpMs', async () => {
+      const { begin, push, walker: w } = trackedWalker();
+      begin(ON, leading(1, 1, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 2, ['Pip'], {}, occupants('Pip')));
+      push(leading(1, 3, ['Pip'], {}, occupants('Pip')));
+      await vi.advanceTimersByTimeAsync(
+        DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs + DEFAULT_INTERNAL.tuning.walk.holdMs
+      );
+      expect(w.progress.hold).toBeNull();
+      expect(sent).toContain('e');
+    });
   });
 });

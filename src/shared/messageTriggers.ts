@@ -117,9 +117,9 @@ export interface MessageTrigger {
    */
   conversations: boolean;
   /**
-   * Only meant while following a player through a special exit. Kept so a
-   * table survives the round trip whole; never matched until the client can
-   * chase, which it cannot yet.
+   * Only meant while following a player through a special exit: answered
+   * for the leader this character follows, and never for anybody else
+   * (`MessageTriggers.chases`).
    */
   chase: boolean;
   enabled: boolean;
@@ -535,7 +535,7 @@ export type MessageImport =
       ok: true;
       /** Rows now in the realm's table. */
       count: number;
-      /** Of those, the chase rows kept but not answered. */
+      /** Of those, the chase rows, answered only while following. */
       chase: number;
       skipped: ImportSkip[];
     }

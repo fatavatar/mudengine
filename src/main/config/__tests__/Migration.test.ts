@@ -2461,6 +2461,8 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       'errandAskMs',
       // And how deep a walk fetches levers behind levers (todo 807).
       'leverErrandDepth',
+      // How long a leader waits for the party through a text exit (PR #35).
+      'partyCatchUpMs',
       // How long a walk waits in a room too dark to read for the light that
       // fixes it. Appended by its own later pass: this file states no
       // `heldFallbackMs` to sit beside.
@@ -2519,7 +2521,8 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       lightWaitMs: DEFAULT_INTERNAL.tuning.walk.lightWaitMs,
       followSettleMs: DEFAULT_INTERNAL.tuning.walk.followSettleMs,
       errandAskMs: DEFAULT_INTERNAL.tuning.walk.errandAskMs,
-      leverErrandDepth: DEFAULT_INTERNAL.tuning.walk.leverErrandDepth
+      leverErrandDepth: DEFAULT_INTERNAL.tuning.walk.leverErrandDepth,
+      partyCatchUpMs: DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs
     });
     expect(text).toContain("longer than this realm's own slowest answer");
     expect(text).not.toContain('so this is already the');
@@ -6547,5 +6550,57 @@ describe('the heal choice is stated', () => {
     );
     migrate();
     expect(spells()['autoChooseHeal']).toBe(true);
+  });
+});
+
+/* MegaMUD's regen and when-full spells (2026-09-29): written in blank, after the cures. */
+describe('the regen spells are stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const spells = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'spells'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-regen-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes the block in blank after cures, once', () => {
+    fs.writeFileSync(
+      home.options,
+      "automation:\n  spells:\n    cures:\n      poison: ''\n    blessings: []\n",
+      'utf8'
+    );
+    migrate();
+    expect(spells()['regen']).toEqual({
+      hp: '',
+      mana: '',
+      manaMinTick: 0,
+      hpFull: '',
+      manaFull: ''
+    });
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('regen:')).toBeGreaterThan(text.indexOf('cures:'));
+    expect(text.indexOf('regen:')).toBeLessThan(text.indexOf('blessings:'));
+    expect(said.filter((line) => line.includes('Regeneration spells'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated block alone', () => {
+    fs.writeFileSync(home.options, 'automation:\n  spells:\n    regen:\n      hp: lfst\n', 'utf8');
+    migrate();
+    expect(spells()['regen']).toEqual({ hp: 'lfst' });
   });
 });

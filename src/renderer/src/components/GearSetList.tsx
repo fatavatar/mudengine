@@ -175,10 +175,12 @@ export default function GearSetList({ sets, mobs, namePrefix, onChange }: GearSe
 /**
  * One literal `t()` per situation, never a key built from the value:
  * `i18n-coverage.test.ts` reads only the literal after `t(`, so a dynamic key
- * would be an unexempted dynamic call and three keys nothing is seen to read.
+ * would be an unexempted dynamic call and five keys nothing is seen to read.
  */
 const WHEN_WORD: Record<GearWhen, () => string> = {
   always: () => t('settings.gear.whenAlways'),
   moving: () => t('settings.gear.whenMoving'),
+  resting: () => t('settings.gear.whenResting'),
+  meditating: () => t('settings.gear.whenMeditating'),
   fighting: () => t('settings.gear.whenFighting')
 };

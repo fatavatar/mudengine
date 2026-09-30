@@ -3,6 +3,7 @@ import Advanced from './Advanced';
 import AlertList from './AlertList';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
+import RegenFields from './RegenFields';
 import { MonsterRuleList } from './MonsterRules';
 import GearSetList from './GearSetList';
 import PotionList from './PotionList';
@@ -175,6 +176,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   spells: [
     { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
+    { id: 'spells-regen', label: t('settings.spells.regenLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
   ],
@@ -1558,6 +1560,17 @@ export default function GlobalSettings({
               />
             </fieldset>
 
+            <fieldset className="settings-menus" data-fieldset="spells-regen">
+              <legend>{t('settings.spells.regenLegend')}</legend>
+              <p className="settings-note">{t('settings.spells.regenNote')}</p>
+              <RegenFields
+                namePrefix="global"
+                onChange={(regen) => automation({ spells: { ...draft.automation.spells, regen } })}
+                regen={draft.automation.spells.regen}
+                spells={selfHeals}
+              />
+            </fieldset>
+
             <fieldset className="settings-menus" data-fieldset="spells-cures">
               <legend>{t('settings.spells.cureLegend')}</legend>
               <p className="settings-note">{t('settings.spells.cureNote')}</p>
@@ -1679,20 +1692,6 @@ export default function GlobalSettings({
                     })
                   }
                   value={String(draft.automation.party.waitNoLongerMinutes)}
-                />
-                <NumberField
-                  hint={t('settings.party.catchUpWaitHint')}
-                  label={t('settings.party.catchUpWaitLabel')}
-                  name="global-party-catch-up-wait-seconds"
-                  onChange={(value) =>
-                    automation({
-                      party: {
-                        ...draft.automation.party,
-                        catchUpWaitSeconds: Number.parseInt(value, 10) || 0
-                      }
-                    })
-                  }
-                  value={String(draft.automation.party.catchUpWaitSeconds)}
                 />
                 <NumberField
                   hint={t('settings.party.parEveryHint')}

@@ -6091,6 +6091,15 @@ describe('what the prompt says on other realms', () => {
   it('rests on the sentence before the flag arrives', () => {
     expect(play(['[HP=50]:', 'You are now resting.']).current.vitals.resting).toBe(true);
   });
+
+  it('stands up when a meditation ends by itself', () => {
+    const woke = play([
+      '[HP=50]:',
+      'You are now meditating.',
+      'You awake from deep meditation feeling stronger!'
+    ]);
+    expect(woke.current.vitals.meditating).toBe(false);
+  });
 });
 
 describe('the opening of a PvP fight', () => {

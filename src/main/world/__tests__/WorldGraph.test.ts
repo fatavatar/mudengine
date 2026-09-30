@@ -2350,7 +2350,7 @@ describe('reading an item kind back off disk', () => {
           { id: 336, n: 'padded boots', type: 0, worn: 5, arm: { ac: 10, dr: 1, kind: 1 } },
           { id: 500, n: 'scroll of flash', type: 9, uses: 1 },
           { id: 7, n: 'brass key' },
-          { id: 8, n: 'odd thing', type: 42, worn: 13 }
+          { id: 8, n: 'odd thing', type: 42, worn: 20 }
         ]
       }) + '\n';
     fs.writeFileSync(file, zlib.gzipSync(body));
@@ -2409,7 +2409,7 @@ describe('reading an item kind back off disk', () => {
    * what the server prints for it (`shared/lore.ts`, `SlotLoreEntry`).
    */
   it('leaves an unrecognised kind or slot unnamed, and keeps the code', () => {
-    expect(graph.item(8)).toEqual({ id: 8, name: 'odd thing', worn: 13 });
+    expect(graph.item(8)).toEqual({ id: 8, name: 'odd thing', worn: 20 });
   });
 });
 

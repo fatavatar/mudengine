@@ -641,6 +641,10 @@ function walkChip(walk: WalkProgress) {
   if (walk.status === 'walking' && walk.hold === 'dark') {
     return <span className="chip info">{t('cards.navigation.route.badgeDark')}</span>;
   }
+  // Party members a text exit left behind, with a bound of its own.
+  if (walk.status === 'walking' && walk.hold === 'party') {
+    return <span className="chip info">{t('cards.navigation.route.badgeParty')}</span>;
+  }
   if (walk.status === 'walking') {
     /*
      * The whole journey, and drawn as one (todo 03): `done` and `total` are
