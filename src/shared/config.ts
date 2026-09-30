@@ -27,7 +27,12 @@ import { asLoops, mergeNamed, type Loop } from './loops';
  * edge is one-way and the module-cycle rule is untouched. See
  * `src/shared/__tests__/module-cycle.test.ts`.
  */
-import { DENOMINATIONS, type Denomination, type VitalThresholds } from './character';
+import {
+  DENOMINATIONS,
+  type Denomination,
+  type PartyMember,
+  type VitalThresholds
+} from './character';
 import { asCoinNames, type CoinNames } from './coins';
 import {
   DEFAULT_CONSOLE_PALETTE,
@@ -1160,6 +1165,13 @@ export interface RemotesConfig {
  * stopping an automation that works.
  */
 export type EncumbranceGate = 'never' | 'medium' | 'heavy';
+
+/**
+ * Where a party member stands, reused rather than re-declared: one definition
+ * of what a rank is allowed to be, derived from the roster's own field
+ * (`PartyMember['rank']`) so the two cannot drift apart.
+ */
+export type PartyRank = NonNullable<PartyMember['rank']>;
 
 export interface LootConfig {
   /** Pick up coins the moment they land, and any a look lists. */
@@ -2356,6 +2368,19 @@ export interface PartyConfig {
    */
   restWithLeader: boolean;
   /**
+   * Keep this character at `preferredRank`, sending `frontrank`/`midrank`/
+   * `backrank` once whenever the roster says it is standing somewhere else.
+   * Off, like every other card here: a character nobody has opted in keeps
+   * whatever rank it already has, with no unsolicited command going out.
+   */
+  autoRank: boolean;
+  /**
+   * The rank `autoRank` tries to keep this character at. Mid, MegaMUD's own
+   * rank for a character nobody has moved — front and back are both a
+   * deliberate choice, never a default anybody drifts into.
+   */
+  preferredRank: PartyRank;
+  /**
    * Say `@heal` in the room below this share of maximum health, while in a
    * party — MegaMUD's *Ask For Healing* (`PartyAskHeal%`). 0 never asks. Said
    * once on the crossing and again every `tuning.remotes.healAskAgainMs` while
@@ -2846,6 +2871,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       assistLeader: false,
       defendParty: false,
       restWithLeader: false,
+      autoRank: false,
+      preferredRank: 'mid',
       askForHealBelow: 0,
       waitForMembersBelow: 0,
       waitNoLongerMinutes: 0,
@@ -3030,6 +3057,7 @@ export const AUTOMATION_SWITCHES = {
   assistLeader: ['party', 'assistLeader'],
   defendParty: ['party', 'defendParty'],
   restWithLeader: ['party', 'restWithLeader'],
+  autoRank: ['party', 'autoRank'],
   remotes: ['remotes', 'enabled'],
   gangpath: ['remotes', 'gangpath'],
   lookAtPlayers: ['talk', 'lookAtPlayers'],
@@ -4095,6 +4123,14 @@ function gate(value: unknown, fallback: EncumbranceGate): EncumbranceGate {
   return GATES.find((known) => known === word) ?? fallback;
 }
 
+/** The roster's own three ranks — an unrecognised word falls back rather than passing through. */
+const PARTY_RANKS: readonly PartyRank[] = ['front', 'mid', 'back'];
+
+function partyRank(value: unknown, fallback: PartyRank): PartyRank {
+  const word = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return PARTY_RANKS.find((known) => known === word) ?? fallback;
+}
+
 function normalizeDrop(value: unknown): DropConfig {
   const raw = isRecord(value) ? value : {};
   const d = DEFAULT_CONFIG.automation.drop;
@@ -4371,6 +4407,8 @@ export function normalizeParty(value: unknown): PartyConfig {
     assistLeader: bool(raw['assistLeader'], d.assistLeader),
     defendParty: bool(raw['defendParty'], d.defendParty),
     restWithLeader: bool(raw['restWithLeader'], d.restWithLeader),
+    autoRank: bool(raw['autoRank'], d.autoRank),
+    preferredRank: partyRank(raw['preferredRank'], d.preferredRank),
     askForHealBelow: fraction(raw['askForHealBelow'], d.askForHealBelow),
     waitForMembersBelow: fraction(raw['waitForMembersBelow'], d.waitForMembersBelow),
     waitNoLongerMinutes: int(raw['waitNoLongerMinutes'], d.waitNoLongerMinutes, 0, 240),

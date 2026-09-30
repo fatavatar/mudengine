@@ -105,6 +105,9 @@ const SWITCH_ICONS: Record<AutomationSwitch, IconName> = {
   // is what separates them.
   defendParty: 'shield',
   restWithLeader: 'moon',
+  // The people glyph again, deliberately: this is still about this
+  // character's place among its party, the same idea `assistLeader` uses.
+  autoRank: 'users',
   remotes: 'at',
   gangpath: 'broadcast',
   lookAtPlayers: 'eye',
@@ -161,6 +164,8 @@ function switchLabel(name: AutomationSwitch): string {
       return t('toolbar.defendParty');
     case 'restWithLeader':
       return t('toolbar.restWithLeader');
+    case 'autoRank':
+      return t('toolbar.autoRank');
     case 'remotes':
       return t('toolbar.remotes');
     case 'gangpath':

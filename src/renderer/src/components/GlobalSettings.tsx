@@ -23,6 +23,7 @@ import {
   RETREAT_STRATEGIES,
   PVP_ACTIONS,
   type EngagePolicy,
+  type PartyRank,
   type RetreatStrategy
 } from '@shared/config';
 import type { GlobalDraft } from '@shared/drafts';
@@ -231,6 +232,7 @@ import {
   fractionOf as fraction,
   joinNames,
   percentOf as percent,
+  RANK_OPTIONS,
   splitNames
 } from '../lib/form';
 
@@ -1650,6 +1652,27 @@ export default function GlobalSettings({
                 onChange={(value) =>
                   automation({ party: { ...draft.automation.party, restWithLeader: value } })
                 }
+              />
+              <CheckField
+                checked={draft.automation.party.autoRank}
+                hint={t('settings.party.autoRankHint')}
+                label={t('settings.party.autoRankLabel')}
+                name="global-party-auto-rank"
+                onChange={(value) =>
+                  automation({ party: { ...draft.automation.party, autoRank: value } })
+                }
+              />
+              <SelectField
+                hint={t('settings.party.preferredRankHint')}
+                label={t('settings.party.preferredRankLabel')}
+                name="global-party-preferred-rank"
+                onChange={(value) =>
+                  automation({
+                    party: { ...draft.automation.party, preferredRank: value as PartyRank }
+                  })
+                }
+                options={RANK_OPTIONS()}
+                value={draft.automation.party.preferredRank}
               />
               <CheckField
                 checked={draft.automation.party.ignorePartyWhenFollowing}
