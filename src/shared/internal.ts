@@ -590,6 +590,16 @@ const TUNING_DEFAULTS = {
     killConfidence: 0.9,
     /** How long a heal proposal stays worth sending. */
     healExpiresMs: 3000,
+    /**
+     * How far short of its maximum mana has to be before mana regen is cast
+     * (`Regen`): a count of points, as `megamud.exe` has it (0x414d7d, 2026-09-29).
+     */
+    manaRegenShortfall: 20,
+    /**
+     * How long mana may go without rising before that counts as a tick of
+     * nothing, for *Min Flux Rate* (`Regen`): the exe's 34 seconds (0x494cf2).
+     */
+    manaTickWaitMs: 34_000,
     /** Long enough for the next status line to say whether the heal worked. */
     healCooldownMs: 6000,
     /**

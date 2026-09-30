@@ -6552,3 +6552,55 @@ describe('the heal choice is stated', () => {
     expect(spells()['autoChooseHeal']).toBe(true);
   });
 });
+
+/* MegaMUD's regen and when-full spells (2026-09-29): written in blank, after the cures. */
+describe('the regen spells are stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const spells = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'spells'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-regen-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes the block in blank after cures, once', () => {
+    fs.writeFileSync(
+      home.options,
+      "automation:\n  spells:\n    cures:\n      poison: ''\n    blessings: []\n",
+      'utf8'
+    );
+    migrate();
+    expect(spells()['regen']).toEqual({
+      hp: '',
+      mana: '',
+      manaMinTick: 0,
+      hpFull: '',
+      manaFull: ''
+    });
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('regen:')).toBeGreaterThan(text.indexOf('cures:'));
+    expect(text.indexOf('regen:')).toBeLessThan(text.indexOf('blessings:'));
+    expect(said.filter((line) => line.includes('Regeneration spells'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated block alone', () => {
+    fs.writeFileSync(home.options, 'automation:\n  spells:\n    regen:\n      hp: lfst\n', 'utf8');
+    migrate();
+    expect(spells()['regen']).toEqual({ hp: 'lfst' });
+  });
+});

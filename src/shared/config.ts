@@ -2187,6 +2187,12 @@ export interface SpellsConfig {
    */
   cures: { blindness: string; poison: string; disease: string; freedom: string };
   /**
+   * The spells that speed a recovery and the ones a full one earns: MegaMUD's
+   * *HP Regen*, *Mana Regen*, *Min Flux Rate*, *When HP Full* and *When Mana
+   * Full*, done as `megamud.exe` does them. See `Regen`.
+   */
+  regen: RegenConfig;
+  /**
    * The blessings kept up on this character and on the party it travels with,
    * in priority order — index 0 is recast first when several are down.
    *
@@ -2214,6 +2220,22 @@ export interface SpellsConfig {
    * cures and the heal are untouched.
    */
   autoBless: boolean;
+}
+
+export interface RegenConfig {
+  /** Cast before a rest while health is short and nothing says it is already regenerating. */
+  hp: string;
+  /** Cast out of meditation while mana is short and nothing says it is already regenerating. */
+  mana: string;
+  /**
+   * The least mana a tick should bring while `mana` is up: a slower tick, or
+   * none for half a minute, casts it again. 0 never does.
+   */
+  manaMinTick: number;
+  /** Cast once each time health reaches `health.restTo`. */
+  hpFull: string;
+  /** Cast once each time mana reaches `health.meditateTo`. */
+  manaFull: string;
 }
 
 /** Whom a blessing is cast on: this character, or every listed party member. */
@@ -2949,6 +2971,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       invokeItems: false,
       minMana: 0.15,
       cures: { blindness: '', poison: '', disease: '', freedom: '' },
+      regen: { hp: '', mana: '', manaMinTick: 0, hpFull: '', manaFull: '' },
       blessings: [],
       notifyPartyOnWearOff: false,
       autoBless: true
@@ -4304,6 +4327,7 @@ function normalizeSpells(value: unknown): SpellsConfig {
     invokeItems: bool(raw['invokeItems'], d.invokeItems),
     minMana: fraction(raw['minMana'], d.minMana),
     cures: normalizeCures(raw['cures']),
+    regen: normalizeRegen(raw['regen']),
     blessings: normalizeBlessings(raw['blessings']),
     notifyPartyOnWearOff: bool(raw['notifyPartyOnWearOff'], d.notifyPartyOnWearOff),
     autoBless: bool(raw['autoBless'], d.autoBless)
@@ -4317,6 +4341,17 @@ function normalizeCures(value: unknown): SpellsConfig['cures'] {
     poison: str(raw['poison'], '').trim(),
     disease: str(raw['disease'], '').trim(),
     freedom: str(raw['freedom'], '').trim()
+  };
+}
+
+function normalizeRegen(value: unknown): RegenConfig {
+  const raw = isRecord(value) ? value : {};
+  return {
+    hp: str(raw['hp'], '').trim(),
+    mana: str(raw['mana'], '').trim(),
+    manaMinTick: int(raw['manaMinTick'], 0, 0, 9999),
+    hpFull: str(raw['hpFull'], '').trim(),
+    manaFull: str(raw['manaFull'], '').trim()
   };
 }
 

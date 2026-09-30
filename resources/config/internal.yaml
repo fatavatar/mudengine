@@ -522,6 +522,15 @@ tuning:
     # How long a heal proposal stays worth sending.
     healExpiresMs: 3000
 
+    # How far short of its maximum mana has to be, in points, before the mana
+    # regen spell is cast. MegaMUD's own figure.
+    manaRegenShortfall: 20
+
+    # How long mana may go without rising before that counts as a tick of
+    # nothing, for Min Flux Rate: the mana regen spell is cast again when a tick
+    # brings less than that setting. MegaMUD waits 34 seconds.
+    manaTickWaitMs: 34000
+
     # Long enough for the next status line to say whether the heal worked.
     healCooldownMs: 6000
 
