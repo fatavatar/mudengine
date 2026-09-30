@@ -110,15 +110,38 @@ describe('responses', () => {
     expect(sent).toEqual(['', '']);
   });
 
-  it('never answers a switched-off row or a chase row', () => {
-    messages.load([
-      row({ match: 'You are off', response: 'x', enabled: false }),
-      row({ match: '{target} slips into the dark alley.', response: 'go alley', chase: true })
-    ]);
+  it('never answers a switched-off row', () => {
+    messages.load([row({ match: 'You are off', response: 'x', enabled: false })]);
     messages.onLine('You are off', false, false);
-    messages.onLine('Naji slips into the dark alley.', false, false);
     expect(sent).toEqual([]);
     expect(messages.size).toBe(0);
+  });
+
+  /* MegaMUD's chase rows: answered only for whoever the session says to follow. */
+  it('answers a chase row only for the one the session follows', () => {
+    const asked: string[] = [];
+    messages = new MessageTriggers(queue, () => 0, {
+      chase: (target, command) => {
+        asked.push(`${target}:${command}`);
+        return target === 'Naji';
+      }
+    });
+    messages.load([
+      row({ match: '{target} slips into the dark alley.', response: 'go alley', chase: true })
+    ]);
+    messages.onLine('Bob slips into the dark alley.', false, false, 1_000);
+    messages.onLine('Naji slips into the dark alley.', false, false, 3_000);
+    expect(asked).toEqual(['Bob:go alley', 'Naji:go alley']);
+    expect(sent).toEqual(['go alley']);
+  });
+
+  it('never answers a chase row with nobody to follow, or said in conversation', () => {
+    messages.load([
+      row({ match: '{target} slips into the dark alley.', response: 'go alley', chase: true })
+    ]);
+    messages.onLine('Naji slips into the dark alley.', false, false);
+    messages.onLine('Naji slips into the dark alley.', true, false);
+    expect(sent).toEqual([]);
   });
 
   it('sends nothing with automation off, as MegaMUD sends nothing all-off', () => {

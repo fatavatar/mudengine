@@ -1726,6 +1726,14 @@ export class SessionManager {
       // come back. The same kind of fact as a move in flight, and refused for
       // the same reason -- see `Recovery.restInFlight` and todo 14.
       restInFlight: () => this.recovery.restInFlight,
+      // The kit before the step. The step is what ends sitting, so asking
+      // stands the sitting kit down, and the step waits for the swap that
+      // makes -- MegaMUD's post-rest command, sent before its move.
+      kitReady: (state) => {
+        this.recovery.stand();
+        if (this.tracker.pendingMoves === 0) this.gear.onCharacter(state, true, null);
+        return !this.gear.dressing;
+      },
       // A room being read again after a monster came, went or died.
       roomUnsettled: () => this.roomUnsettled(),
       /*
@@ -2965,7 +2973,15 @@ export class SessionManager {
       stated: (held, started, ended) => {
         if (this.tracker.noteStated(held, started, ended)) this.reactToState();
       },
-      fired: (trigger) => this.onMessageFired(trigger)
+      fired: (trigger) => this.onMessageFired(trigger),
+      // MegaMUD's chase rows: after the leader this character follows, and
+      // not again where the leader's `@party` already sent it.
+      chase: (target, command) => {
+        if (!this.automationConfig.enabled) return false;
+        const leader = this.tracker.current.party.following;
+        if (leader === null || leader.toLowerCase() !== target.toLowerCase()) return false;
+        return !this.remotes.ranForParty(command);
+      }
     });
 
     /*
@@ -5336,6 +5352,10 @@ export class SessionManager {
      * shows. See `isPrompt`.
      */
     if (isPrompt(block.type)) this.queue.notePrompt();
+    // A meditation that ended by itself -- `You awake from deep meditation
+    // feeling stronger!`, the rest line with no state -- is MegaMUD's other
+    // post-meditate moment (`Recovery.seated`).
+    if (block.type === 'user-rests' && block.groups['state'] === undefined) this.recovery.stand();
     /*
      * Which command the next answer is about: the status line's own echo.
      *
@@ -5598,18 +5618,6 @@ export class SessionManager {
       if (this.supplies.current === null) this.deposit.onCharacter(state);
     }
     /*
-     * And the kit, which is not under the escape guard above.
-     *
-     * Running away is a direction and dressing is not a command spent on the
-     * way out of a room: a swap proposed while an escape is in flight is
-     * queued behind it in a lower band and answered in the room it lands
-     * in, where the situation is asked again. What it must not cross is a
-     * move of this client's own, which is the guard it does have.
-     */
-    if (this.tracker.pendingMoves === 0) {
-      this.gear.onCharacter(state, this.walker.walking || this.loops.progress.status === 'running');
-    }
-    /*
      * And not while a route is being walked.
      *
      * Nothing told `Recovery` a walk was running, so a character walking at
@@ -5639,6 +5647,26 @@ export class SessionManager {
      */
     const away = this.restAway.consider(state, this.recovery.wouldRest(state));
     if (!regenCast && away !== 'took-over' && this.mayRest()) this.restNow(state);
+    /*
+     * And the kit, which is not under the escape guard above.
+     *
+     * Running away is a direction and dressing is not a command spent on the
+     * way out of a room: a swap proposed while an escape is in flight is
+     * queued behind it in a lower band and answered in the room it lands
+     * in, where the situation is asked again. What it must not cross is a
+     * move of this client's own, which is the guard it does have.
+     *
+     * After the rest, so the kit for sitting goes out with the `rest` that
+     * sat the character down — MegaMUD's pre-rest command goes before it
+     * (`Recovery.seated`) — rather than a status line later.
+     */
+    if (this.tracker.pendingMoves === 0) {
+      this.gear.onCharacter(
+        state,
+        this.walker.walking || this.loops.progress.status === 'running',
+        this.recovery.recovering
+      );
+    }
   }
 
   /**
@@ -8959,18 +8987,6 @@ export class SessionManager {
     // The one door a person's stop comes through, so it is the one place that
     // can tell a hunt it was stopped *by somebody* rather than by the realm.
     this.hunt.noteStopped();
-  }
-
-  /**
-   * End an in-progress catch-up wait early, resuming movement at once.
-   *
-   * The leader's own override for the party relay's catch-up wait — the
-   * third way out CONTEXT.md's glossary names, beside everybody arriving and
-   * `catchUpWaitSeconds` running out. See `Walker.endCatchupWait` and ADR
-   * 0002. A no-op when nothing is waiting.
-   */
-  endCatchUpWait(): void {
-    this.walker.endCatchupWait();
   }
 
   /**

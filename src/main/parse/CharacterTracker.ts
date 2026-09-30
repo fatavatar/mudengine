@@ -4057,7 +4057,11 @@ export class CharacterTracker {
         return { ...s, statline: { reported, exact: null } };
       }
 
-      /* `You are now resting.` arrives before the status line that carries the flag. */
+      /*
+       * `You are now resting.` arrives before the status line that carries the
+       * flag, and the end of a meditation that ended by itself has no `state`
+       * and stands the character up.
+       */
       case 'user-rests':
         return {
           ...s,

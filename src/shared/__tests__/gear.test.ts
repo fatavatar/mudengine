@@ -369,18 +369,43 @@ describe('choosing a kit for the situation', () => {
     'golden chalice': OFF_HAND
   };
   const slotOf = (name: string): string | null => SLOTS[name] ?? null;
-  const still: GearSituation = { moving: false, fighting: false, target: null };
+  const still: GearSituation = { moving: false, fighting: false, sitting: null, target: null };
 
   it('takes the most specific set, and the first of two that match equally', () => {
     expect(overlayFor(sets, still)).toBeNull();
     expect(overlayFor(sets, { ...still, moving: true })?.name).toBe('Moving');
     expect(overlayFor(sets, { ...still, fighting: true })?.name).toBe('Fighting');
     // The monster narrows it; another monster does not reach the boss row.
-    const boss = { moving: false, fighting: true, target: 'nasty sandworm' };
+    const boss = { ...still, fighting: true, target: 'nasty sandworm' };
     expect(overlayFor(sets, boss)?.name).toBe('Boss');
     expect(overlayFor(sets, { ...boss, target: 'big sandworm' })?.name).toBe('Fighting');
     // A fight outranks a walk: the fight decides what the next round costs.
-    expect(overlayFor(sets, { moving: true, fighting: true, target: null })?.name).toBe('Fighting');
+    expect(overlayFor(sets, { ...still, moving: true, fighting: true })?.name).toBe('Fighting');
+  });
+
+  /*
+   * MegaMUD's Pre/Post Rest commands as a set: Fatty rests in a healing stone
+   * and walks in the golden ruby-eyed amulet, both worn at the neck.
+   */
+  it('dresses a character sitting to rest or meditate, under a fight and over a walk', () => {
+    const sitting: GearSet[] = [
+      ...sets,
+      { name: 'Resting', when: 'resting', mob: '', wear: ['healing stone'] },
+      { name: 'Meditating', when: 'meditating', mob: '', wear: ['glowing pendant'] }
+    ];
+    const resting: GearSituation = { ...still, sitting: 'resting' };
+    expect(overlayFor(sitting, resting)?.name).toBe('Resting');
+    expect(overlayFor(sitting, { ...still, sitting: 'meditating' })?.name).toBe('Meditating');
+    // A lap held for the rest is still under way, and the character is sitting.
+    expect(overlayFor(sitting, { ...resting, moving: true })?.name).toBe('Resting');
+    // Something swinging ends the rest whatever the stretch says.
+    expect(overlayFor(sitting, { ...resting, fighting: true })?.name).toBe('Fighting');
+    // A resting set does not reach a character who is only standing about.
+    expect(overlayFor(sitting, still)).toBeNull();
+    // One sitting set serves both where only one is written, as one pair of
+    // MegaMUD's commands does.
+    const restOnly = sitting.filter((set) => set.when !== 'meditating');
+    expect(overlayFor(restOnly, { ...still, sitting: 'meditating' })?.name).toBe('Resting');
   });
 
   it('lays the set over the base rather than replacing it', () => {
@@ -408,7 +433,7 @@ describe('choosing a kit for the situation', () => {
       worn('lifestealer', WEAPON_HAND),
       carried({ name: 'nexus spear' })
     ];
-    const kit = kitFor(sets, { moving: false, fighting: true, target: 'nasty sandworm' }, slotOf);
+    const kit = kitFor(sets, { ...still, fighting: true, target: 'nasty sandworm' }, slotOf);
     expect(swapPlan(kit, pack, 10, hands).commands).toEqual([
       'remove golden chalice',
       'wear nexus spear'
@@ -433,6 +458,61 @@ describe('choosing a kit for the situation', () => {
   it('leaves alone what is already on', () => {
     const pack = [worn('plate boots', 'Feet'), worn('lifestealer', WEAPON_HAND)];
     expect(swapPlan(kitFor(sets, still, slotOf), pack, 10, () => 1).commands).toEqual([]);
+  });
+});
+
+/*
+ * A hand holds two rings (two `(Finger)` rows in one listing, 93 times in
+ * this machine's logs). Skinny rests in an etched platinum ring, walks in the
+ * Ring of Faith, and wears a platinum moonstone ring no set names (2026-09-29).
+ */
+describe('a slot that holds two', () => {
+  const finger = (): string => 'Finger';
+  const one = (): 1 => 1;
+  const still: GearSituation = { moving: false, fighting: false, sitting: null, target: null };
+  const resting: GearSituation = { ...still, sitting: 'resting' };
+  const rings: GearSet[] = [
+    { name: 'Normal', when: 'always', mob: '', wear: ['ring of faith', 'mithril ring'] },
+    { name: 'Rest', when: 'resting', mob: '', wear: ['etched platinum ring'] }
+  ];
+
+  it('keeps both rings of a set, and a set naming one ring takes the place of both', () => {
+    expect([...kitFor(rings, still, finger)]).toEqual([
+      ['finger', 'ring of faith'],
+      ['finger#2', 'mithril ring']
+    ]);
+    expect([...kitFor(rings, resting, finger)]).toEqual([['finger', 'etched platinum ring']]);
+  });
+
+  const room = (managed: string[]) => ({
+    slotOf: finger,
+    managed: (name: string) => managed.some((each) => each.toLowerCase() === name.toLowerCase())
+  });
+
+  it('takes off the ring a set put on before a full hand takes another', () => {
+    const pack = [
+      worn('ring of faith', 'Finger'),
+      worn('platinum moonstone ring', 'Finger'),
+      carried({ name: 'etched platinum ring' })
+    ];
+    const kit = kitFor(rings.slice(1), resting, finger);
+    const managed = room(['ring of faith', 'etched platinum ring']);
+    expect(swapPlan(kit, pack, 10, one, managed).commands).toEqual([
+      'remove ring of faith',
+      'wear etched platinum ring'
+    ]);
+  });
+
+  it('never takes off a ring no set names, and leaves the choice to the server', () => {
+    const pack = [
+      worn('sapphire ring', 'Finger'),
+      worn('platinum moonstone ring', 'Finger'),
+      carried({ name: 'etched platinum ring' })
+    ];
+    const kit = kitFor(rings.slice(1), resting, finger);
+    expect(swapPlan(kit, pack, 10, one, room(['etched platinum ring'])).commands).toEqual([
+      'wear etched platinum ring'
+    ]);
   });
 });
 

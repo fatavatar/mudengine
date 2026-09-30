@@ -230,6 +230,25 @@ export class Recovery {
    */
   private meditatingOn = false;
   /**
+   * Whether the character is sitting for its recovery, as MegaMUD's Pre/Post
+   * Rest and Pre/Post Meditate commands see it — the kit's `resting` and
+   * `meditating` bands (`recovering`).
+   *
+   * MegaMUD's own pending flag, read off `megamud.exe` (2026-09-29): set when
+   * the pre-rest command goes out, which is just before `rest` (`0x4140c0`,
+   * called from the rest decision and from `You are now resting`); cleared
+   * only by the post-rest command (`0x413c50`), which goes out just before a
+   * move, a path step, an attack, a hide, a trap disarm or an equip — never
+   * at full health, and never for a heal cast between two sit-downs, which
+   * is why `restTo` does not come into it. Here that is: armed by the
+   * proposal and by the flag rising, left alone by the flag falling, and
+   * cleared by `stand` (the walker's step, a meditation that ended by
+   * itself), by a fight here, and by `reset`.
+   */
+  private seated: 'resting' | 'meditating' | null = null;
+  /** The flag as the last line carried it, so `seated` is armed on its rise and not re-armed by it. */
+  private seatFlag: 'resting' | 'meditating' | null = null;
+  /**
    * A figure a walk is waiting on, in hit points, or null.
    *
    * The walker stands still before a trap until health covers it
@@ -323,6 +342,8 @@ export class Recovery {
     this.askedUntil = 0;
     this.sitting = false;
     this.meditatingOn = false;
+    this.seated = null;
+    this.seatFlag = null;
     this.needed = null;
     this.refused.clear();
     this.saidPoisoned = false;
@@ -392,9 +413,25 @@ export class Recovery {
    * (2026-09-25): the need was the party's and not this module's.
    */
   observe(state: CharacterState): void {
-    const { hp, hpMax, mana, manaMax } = state.vitals;
+    const { hp, hpMax, mana, manaMax, resting, meditating } = state.vitals;
     if (this.below(hp, hpMax, this.config.restBelow)) this.sitting = true;
     if (this.below(mana, manaMax, this.config.meditateBelow)) this.meditatingOn = true;
+
+    // The seat, on the flag's rising edge -- a rest the player typed counts,
+    // as MegaMUD's `You are now resting` hook counts it -- and never off the
+    // flag falling: see `seated`.
+    const flag = meditating ? 'meditating' : resting ? 'resting' : null;
+    if (flag !== null && flag !== this.seatFlag) this.seated = flag;
+    this.seatFlag = flag;
+    if (fightIsHere(state)) this.seated = null;
+  }
+
+  /**
+   * The character is about to do something that is not sitting — the walker's
+   * next step, or a meditation that ended by itself. See `seated`.
+   */
+  stand(): void {
+    this.seated = null;
   }
 
   /**
@@ -588,6 +625,11 @@ export class Recovery {
     return Date.now() < this.askedUntil;
   }
 
+  /** What the character is sitting for, for the kit (`GearSituation.sitting`). See `seated`. */
+  get recovering(): 'resting' | 'meditating' | null {
+    return this.seated;
+  }
+
   /** The last state seen, for tests. */
   get current(): CharacterState | null {
     return this.state;
@@ -677,6 +719,9 @@ export class Recovery {
     this.askedUntil = Date.now() + tuning().rest.askedMs;
     // And a refusal inside that window is this verb's — see `proposed`.
     this.proposed = { command, until: this.askedUntil };
+    // And the seat: the kit for sitting goes out with the rest, as MegaMUD's
+    // pre-rest command goes out before it — see `seated`.
+    this.seated = command === 'med' ? 'meditating' : 'resting';
   }
 }
 
