@@ -4080,9 +4080,9 @@ settings:
     enabled: Swap kit to suit
     enabledHint:
       With this on, the sets below are put on and taken off as the situation changes — walking,
-      fighting, or fighting one named monster. The off-hand comes off before a two-handed weapon
-      goes on, and the weapon hand is sent first, so coming back the other way frees the hand
-      before the shield is asked for.
+      resting, meditating, fighting, or fighting one named monster. The off-hand comes off before
+      a two-handed weapon goes on, and the weapon hand is sent first, so coming back the other way
+      frees the hand before the shield is asked for.
     setAdd: Add a set
     setNamePlaceholder: What to call it
     setNameAria: Set {number} name
@@ -4099,6 +4099,8 @@ settings:
     itemRemoveAria: Remove item {item} from set {number}
     whenAlways: always
     whenMoving: while moving
+    whenResting: while resting
+    whenMeditating: while meditating
     whenFighting: while fighting
     offRoundLegend: Between rounds
     offRoundNote:

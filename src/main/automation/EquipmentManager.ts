@@ -27,6 +27,7 @@ import {
   type GearSituation,
   type GearPlan
 } from '../../shared/gear';
+import { sameItem } from '../../shared/items';
 
 export interface EquipmentSources {
   /** Which slot the realm says an item goes in, by name, or null. */
@@ -50,6 +51,12 @@ export class EquipmentManager {
   private invokedAt = 0;
   /** Rounds seen since the last invocation, so `everyRounds` counts rounds and not seconds. */
   private roundsSince = 0;
+  /**
+   * Until when a swap this module proposed is still on its way: the queued
+   * `wear`s' own expiry, after which they will never be sent. Closed early by
+   * a status line on which the kit is on. See `dressing`.
+   */
+  private dressingUntil = 0;
 
   constructor(
     private config: GearConfig,
@@ -77,6 +84,18 @@ export class EquipmentManager {
     this.saidMissing.clear();
     this.invokedAt = 0;
     this.roundsSince = 0;
+    this.dressingUntil = 0;
+  }
+
+  /**
+   * Whether a swap is on its way — the walker's next step waits for it
+   * (`WalkerEvents.kitReady`), as MegaMUD's move waits for its post-rest
+   * command. A declared postcondition with a deadline, like `Recovery`'s
+   * `restInFlight`: the pack showing the kit on closes it, and the queue
+   * dropping the `wear`s unsent is the bound.
+   */
+  get dressing(): boolean {
+    return this.acting && this.now() < this.dressingUntil;
   }
 
   private get acting(): boolean {
@@ -87,9 +106,11 @@ export class EquipmentManager {
    * Dress for the situation, on every state change.
    *
    * `moving` is the session's to answer — a route or a lap under way — because
-   * it is the one half of the situation that is not on the wire.
+   * it is the one half of the situation that is not on the wire, and `sitting`
+   * is `Recovery`'s, which keeps a character sitting through the casts that
+   * break a rest (`Recovery.seated`).
    */
-  onCharacter(state: CharacterState, moving: boolean): void {
+  onCharacter(state: CharacterState, moving: boolean, sitting: GearSituation['sitting']): void {
     if (!this.acting || state.phase !== 'in-game') return;
     /*
      * An unlisted pack is not an empty one. Nothing is worn off a listing
@@ -101,6 +122,7 @@ export class EquipmentManager {
     const now: GearSituation = {
       moving,
       fighting: state.inCombat || state.combat.attackers.length > 0,
+      sitting,
       target: state.combat.target
     };
     const set = overlayFor(this.config.sets, now);
@@ -119,10 +141,23 @@ export class EquipmentManager {
     }
 
     const kit = kitFor(this.config.sets, now, (item) => this.sources.slotOf(item));
-    if (kit.size === 0) return;
-    const plan = swapPlan(kit, state.inventory.items, tuning().spending.maxGear, (item) =>
-      this.sources.handsOf(item)
+    if (kit.size === 0) {
+      this.dressingUntil = 0;
+      return;
+    }
+    const plan = swapPlan(
+      kit,
+      state.inventory.items,
+      tuning().spending.maxGear,
+      (item) => this.sources.handsOf(item),
+      {
+        slotOf: (item) => this.sources.slotOf(item),
+        managed: (item) =>
+          this.config.sets.some((set) => set.wear.some((name) => sameItem(name, item)))
+      }
     );
+    // On, or as far on as the pack allows: nothing left for a step to wait for.
+    if (plan.commands.length === 0) this.dressingUntil = 0;
     this.send(plan, now.fighting ? 'combat' : 'probe', set);
   }
 
@@ -181,18 +216,27 @@ export class EquipmentManager {
   /** One plan, enqueued, with what it could not do said out loud. */
   private send(plan: GearPlan, priority: Priority, set: { name: string } | null): void {
     const at = this.now();
+    let sent = 0;
     for (const command of plan.commands) {
       const asked = this.askedAt.get(command) ?? 0;
       if (at - asked < tuning().spells.blessRetryMs) continue;
       this.askedAt.set(command, at);
+      sent += 1;
       this.queue.enqueue({
         command,
         priority,
         coalesceKey: `gear:${command}`,
         expiresAt: at + tuning().spells.buffExpiresMs
       });
+      this.dressingUntil = at + tuning().spells.buffExpiresMs;
     }
-    if (plan.commands.length > 0 && set !== null) {
+    /*
+     * Said when something went out, not whenever something is wanted: a
+     * `wear` under its retry floor is wanted on every status line until the
+     * pack says it landed, and announcing it each time filled the console
+     * with `Changing into Rest Set.` (skinny, 2026-09-29).
+     */
+    if (sent > 0 && set !== null) {
       this.events.notice?.(t('automation.gear.wearing', { set: set.name }));
     }
     for (const item of plan.missing) {
@@ -200,7 +244,7 @@ export class EquipmentManager {
       this.saidMissing.add(item);
       this.events.notice?.(t('automation.gear.missingFromSet', { item }));
     }
-    if (plan.overflow > 0) {
+    if (sent > 0 && plan.overflow > 0) {
       this.events.notice?.(
         t('automation.gear.capped', { max: tuning().spending.maxGear, more: plan.overflow })
       );

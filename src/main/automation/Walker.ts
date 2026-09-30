@@ -290,6 +290,21 @@ export interface WalkerEvents {
    * before it existed.
    */
   restInFlight?(): boolean;
+  /**
+   * Whether the kit is on for the step about to go out: false while a swap
+   * for it is still on its way.
+   *
+   * MegaMUD sends its post-rest command before the move that ends the rest,
+   * and the move waits for it (`megamud.exe` `0x413c50`, from the path step
+   * and the move, 2026-09-29). This is that wait, and a moving set's boots
+   * get it too, where they used to go on after the first step. Being asked
+   * is also how the session learns the step is coming, so the kit for
+   * sitting stands down (`Recovery.stand`). Bounded by the swap's own expiry
+   * (`EquipmentManager.dressing`), so a swallowed `wear` cannot pin a walk.
+   *
+   * Absent, nothing waits.
+   */
+  kitReady?(state: CharacterState): boolean;
   /** A room re-read owed after a monster came, went or died. See `holdForRoom`. */
   roomUnsettled?(): boolean;
   /**
@@ -3652,8 +3667,10 @@ export class Walker {
       this.holdSearching(step);
       return true;
     }
-    if (this.holds >= tuning().walk.maxHolds) return false;
-    if (this.events.holdAt?.(state) !== true) return false;
+    if (this.holds >= tuning().walk.maxHolds || this.events.holdAt?.(state) !== true) {
+      // Last, because asking stands the character up: see `kitReady`.
+      return this.holdForKit(state);
+    }
     this.holds += 1;
     this.publish();
     this.holdTimer = setTimeout(() => {
@@ -3672,6 +3689,27 @@ export class Walker {
        * quarry nothing will engage costs 4.5 seconds and then the walk goes
        * on, which is the whole reason there is a bound rather than a wait.
        */
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  /**
+   * The kit before the step — see `WalkerEvents.kitReady`.
+   *
+   * Silent, like the fight hold: it lasts one `wear`, and the server says
+   * `You are now wearing` in its own words. Outside the beat's budget,
+   * because what bounds it is the swap's own expiry.
+   */
+  private holdForKit(state: CharacterState): boolean {
+    if (this.events.kitReady?.(state) !== false) return false;
+    // Another hold's beat is already running, and it asks again.
+    if (this.holdTimer !== null) return true;
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
       if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
       this.sendCurrent();
     }, tuning().walk.holdMs);

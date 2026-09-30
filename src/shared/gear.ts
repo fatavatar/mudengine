@@ -17,7 +17,7 @@
 import type { CarriedItem } from './character';
 import type { ItemEntity } from './entities';
 import type { UiLookup } from './i18n';
-import { OFF_HAND, sameItem, WEAPON_HAND } from './items';
+import { capacityOf, OFF_HAND, sameItem, WEAPON_HAND } from './items';
 
 /**
  * The five things a gear button can ask for.
@@ -487,13 +487,23 @@ export function equipVerdict(item: ItemEntity, wearer: Wearer, t: UiLookup): Equ
  * order is the precedence and `GEAR_WHENS.indexOf` is what ranks two sets that
  * both match.
  *
- * Three, because three is what the client can answer without guessing:
- * `always` is the kit a character is in when nothing else is happening,
- * `moving` is a walk or a lap under way, `fighting` is `fightIsRunning`. A
- * fourth band for *resting* was left out — a rest is broken by the `wear` that
- * would start it, so a set for it could never take effect.
+ * Each is something the client can answer without guessing: `always` is the
+ * kit a character is in when nothing else is happening, `moving` is a walk or
+ * a lap under way, `resting` and `meditating` are a character sitting for its
+ * recovery (`Recovery.seated`), and `fighting` is `fightIsRunning`.
+ *
+ * The two sitting bands are MegaMUD's Pre/Post Rest and Pre/Post Meditate
+ * commands, whose own help gives the use: "equiping rings, etc. which may aid
+ * the resting process" — Fatty's are `eq healing stone` and `eq ruby-eyed
+ * amulet`. Timed as MegaMUD times them: on with the `rest`, through the heals
+ * cast between sit-downs, and off just before the step or the fight that
+ * ends the sitting — never at a health figure. A set says it as a kit, so the
+ * amulet comes back because the base names it. They were left out on the
+ * belief that `wear` breaks a rest, and the wire says it does not — `eq sev`
+ * at a `(Resting)` prompt, and the next prompt still `(Resting)`
+ * (`logs/2026-09-28_12-25-38_skinny.mudcap.jsonl`).
  */
-export const GEAR_WHENS = ['always', 'moving', 'fighting'] as const;
+export const GEAR_WHENS = ['always', 'moving', 'resting', 'meditating', 'fighting'] as const;
 
 export type GearWhen = (typeof GEAR_WHENS)[number];
 
@@ -531,6 +541,8 @@ export interface GearSituation {
   moving: boolean;
   /** Anything is swinging — `fightIsRunning`. */
   fighting: boolean;
+  /** What the character is sitting for, or null. See `Recovery.seated`. */
+  sitting: 'resting' | 'meditating' | null;
   /** The monster being fought, or null. */
   target: string | null;
 }
@@ -540,21 +552,34 @@ export interface GearSituation {
  *
  * **Most specific wins, and the tie is the list's own order**, so a player who
  * writes two sets for the same situation gets the first one rather than an
- * answer that depends on how the file was sorted. Specificity is: a fighting
- * set naming this monster, then any fighting set, then a moving set. A
+ * answer that depends on how the file was sorted. Specificity is the order of
+ * `GEAR_WHENS`, with a fighting set naming this monster above any other. A
  * fighting character that is also walking is *fighting* — the fight is the
- * thing that decides what the next round costs.
+ * thing that decides what the next round costs — and one sitting out a held
+ * lap is *resting*, though the lap still counts as under way.
  */
 export function overlayFor(sets: readonly GearSet[], now: GearSituation): GearSet | null {
+  const written = new Set(sets.map((set) => set.when));
   const matches = (set: GearSet): boolean => {
-    if (set.when === 'always') return false;
-    if (set.when === 'moving') return now.moving;
-    if (!now.fighting) return false;
-    const mob = set.mob.trim();
-    return mob.length === 0 || (now.target !== null && sameItem(now.target, mob));
+    switch (set.when) {
+      case 'always':
+        return false;
+      case 'moving':
+        return now.moving;
+      case 'resting':
+      case 'meditating':
+        // One sitting set serves both where only one is written, as one pair
+        // of MegaMUD's commands serves both (`megamud.exe` `0x4140c0`).
+        return now.sitting === set.when || (now.sitting !== null && !written.has(now.sitting));
+      case 'fighting': {
+        if (!now.fighting) return false;
+        const mob = set.mob.trim();
+        return mob.length === 0 || (now.target !== null && sameItem(now.target, mob));
+      }
+    }
   };
   const rank = (set: GearSet): number =>
-    set.when === 'fighting' ? (set.mob.trim().length > 0 ? 3 : 2) : 1;
+    GEAR_WHENS.indexOf(set.when) + (set.when === 'fighting' && set.mob.trim().length > 0 ? 1 : 0);
 
   let best: GearSet | null = null;
   for (const set of sets) {
@@ -579,6 +604,11 @@ export function baseSet(sets: readonly GearSet[]): GearSet | null {
  * through under its own name as its own key: it is still something the player
  * asked to have on, and refusing to wear it because the client could not file
  * it would be the client overruling them about their own pack.
+ *
+ * A slot that holds two (`SLOT_CAPACITY`) keeps two, as `finger` and
+ * `finger#2`, and what a set names for a slot replaces everything the base
+ * put there: a resting set naming one ring takes the place of the base's
+ * rings, not of one of them chosen by position.
  */
 export function kitFor(
   sets: readonly GearSet[],
@@ -587,15 +617,41 @@ export function kitFor(
 ): Map<string, string> {
   const kit = new Map<string, string>();
   const lay = (set: GearSet | null): void => {
+    const bySlot = new Map<string, string[]>();
     for (const name of set?.wear ?? []) {
       const item = name.trim();
       if (item.length === 0) continue;
-      kit.set((slotOf(item) ?? `item:${item}`).toLowerCase(), item);
+      const slot = (slotOf(item) ?? `item:${item}`).toLowerCase();
+      bySlot.set(slot, [...(bySlot.get(slot) ?? []), item]);
+    }
+    for (const [slot, items] of bySlot) {
+      // In place where the base had the slot, so the kit keeps its order.
+      const held = [...kit.keys()].filter((key) => slotFamily(key) === slot);
+      const kept = items.slice(-capacityOf(slot));
+      kept.forEach((item, index) =>
+        kit.set(held[index] ?? (index === 0 ? slot : `${slot}#${index + 1}`), item)
+      );
+      for (const key of held.slice(kept.length)) kit.delete(key);
     }
   };
   lay(baseSet(sets));
   lay(overlayFor(sets, now));
   return kit;
+}
+
+/** A kit key's slot: `finger#2` is the second place in `finger`. */
+export function slotFamily(key: string): string {
+  const mark = key.indexOf('#');
+  return mark === -1 ? key : key.slice(0, mark);
+}
+
+/**
+ * What `swapPlan` needs to make room in a slot that holds two: where a worn
+ * item sits, and whether an equipment set names it.
+ */
+export interface GearRoom {
+  slotOf(name: string): string | null;
+  managed(name: string): boolean;
 }
 
 /**
@@ -618,12 +674,21 @@ export function kitFor(
  * gone* is the thing worth knowing. An item already worn anywhere is left
  * alone — `wear` at something already on earns a refusal out of the budget a
  * fight is fought with.
+ *
+ * And a full hand of rings makes room first. The server takes a ring off
+ * itself when a third goes on, and chooses which: Skinny's `wear etched
+ * platinum ring` took off `Ring of Faith` and left the platinum moonstone
+ * ring beside it (2026-09-29). So where `room` is given, the client takes off a ring a set
+ * put on and this kit no longer names, before the `wear`. A ring no set
+ * names is the player's and never comes off; where only those fill the
+ * slot, the server chooses as before.
  */
 export function swapPlan(
   kit: ReadonlyMap<string, string>,
   items: readonly CarriedItem[],
   max: number,
-  handsOf: (name: string) => 1 | 2 | null
+  handsOf: (name: string) => 1 | 2 | null,
+  room?: GearRoom
 ): GearPlan {
   const missing: string[] = [];
   const wanted: Array<{ slot: string; item: string }> = [];
@@ -652,6 +717,7 @@ export function swapPlan(
     );
     if (held !== undefined && !kit.has(OFF_HAND.toLowerCase())) removals.push(unequip(held.name));
   }
+  if (room !== undefined) removals.push(...makeRoom(kit, wanted, items, room));
 
   const rest = wanted.filter((row) => row !== weapon);
   const commands = [
@@ -660,6 +726,32 @@ export function swapPlan(
     ...rest.map((row) => equip(row.item))
   ];
   return capped(commands, missing, max);
+}
+
+/** The `remove`s a full two-place slot needs before the kit's `wear`s. See `swapPlan`. */
+function makeRoom(
+  kit: ReadonlyMap<string, string>,
+  wanted: ReadonlyArray<{ slot: string; item: string }>,
+  items: readonly CarriedItem[],
+  room: GearRoom
+): string[] {
+  const removals: string[] = [];
+  const inKit = [...kit.values()];
+  for (const family of new Set(wanted.map((row) => slotFamily(row.slot)))) {
+    const capacity = capacityOf(family);
+    if (capacity < 2) continue;
+    const coming = wanted.filter((row) => slotFamily(row.slot) === family).length;
+    const on = items.filter(
+      (item) => item.equipped && (item.slot ?? room.slotOf(item.name))?.toLowerCase() === family
+    );
+    const short = coming - (capacity - on.length);
+    if (short <= 0) continue;
+    const spare = on.filter(
+      (item) => room.managed(item.name) && !inKit.some((name) => sameItem(name, item.name))
+    );
+    removals.push(...spare.slice(0, short).map((item) => unequip(item.name)));
+  }
+  return removals;
 }
 
 /**

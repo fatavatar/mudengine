@@ -74,8 +74,13 @@ export const ITEM_KIND_WORD: Record<ItemKind, string> = {
  * The same twelve-and-some slots the legacy client enumerated, which is the
  * list MegaMUD's inventory screen used — and the words the server's own `i`
  * listing prints in the trailing parenthesis, as far as it has been seen to
- * print them (`Weapon Hand`, `Head`, `Torso`, `Feet`, `Hands`). The numbers
- * 13 and 18 do not occur in the realm and are not named.
+ * print them (`Weapon Hand`, `Head`, `Torso`, `Feet`, `Hands`).
+ *
+ * 13 and 18 do not occur in Paradigm's realm; mudrev's has them (2026-09-29).
+ * Its 41 rows under 13 are all rings and its 6 under 18 are glasses, monocles
+ * and visors, and the wire lists them `Ring of Faith (Finger)` and `(Eyes)`.
+ * Unnamed, a ring of each code filed apart, and a kit holding one of each
+ * swapped them on and off every thirty seconds.
  */
 export const WORN_SLOT: Readonly<Record<number, string>> = {
   1: 'Weapon Hand',
@@ -98,12 +103,29 @@ export const WORN_SLOT: Readonly<Record<number, string>> = {
    * word here matches the same file exactly.
    */
   12: 'Off-Hand',
+  13: 'Finger',
   14: 'Wrist',
   15: 'Ears',
   16: 'Worn',
   17: 'Readied',
+  18: 'Eyes',
   19: 'Face'
 };
+
+/**
+ * The slots that hold two at once, by the listing's word in lower case: a
+ * hand of rings and a pair of wristbands. The wire lists two `(Finger)` rows
+ * in one `i` 93 times in this machine's logs and two `(Wrist)` rows 23 times
+ * (2026-09-29), and MegaMUD's inventory screen has the same pairs (`fatty.ini`
+ * `[InvCalc]`: `Finger1`, `Finger2`, `Wrist`, `Wrist2`). Every other slot holds
+ * one.
+ */
+export const SLOT_CAPACITY: Readonly<Record<string, number>> = { finger: 2, wrist: 2 };
+
+/** How many items a slot holds at once. See `SLOT_CAPACITY`. */
+export function capacityOf(slot: string): number {
+  return SLOT_CAPACITY[slot.toLowerCase()] ?? 1;
+}
 
 /**
  * `Worn` code 1 — the hand a weapon is swung with, by the word the listing
