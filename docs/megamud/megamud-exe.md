@@ -237,10 +237,16 @@ counter tables and the log labels (jump tables at `0x426918` and `0x425c18`):
   - So a spell MegaMUD cannot recognise is given up on, rather than cast
     uncounted all fight.
 
-Our equivalent (`AutoCombat.noteCast`) counts the frame `You cast X on Y!`,
-and also the caster's line of the spell's `StartMsg` row (ability 120). Soul
-rip carries row 3086, `You begin to chant in a fierce tone!`. The no-message
-watchdog has no equivalent yet.
+Ours differs on purpose (the player, 2026-09-30). `AutoCombat` counts a cast
+when it is **sent**, plus the server's repeats that print the frame `You cast
+X on Y!`. A spell's own message is not read as a cast: soul rip's `You begin
+to chant in a fierce tone!` is `StartMsg` row 3086 (ability 120), and
+chanting does not change combat choices.
+- The count is kept **per monster**, not per fight, so a heal or buff
+  answered by *Combat Off*, or a bodyguard taking the spell, does not reset it.
+- The fight's action is changed only after the character's own round
+  following the send.
+- The no-message watchdog has no equivalent.
 
 ## Messages.md effects → state
 
