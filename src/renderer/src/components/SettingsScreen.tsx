@@ -188,7 +188,7 @@ function PlayerGrants({
           // Created empty and kept only once something is granted, so a name
           // typed by mistake leaves nothing behind.
           if (!(key in grants)) {
-            onChange({ ...grants, [key]: { allow: [], deny: [], autoInviteWhenSeen: false } });
+            onChange({ ...grants, [key]: { allow: [], deny: [] } });
           }
         }}
         placeholder={t('settings.remotes.addPlayerPlaceholder')}
@@ -221,7 +221,7 @@ function PlayerGrants({
             <button
               className="chip toggle"
               data-level="critical"
-              onClick={() => write(who, { allow: [], deny: [], autoInviteWhenSeen: false })}
+              onClick={() => write(who, { allow: [], deny: [] })}
               onMouseDown={keepFocus}
               title={t('settings.remotes.removePlayerTitle', { name: who })}
               type="button"
@@ -263,7 +263,7 @@ function PlayerGrants({
           {/*
             Its own control, apart from the grid above: "Invite" on that grid
             answers this person's own `@invite` request; this fires with
-            nobody asking. See `CONTEXT.md` › Party › Auto Invite when seen.
+            nobody asking (`Remotes.autoInvite`).
           */}
           <CheckField
             checked={grant.autoInviteWhenSeen === true}

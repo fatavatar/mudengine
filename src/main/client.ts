@@ -1095,7 +1095,9 @@ function asGrant(value: unknown): PlayerGrant | null {
   const allow = asRemoteNames(record['allow']);
   const deny = asRemoteNames(record['deny']);
   if (allow === null || deny === null) return null;
-  return { allow, deny, autoInviteWhenSeen: record['autoInviteWhenSeen'] === true };
+  return record['autoInviteWhenSeen'] === true
+    ? { allow, deny, autoInviteWhenSeen: true }
+    : { allow, deny };
 }
 
 /** Every character on disk, and whether a session is open for it. */

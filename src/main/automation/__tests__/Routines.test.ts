@@ -966,7 +966,7 @@ describe('asking for what has not been read', () => {
 });
 
 /**
- * Keeping this character at its preferred rank — issue #9.
+ * Keeping this character at its preferred rank (PR #41, 2026-09-30).
  *
  * `checkPartyRank` is called directly with a constructed state, the same
  * seam `Recovery.test.ts` and `AutoCombat.test.ts` use for `restWithLeader`
@@ -1079,6 +1079,28 @@ describe('keeping this character at its preferred rank', () => {
     const { routines, queue } = rankRoutines({ preferredRank: 'front' });
     routines.checkPartyRank(withParty(null, [], false));
     expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['frontrank']);
+  });
+
+  /*
+   * The loop PR #41's review found (2026-09-30): the realm's confirmation finds
+   * no row of its own to update before the first listing, so it read as still
+   * out of place and sent the command again every time.
+   */
+  it('asks once while its own row is not listed, however many confirmations arrive', () => {
+    const { routines, queue } = rankRoutines({ preferredRank: 'back' });
+    const enqueue = vi.spyOn(queue, 'enqueue');
+    const unlisted = withParty(null, [], false);
+    routines.checkPartyRank(unlisted);
+    enqueue.mock.calls[0]![0].onSent?.();
+    queue.cancel(() => true);
+
+    routines.checkPartyRank(unlisted);
+    routines.checkPartyRank(unlisted);
+    expect(queue.snapshot.pending).toEqual([]);
+
+    // A listing that shows it still somewhere else is asked again.
+    routines.checkPartyRank(withParty('mid'));
+    expect(queue.snapshot.pending.map((intent) => intent.command)).toEqual(['backrank']);
   });
 
   it('re-attempts when another member joins and this character is still out of position', () => {

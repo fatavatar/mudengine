@@ -206,6 +206,9 @@ notices:
     autoJoinStated:
       many: 'Join When Invited was added, off, to {count} files: {fileList}'
       one: 'Join When Invited was added, off, to {fileList}'
+    partyRankStated:
+      many: 'Auto-Rank (MegaMUD''s Party Rank) was added, off and at Mid, to {count} files: {fileList}'
+      one: 'Auto-Rank (MegaMUD''s Party Rank) was added, off and at Mid, to {fileList}'
     freedomCureStated:
       one: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
         default, and was written into the cures of {count} file: {fileList}'

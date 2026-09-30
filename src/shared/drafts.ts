@@ -1430,7 +1430,7 @@ function playerGrants(value: unknown): Record<string, PlayerGrant> {
     out[key] = {
       allow: remoteNames(grant['allow']),
       deny: remoteNames(grant['deny']),
-      autoInviteWhenSeen: grant['autoInviteWhenSeen'] === true
+      ...(grant['autoInviteWhenSeen'] === true ? { autoInviteWhenSeen: true } : {})
     };
   }
   return out;

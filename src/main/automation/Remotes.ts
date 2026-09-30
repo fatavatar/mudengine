@@ -295,14 +295,7 @@ export class Remotes {
   /** The last command a leader's `@party` had this character run, and when. See `ranForParty`. */
   private partyRan: { command: string; at: number } | null = null;
 
-  /**
-   * Who stood in this character's room as of the last tick, lower-cased. See
-   * `autoInvite`.
-   *
-   * A different "seen" from the field above: that one is this character's own
-   * stealth visibility to the realm, and this one is room presence, kept only
-   * to diff against — never read as a fact about anybody in particular.
-   */
+  /** Who stood in this character's room at the last tick, lower-cased, to diff against. See `autoInvite`. */
   private lastRoomOccupants: ReadonlySet<string> = new Set();
 
   constructor(
@@ -615,32 +608,27 @@ export class Remotes {
   }
 
   /**
-   * Auto Invite when seen: a granted name is invited the moment they become
-   * present in this character's own room — whichever of the two walked in.
-   * See `CONTEXT.md` › Party › Auto Invite when seen.
+   * Auto Invite when seen: MegaMUD's per-player *Invite To Party If Seen*. A
+   * name with it on is invited when they come into this character's room, or
+   * it into theirs, unless this character follows somebody or they have
+   * already joined or been invited.
    *
-   * **Diffed against the last tick's occupants, not a parsed arrival line.**
-   * `player-arrives-room` only fires for somebody walking in on a stationary
-   * character; this character walking into a room where the grantee already
-   * stands replaces `room.occupants` wholesale instead, with no per-name event
-   * at all. Diffing catches both shapes the same way, and needs nothing new
-   * from the parser or `CharacterTracker`.
+   * MegaMUD scans the room on every pass of its automation loop (step `0x1b`
+   * of `0x40bab0`, the scan at `0x407ee0`): nothing while following, `invite`
+   * for a flagged player not in the party, and one `/name @join` on a later
+   * pass for somebody invited who has not joined (megamud.exe, 2026-09-30).
    *
-   * **No separate "already sent" bookkeeping.** The diff itself is what makes
-   * this edge-triggered: a name already present on the last tick is not
-   * "arrived" again, so nothing re-fires while they simply stay in the room.
-   * The only question left to ask at the moment of arrival is whether they
-   * are already spoken for — joined, or already holding a pending invite from
-   * this character — which `joinedTheParty` and `party.members` already know.
+   * **Diffed against the last tick's occupants.** `player-arrives-room` fires
+   * only for somebody walking in; walking into their room replaces
+   * `room.occupants` whole, with no per-name event. The diff catches both, and
+   * the roster's `invited` stands in for MegaMUD's flag, so somebody who steps
+   * out and back in is not invited twice.
    *
-   * **`invite` and the `@join` telepath that follows it are gated
-   * differently, on purpose.** `invite` is a plain in-game command — it works
-   * on anybody, whether or not they run this client — and stays independent
-   * of `remotes.enabled` like the rest of this method. The `@join` telepath
-   * only does anything for a peer running this client with its own remote
-   * control on, so it respects `remotes.enabled` the same way `askParty` and
-   * the `@wait`/`@ok` follower logic already do: that switch is the boundary
-   * of the whole peer `@` channel, not only the inbound half.
+   * **The `@join` goes with the invite, behind the `enabled` switch.** It only
+   * reaches a client that answers `@` commands, and `enabled` bounds this
+   * character's whole `@` channel. It is queued in the invite's own band, so
+   * it cannot overtake the invite and ask them into a party they were not yet
+   * invited to.
    */
   private autoInvite(state: CharacterState): void {
     // Keyed by the lower-cased name, like every grant, but carrying the
@@ -672,20 +660,7 @@ export class Remotes {
         coalesceKey: `remote:auto-invite:${key}`,
         reason: t('automation.remotes.reasonAutoInvite', { name })
       });
-      /*
-       * The peer-protocol nudge, so their own client — if it is one — can
-       * accept unattended, same idea as the reinvite sweep's broadcast
-       * `.@join` but aimed at just this one name.
-       *
-       * Enqueued directly, at the invite's own `probe` priority, rather than
-       * through the shared `ask()` (which sends at the `user` band): the
-       * queue sorts strictly by priority first (`CommandQueue`'s `pending`
-       * sort), and `user` outranks `probe` — so a `@join` sent through `ask()`
-       * would have jumped the not-yet-sent `invite` ahead of it and reached
-       * the wire first, asking them to join a party they have not been
-       * invited to yet. The same priority as the invite it follows keeps the
-       * two in the order they were queued.
-       */
+      // Not through `ask()`: its `user` band would overtake the invite.
       if (this.config.remotes.enabled) {
         this.queue.enqueue({
           command: `/${name} @join`,
@@ -875,6 +850,7 @@ export class Remotes {
     this.seen = false;
     this.joinSentTo = null;
     this.partyRan = null;
+    this.lastRoomOccupants = new Set();
   }
 
   /**

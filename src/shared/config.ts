@@ -1142,7 +1142,7 @@ export interface RemotesConfig {
   /**
    * What each named player may and may not ask for, plus Auto Invite when
    * seen, keyed by the **lower-cased** name, as `PlayerRegistry` keys it.
-   * Absent is `NO_PLAYER_GRANT`: nothing granted, nothing automatic.
+   * Absent is `NO_GRANT`: nothing granted, nothing automatic.
    */
   players: Record<string, PlayerGrant>;
 }
@@ -1166,11 +1166,7 @@ export interface RemotesConfig {
  */
 export type EncumbranceGate = 'never' | 'medium' | 'heavy';
 
-/**
- * Where a party member stands, reused rather than re-declared: one definition
- * of what a rank is allowed to be, derived from the roster's own field
- * (`PartyMember['rank']`) so the two cannot drift apart.
- */
+/** Where a party member stands: the roster's own field, so the two cannot drift. */
 export type PartyRank = NonNullable<PartyMember['rank']>;
 
 export interface LootConfig {
@@ -2368,17 +2364,11 @@ export interface PartyConfig {
    */
   restWithLeader: boolean;
   /**
-   * Keep this character at `preferredRank`, sending `frontrank`/`midrank`/
-   * `backrank` once whenever the roster says it is standing somewhere else.
-   * Off, like every other card here: a character nobody has opted in keeps
-   * whatever rank it already has, with no unsolicited command going out.
+   * Keep this character at `preferredRank`: MegaMUD's Party Rank, sent when
+   * the roster says it stands somewhere else (`Routines.checkPartyRank`). Off.
    */
   autoRank: boolean;
-  /**
-   * The rank `autoRank` tries to keep this character at. Mid, MegaMUD's own
-   * rank for a character nobody has moved — front and back are both a
-   * deliberate choice, never a default anybody drifts into.
-   */
+  /** Where `autoRank` keeps this character. Mid, where a character nobody has moved stands. */
   preferredRank: PartyRank;
   /**
    * Say `@heal` in the room below this share of maximum health, while in a
@@ -4058,13 +4048,14 @@ function playerGrants(
   for (const [name, grant] of Object.entries(value)) {
     const key = name.trim().toLowerCase();
     if (key.length === 0 || !isRecord(grant)) continue;
-    const held = out[key] ?? { allow: [], deny: [], autoInviteWhenSeen: false };
+    const held = out[key] ?? { allow: [], deny: [] };
     out[key] = {
       allow: [...new Set([...held.allow, ...remoteNames(grant['allow'], [])])],
       deny: [...new Set([...held.deny, ...remoteNames(grant['deny'], [])])],
-      // Union with any earlier entry for the same key, like the two lists
-      // above: `Soul:` and `soul:` both saying yes is one yes, not a fight.
-      autoInviteWhenSeen: held.autoInviteWhenSeen || bool(grant['autoInviteWhenSeen'], false)
+      // One yes between `Soul:` and `soul:` is a yes, as the lists are a union.
+      ...(held.autoInviteWhenSeen === true || bool(grant['autoInviteWhenSeen'], false)
+        ? { autoInviteWhenSeen: true }
+        : {})
     };
   }
   return out;

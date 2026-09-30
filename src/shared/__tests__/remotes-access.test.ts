@@ -376,7 +376,7 @@ describe('the two halves of the remote union move together', () => {
       }
     });
     expect(config.automation.remotes.players).toEqual({
-      soul: { allow: ['health', 'where'], deny: ['do'], autoInviteWhenSeen: false }
+      soul: { allow: ['health', 'where'], deny: ['do'] }
     });
   });
 

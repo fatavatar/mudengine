@@ -1106,6 +1106,12 @@ automation:
   # `deny` beats everything, which is what makes "the party, except Corwin"
   # expressible; `allow` grants whether or not they are in the gang or party;
   # anything in neither list falls through to `gang` and then to `party`.
+  # `autoInviteWhenSeen: true` on a name is MegaMUD's Invite To Party If Seen:
+  # they are invited when they come into your room, or you into theirs, unless
+  # you follow somebody or they have already joined or been invited. With
+  # `enabled` on, a telepathed @join follows the invite for a client that
+  # answers one. It answers no request, so it is not a remote and works with
+  # `enabled` off; it is written only when on.
   #
   #   remotes:
   #     enabled: true
@@ -1116,6 +1122,7 @@ automation:
   #       ardren:
   #         allow: [health, do, get-all]
   #         deny: []
+  #         autoInviteWhenSeen: true
   #       corwin:
   #         allow: []
   #         deny: [do, drop-all]
@@ -1888,6 +1895,16 @@ automation:
 
     # Sit down when the leader does, out of combat.
     restWithLeader: false
+
+    # Keep this character at preferredRank in its party -- MegaMUD's Party
+    # Rank. One frontrank, midrank or backrank when its own row on the party
+    # listing says it stands somewhere else, leading or following. A refusal is
+    # asked again only when somebody next joins, leaves or changes rank. MegaMUD
+    # sends front or back once, after joining on an invite, and mid never.
+    autoRank: false
+
+    # front, mid or back. Mid is where a character nobody has moved stands.
+    preferredRank: mid
 
     # Say @heal in the room when health falls below this share of maximum while
     # in a party -- MegaMUD's Ask For Healing. A member running MegaMUD or this

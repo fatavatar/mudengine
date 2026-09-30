@@ -275,6 +275,7 @@ function migrateAll(options: MigrationOptions): void {
   statedTheAutoJoin(home, note);
   statedTheHealChoice(home, note, options.template);
   statedTheRegenSpells(home, note, options.template);
+  statedThePartyRank(home, note, options.template);
 }
 
 /**
@@ -6523,6 +6524,55 @@ function statedTheAutoJoin(home: Home, note: (message: string) => void): void {
     stated.length === 1
       ? t('notices.migration.autoJoinStated.one', params)
       : t('notices.migration.autoJoinStated.many', params)
+  );
+}
+
+/**
+ * `automation.party.autoRank` and `preferredRank` into every file that states
+ * `party:` without them, off and mid, after `restWithLeader` with the
+ * template's paragraphs (PR #41, 2026-09-30): MegaMUD's Party Rank.
+ */
+function statedThePartyRank(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comments = templateComments(template, 'automation');
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const party = document.getIn(['automation', 'party'], true);
+      if (!isMap(party) || party.has('autoRank')) return false;
+      const d = DEFAULT_CONFIG.automation.party;
+      const pairs = [
+        document.createPair('autoRank', d.autoRank) as Pair,
+        ...(party.has('preferredRank')
+          ? []
+          : [document.createPair('preferredRank', d.preferredRank) as Pair])
+      ];
+      for (const pair of pairs) {
+        const comment = isScalar(pair.key)
+          ? comments.get(`automation.party.${String(pair.key.value)}`)
+          : undefined;
+        if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+      }
+      const after = party.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'restWithLeader'
+      );
+      party.items.splice(after === -1 ? party.items.length : after + 1, 0, ...pairs);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.partyRankStated.one', params)
+      : t('notices.migration.partyRankStated.many', params)
   );
 }
 

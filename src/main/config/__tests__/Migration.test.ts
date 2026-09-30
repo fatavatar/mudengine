@@ -6604,3 +6604,54 @@ describe('the regen spells are stated', () => {
     expect(spells()['regen']).toEqual({ hp: 'lfst' });
   });
 });
+
+/* MegaMUD's Party Rank (PR #41, 2026-09-30): off and mid, after restWithLeader. */
+describe('the party rank is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const party = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'party'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-rank-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes both after restWithLeader, once', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  party:\n    restWithLeader: true\n    askForHealBelow: 0\n',
+      'utf8'
+    );
+    migrate();
+    expect(party()['autoRank']).toBe(false);
+    expect(party()['preferredRank']).toBe('mid');
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('autoRank:')).toBeGreaterThan(text.indexOf('restWithLeader:'));
+    expect(text.indexOf('preferredRank:')).toBeLessThan(text.indexOf('askForHealBelow:'));
+    expect(said.filter((line) => line.includes('Party Rank'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated rank alone', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  party:\n    autoRank: true\n    preferredRank: back\n',
+      'utf8'
+    );
+    migrate();
+    expect(party()).toMatchObject({ autoRank: true, preferredRank: 'back' });
+  });
+});

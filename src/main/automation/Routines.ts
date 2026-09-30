@@ -70,6 +70,8 @@ const RANK_COMMANDS: Record<PartyRank, string> = {
 export class Routines {
   /** Whether the realm-entry probe has already run this session. */
   private probed = false;
+  /** The rank last asked for, held until this character's own row is read. See `checkPartyRank`. */
+  private rankAsked: PartyRank | null = null;
   /** Whether the character is in the realm: the only time the idle clock runs. */
   private inRealm = false;
   private idleTimer: NodeJS.Timeout | null = null;
@@ -158,6 +160,7 @@ export class Routines {
     this.lookedAtAt = 0;
     this.rosterUnknown = false;
     this.rosterAskedAt = 0;
+    this.rankAsked = null;
     this.askedBook = null;
     this.askedAbilities = false;
     this.bookCorrected = false;
@@ -314,48 +317,46 @@ export class Routines {
   }
 
   /**
-   * Keep this character at its preferred rank in its own party.
+   * Keep this character at its preferred rank in its own party: one
+   * `frontrank`/`midrank`/`backrank` when its own row on the roster says it
+   * stands somewhere else. Called on `party-joined`, `party-left` and
+   * `party-rank-changed`, and when either setting changes (`SessionManager`).
    *
-   * Reads "am I already there?" the same way the party card does — this
-   * character's own row in `state.party.members` — rather than a separately
-   * tracked rank that could drift from what the card shows. A row not yet on
-   * the roster (this character has just followed a leader, and the listing
-   * that would add its own row has not landed) reads the same as one whose
-   * `rank` is still null: not known to match, so it is worth one attempt.
+   * MegaMUD's `PartyRank` (`0x883c`: 0 front, 1 mid, 2 back) is sent once,
+   * right after it joins a party on an invite (`0x47e281`), and mid sends
+   * nothing (megamud.exe, 2026-09-30). This reads the roster instead, so a
+   * leader is kept in place too and a rank already held costs nothing.
    *
-   * Gated on being in a party at all — `following` set, or a roster that
-   * is not empty — on top of `automation.enabled` and `party.autoRank`, so
-   * this character leaving its own party (`party-left` fired about *this*
-   * character rather than a fellow member) finds nothing to correct rather
-   * than sending a rank command for a party it no longer belongs to.
-   *
-   * At most one command per call: the client cannot see whether the server
-   * took it, so there is nothing here to wait for or retry. The next trigger
-   * — the same four roster events this rides beside, or the two config
-   * changes that call this directly — reads the roster again and decides
-   * again.
-   *
-   * `movement` band, not `probe`: this is the character's own positioning,
-   * the same footing walking a planned route stands on, and it should not
-   * queue behind a housekeeping ask. Its own coalesce key, so it neither
-   * suppresses nor is suppressed by the roster refresh (`probe:party`) it
-   * rides beside.
+   * **One ask until the roster answers.** Just after following a leader, the
+   * roster has no row for this character until a listing lands, so the
+   * realm's own `You have moved to the back ranks of your group.` finds
+   * nothing to update, reads as still out of place, and would send the command
+   * again on every confirmation (PR #41 review, 2026-09-30). The rank asked
+   * for is held until the row is known; a row that is known and still wrong
+   * is asked again on the next roster event, as before.
    */
   checkPartyRank(state: CharacterState): void {
-    if (!this.config.enabled || !this.config.party.autoRank) return;
     const inParty = state.party.following !== null || state.party.members.length > 0;
-    if (!inParty) return;
+    if (!this.config.enabled || !this.config.party.autoRank || !inParty) {
+      this.rankAsked = null;
+      return;
+    }
 
     const name = state.name?.toLowerCase() ?? '';
     const self = state.party.members.find((member) => member.name.toLowerCase() === name);
+    const rank = self?.rank ?? null;
+    if (rank !== null) this.rankAsked = null;
     const preferred = this.config.party.preferredRank;
-    if ((self?.rank ?? null) === preferred) return;
+    if (rank === preferred || this.rankAsked === preferred) return;
 
     this.queue.enqueue({
       command: RANK_COMMANDS[preferred],
       priority: 'movement',
       coalesceKey: 'movement:party-rank',
-      reason: t('automation.party.reasonAutoRank', { rank: preferred })
+      reason: t('automation.party.reasonAutoRank', { rank: preferred }),
+      onSent: () => {
+        this.rankAsked = preferred;
+      }
     });
   }
 

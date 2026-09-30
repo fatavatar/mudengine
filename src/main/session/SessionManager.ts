@@ -4528,9 +4528,7 @@ export class SessionManager {
       ...stated,
       combat: withRealmMonsters(stated.combat, this.realmMonsters)
     };
-    // Kept from before the overwrite below, so a player changing the
-    // preference — or switching auto-rank on — while already in a party can
-    // be told apart from a reload that left both alone.
+    // To tell a changed rank setting from a reload that left it alone.
     const previousParty = this.automationConfig.party;
     this.automationConfig = automation;
     this.locateMethod = locate;
@@ -4545,14 +4543,7 @@ export class SessionManager {
     this.preferred = null;
     this.queue.configure(automation);
     this.routines.configure(this.entryProbes(automation));
-    /*
-     * The setting taking effect right away, rather than waiting for a roster
-     * event that may not come for a while: a preference changed, or the
-     * master switch just turned on, while this character is already in a
-     * party. `checkPartyRank` is where every other gate lives — off, not in
-     * a party, already at the preferred rank — so this only has to notice
-     * that one of the two facts moved.
-     */
+    // A rank setting changed takes effect now, not at the party's next change.
     if (
       automation.party.preferredRank !== previousParty.preferredRank ||
       (automation.party.autoRank && !previousParty.autoRank)
@@ -5273,15 +5264,8 @@ export class SessionManager {
     const roomBefore = this.tracker.current.room;
     const lineChanged = this.tracker.apply(block, undefined, collecting);
     const batchChanged = batch ? this.tracker.apply(batch, batch.rows) : false;
-    /*
-     * The same three block types the roster refresh above reacts to, read
-     * here **after** `apply` rather than beside it: this checks this
-     * character's own rank against the roster, and one of the four triggers
-     * is the server confirming a rank change this client itself asked for —
-     * checked against the roster as it stood a moment ago, that confirmation
-     * would still look wrong and send a second command for ever. After
-     * `apply`, it already matches, and nothing goes out.
-     */
+    // After `apply`: the realm confirming a rank this client asked for must
+    // already read as held, or it would ask again.
     if (
       block.type === 'party-joined' ||
       block.type === 'party-left' ||
