@@ -471,7 +471,7 @@ export class SettingsEditor {
    * wrong; `deny` wins, so a remote in both arrives here already resolved by
    * dropping it from `allow`.
    *
-   * **An emptied grant is removed, not left as two empty lists and a false.**
+   * **An emptied grant is removed, not left as two empty lists.**
    * A `players:` map that accumulated a key per person anybody ever clicked
    * would grow without bound and would read, in the user's own file, as a
    * list of people with permissions — when what it holds is people with none.
@@ -494,11 +494,11 @@ export class SettingsEditor {
     const key = who.toLowerCase();
     const deny = [...new Set(grant.deny)];
     const allow = [...new Set(grant.allow)].filter((remote) => !deny.includes(remote));
-    const autoInviteWhenSeen = grant.autoInviteWhenSeen === true;
+    const autoInvite = grant.autoInviteWhenSeen === true ? { autoInviteWhenSeen: true } : {};
 
     return editYaml(file, {
       mutate: (document) => {
-        if (allow.length === 0 && deny.length === 0 && !autoInviteWhenSeen) {
+        if (allow.length === 0 && deny.length === 0 && grant.autoInviteWhenSeen !== true) {
           document.deleteIn(['automation', 'remotes', 'players', key]);
           /*
            * And the map itself once the last name comes off it, so a file that
@@ -513,7 +513,7 @@ export class SettingsEditor {
         }
         document.setIn(
           ['automation', 'remotes', 'players', key],
-          document.createNode({ allow, deny, autoInviteWhenSeen })
+          document.createNode({ allow, deny, ...autoInvite })
         );
         /*
          * Block style, explicitly, because the map this writes into is usually

@@ -1059,27 +1059,19 @@ export interface RemoteGrant {
 export const NO_GRANT: RemoteGrant = { allow: [], deny: [] };
 
 /**
- * One named player's whole standing entry on the Permissions panel: the
- * reactive `allow`/`deny` grant plus **Auto Invite when seen**, a proactive
- * behavior that shares the screen and the name-keyed map but not the
- * `RemoteGrant` vocabulary — it never answers a request, so it is not a
- * `RemoteName` and does not belong in `allow` or `deny`. See `CONTEXT.md` ›
- * Party › Auto Invite when seen.
+ * One named player's entry: the `allow`/`deny` grant, plus **Auto Invite when
+ * seen**, MegaMUD's per-player *Invite To Party If Seen* (the Players dialog).
+ * It answers no request, so it is not a `RemoteName` and sits beside the two
+ * lists rather than in them.
  */
 export interface PlayerGrant extends RemoteGrant {
   /**
-   * Optional, not defaulted to `false` in the type, so the many existing
-   * `RemoteGrant`-shaped literals across the test suite — about `allow`/`deny`
-   * judging and nothing to do with this — stay exactly as they were. Every
-   * real producer (the config normalizers, the IPC validator, the UI) still
-   * always writes a definite `true`/`false`; a reader treats `undefined` the
-   * same as `false`.
+   * Written only when on: anything but `true` reads as off, so a file carries
+   * only what somebody turned on, and a grant written before this existed is
+   * unchanged.
    */
   autoInviteWhenSeen?: boolean;
 }
-
-/** The state every name starts in: nothing granted, nothing automatic. */
-export const NO_PLAYER_GRANT: PlayerGrant = { allow: [], deny: [], autoInviteWhenSeen: false };
 
 /**
  * How access is configured, mirrored from `RemotesConfig` so this module stays
@@ -1159,7 +1151,7 @@ export type RemoteVerdict =
 
 /** The grant a name is filed under, or an empty one. Case-insensitive, like the registry. */
 export function grantFor(access: RemoteAccess, from: string): PlayerGrant {
-  return access.players[from.trim().toLowerCase()] ?? NO_PLAYER_GRANT;
+  return access.players[from.trim().toLowerCase()] ?? NO_GRANT;
 }
 
 /** Names are compared case-insensitively: the server is inconsistent about case. */

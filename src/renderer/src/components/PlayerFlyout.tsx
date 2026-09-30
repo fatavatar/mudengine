@@ -906,8 +906,7 @@ function PlayerAccess({
       {/*
         Its own control, deliberately apart from the grid above: "Invite" on
         that grid answers this person's own `@invite` request, and this fires
-        with nobody asking. Same verb, different trigger — see
-        `CONTEXT.md` › Party › Auto Invite when seen.
+        with nobody asking (`Remotes.autoInvite`).
       */}
       <label className="player-auto-invite">
         <input
