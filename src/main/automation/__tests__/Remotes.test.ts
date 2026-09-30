@@ -1790,6 +1790,28 @@ describe('Auto Invite when seen', () => {
     expect(sent).toEqual(['invite Soul']);
   });
 
+  it('invites again after they simply leave and come back, having never been invited before', () => {
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul']);
+
+    character.onCharacter(emptyRoom);
+    character.onCharacter(withOccupants(emptyRoom, 'Soul'));
+    drain();
+    expect(sent).toEqual(['invite Soul', 'invite Soul']);
+  });
+
+  it('grants nothing else — Auto Invite when seen alone never answers their own @invite request', () => {
+    // The reactive `invite` remote and this option are different grants on the
+    // same per-player record; granting only this one must not widen the other.
+    const character = new Remotes(grantedTo('Soul'), queue);
+    character.onBlock(said('conversation-telepath', 'Soul', '@invite'), emptyRoom);
+    drain();
+    expect(sent).toEqual([]);
+  });
+
   it('says nothing while this character is following somebody else', () => {
     const character = new Remotes(grantedTo('Soul'), queue);
     const following = {

@@ -911,7 +911,7 @@ function PlayerAccess({
       */}
       <label className="player-auto-invite">
         <input
-          checked={grant.autoInviteWhenSeen}
+          checked={grant.autoInviteWhenSeen === true}
           onChange={(event) => set({ ...grant, autoInviteWhenSeen: event.target.checked })}
           type="checkbox"
         />
