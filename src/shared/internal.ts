@@ -1133,6 +1133,14 @@ const TUNING_DEFAULTS = {
      */
     followSettleMs: 350,
     /**
+     * How long a leader stands in the room a relayed `Text:` exit led to,
+     * waiting for the members who stood with it to arrive (`holdForParty`).
+     * The realm carries followers through a direction and not through a
+     * phrase, so each crosses on its own client; one that has not arrived by
+     * then is walked on without, and said so.
+     */
+    partyCatchUpMs: 30_000,
+    /**
      * How far the character may have wandered from what it was walking before
      * pressing play asks about it first.
      *

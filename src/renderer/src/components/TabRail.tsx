@@ -295,6 +295,9 @@ function attention(
   if (view.walk.status === 'walking' && view.walk.hold === 'dark') {
     return { level: 'info', label: t('tabs.tab.markLighting') };
   }
+  if (view.walk.status === 'walking' && view.walk.hold === 'party') {
+    return { level: 'info', label: t('tabs.tab.markParty') };
+  }
   /*
    * Waiting out a stated affliction, on a route or between a lap's legs.
    * `warn`, unlike the holds above: a condition is something the person may

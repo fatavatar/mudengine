@@ -45,7 +45,6 @@ logs/
 # recorded paths. Read from (docs/mega-paramud.md) and converted by
 # `npm run build:loops`; the converted loops are committed, this is not.
 mega-paramud/
-megamud/
 captures/
 # Claude Code's own working tree: agents, skills and worktrees it writes for
 # itself. It has never been committed and must not be -- `settings.local.json`
@@ -98,7 +97,6 @@ docs/*
 # page; `release.yml` uploads this file as its description beside the push,
 # so it has to be in the repository for the workflow to read.
 !/docker/README.md
-docker-compose.yml
 
 # And `build/README.md`, which stopped being working notes on 2026-09-05.
 #

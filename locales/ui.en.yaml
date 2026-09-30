@@ -184,10 +184,10 @@ notices:
       many: 'Walking on while confused is a setting, off by default, and was written into {count}
         files with the paragraph that explains it: {fileList}'
     monsterRowsStated:
-      one: "A character's own monster rows are a setting now, laid over the realm's monster table,
-        and were written into {count} file with the paragraph that explains them: {fileList}"
-      many: "A character's own monster rows are a setting now, laid over the realm's monster table,
-        and were written into {count} files with the paragraph that explains them: {fileList}"
+      one: 'A character''s own monster rows are a setting now, laid over the realm''s monster table,
+        and were written into {count} file with the paragraph that explains them: {fileList}'
+      many: 'A character''s own monster rows are a setting now, laid over the realm''s monster table,
+        and were written into {count} files with the paragraph that explains them: {fileList}'
     regionsBecameKeepOut:
       one: 'Using the vortexes and entering the Negative Power Plane are now the Keep Out Of list,
         and {count} file was moved over to it: {fileList}'
@@ -431,11 +431,13 @@ notices:
         the paragraph that explains them. Both are off, which is what the client was already doing.
         {fileList}'
     hangPenalties:
-      one: '"hangUp.onlyWhenClean" became "hangUp.penalties" in {count} file: whether the realm
+      one:
+        '"hangUp.onlyWhenClean" became "hangUp.penalties" in {count} file: whether the realm
         charges for a hang-up. The options file says no (a PvE realm), a character inherits its
         realm, and Paradigm''s realm menu answers for itself. Set it under Health › Auto-Hangup, or
         per realm; the backup beside each file has the old answer. {fileList}'
-      many: '"hangUp.onlyWhenClean" became "hangUp.penalties" in {count} files: whether the realm
+      many:
+        '"hangUp.onlyWhenClean" became "hangUp.penalties" in {count} files: whether the realm
         charges for a hang-up. The options file says no (a PvE realm), a character inherits its
         realm, and Paradigm''s realm menu answers for itself. Set it under Health › Auto-Hangup, or
         per realm; the backup beside each file has the old answer. {fileList}'
@@ -446,7 +448,8 @@ notices:
         waterskin against the desert spell — and it shipped off one day ago, so the "false" it
         replaces was this client''s own writing rather than your answer. Turn it off under Health
         in settings; the backup beside each file has the old answer. {fileList}'
-      one: '"automation.movement.useWards" moved to "automation.health.useWards" in {count} file and
+      one:
+        '"automation.movement.useWards" moved to "automation.health.useWards" in {count} file and
         was turned on. It is the realm''s own half of the "when to use an item" rules — the
         waterskin against the desert spell — and it shipped off one day ago, so the "false" it
         replaces was this client''s own writing rather than your answer. Turn it off under Health
@@ -550,8 +553,8 @@ notices:
       many: '"automation.combat.mobRules" was written into {count} files ({fileList}), empty: one
         row per monster, saying whether to leave it alone and where it comes in the attack order.
         Nothing changes until you name one.'
-    mobRulesBecameMonsterRows: "The monster rules and the monster rows are one list now, Monster
-      Details: a Never Attack rule is a Friend, and a band is the row's priority. Moved in {fileList}."
+    mobRulesBecameMonsterRows: 'The monster rules and the monster rows are one list now, Monster
+      Details: a Never Attack rule is a Friend, and a band is the row''s priority. Moved in {fileList}.'
     mobRulesFolded:
       one: '"automation.combat.avoid" and "combat.mobPriority" became one "combat.mobRules" list in
         {fileList}. An avoided monster is now a row set to never attack; every ranked monster kept
@@ -1069,6 +1072,7 @@ tabs:
     markSearching: searching
     markBlocked: blocked
     markLighting: lighting
+    markParty: waiting for party
     markBlind: blind
     markHeld: held
     markPoisoned: poisoned
@@ -1675,7 +1679,8 @@ cards:
         inPurse: in the purse
         purseUnread: purse not read
         fromBank: '{short} from {bank}'
-        fromBankTitle: 'The purse holds {purse}; the run withdraws the rest at {place}, which last said {held}.'
+        fromBankTitle:
+          'The purse holds {purse}; the run withdraws the rest at {place}, which last said {held}.'
         short: the purse and the banks on record hold too little
         shortTitle:
           'The purse holds {purse} and no bank on record holds the rest. Ask a bank for its balance
@@ -2109,6 +2114,7 @@ cards:
       badgeSearching: searching
       badgeBlocked: blocked
       badgeDark: lighting
+      badgeParty: waiting for the party
       badgeStopped: stopped
       endedReason: 'Ended: {reason}'
       gatedLabel: Gated
@@ -2616,10 +2622,10 @@ cards:
     stepSlight: <1%
     stepUnread: effect unread
     stepUnreadTitle:
-      "The realm runs a script when you stand here, and it has a step this client cannot follow — a
-      block the realm's own table does not hold, a verb nothing here reads, or a spell that ends in
+      'The realm runs a script when you stand here, and it has a step this client cannot follow — a
+      block the realm''s own table does not hold, a verb nothing here reads, or a spell that ends in
       another spell. So what the room does to you is unknown, and the router prices it as a risk
-      rather than as free. It is not a reading that the room is dangerous; it is the absence of one."
+      rather than as free. It is not a reading that the room is dangerous; it is the absence of one.'
     stepSummons: summons
     stepSummonsTitle:
       The realm's script for this room can put a monster in it, which is what a lair does — so the
@@ -3624,7 +3630,7 @@ settings:
     actionLabel: Action
     add: Add a message
     cancel: Cancel
-    chaseChip: chase — not used yet
+    chaseChip: chase — when following
     confirmReplace: Replace this realm's {count} messages with the ones in {file}? Edits made here are lost.
     conversationsHint:
       Also answer the sentence when somebody says it. Off unless you trust everyone in earshot —
@@ -3633,7 +3639,7 @@ settings:
     count:
       many: '{count} messages'
       one: '1 message'
-    countChase: '{count} chase rows kept but not used yet'
+    countChase: '{count} chase rows, answered when following'
     countOff: '{count} switched off'
     effectsLabel: Means
     enabledAria: 'Answer "{name}"'
@@ -3721,12 +3727,13 @@ settings:
     needsName: A row needs a monster.
     noMatch: No monster matches that search.
     none: No monsters yet. Import the Monsters.md from a MegaMUD data folder, or add one.
-    note: What to do about particular monsters here — MegaMUD's monster details, used by every
+    note:
+      What to do about particular monsters here — MegaMUD's monster details, used by every
       character that plays this realm. Friends are never attacked; Avoid is only hit back; Flee
       runs from it before anything else; Hang up disconnects when it is in the room. A priority
       sets the order monsters are attacked in, below any row on the realm's Attack Priority list.
       A character's own monster rows change only what they state. Importing replaces the table.
-    nothingSaid: "{file} names {count} monsters but says nothing particular about any of them, so the realm's table was left as it was."
+    nothingSaid: '{file} names {count} monsters but says nothing particular about any of them, so the realm''s table was left as it was.'
     notMonsters: '{file} is not a MegaMUD monster database. Choose the Monsters.md from a MegaMUD data folder.'
     preAttackChip: 'first: {spell}'
     preAttackHint: Cast on this monster before the fight is opened; it does not open the fight itself. Leave blank for none.
@@ -3939,11 +3946,6 @@ settings:
     blessingsMoved:
       Blessing the party lives on the Spells tab now — one list for self and party, in priority
       order, recast on wear-off events with a clock behind them.
-    catchUpWaitHint:
-      Leading, crossing a text exit says @party and re-invites anyone it left behind — this is how
-      many seconds the route then holds movement, and only movement, for them to catch up. 0 skips
-      the wait entirely, the opposite of Wait No Longer Than's 0. Capped at 2 minutes.
-    catchUpWaitLabel: Catch Up Wait (seconds)
     defendHint:
       Swing at a monster seen attacking any party member, while it is still in the room. The fight came to the
       party, so it fires whatever Attack Target Selection says. Never a player.
@@ -3953,12 +3955,15 @@ settings:
       A member's own @heal is answered by Auto-Heal Party Members on the Spells page, when @heal is
       ticked under Party @ commands below.
     legend: Following
-    ignorePartyHint: Refuse the leader's @party <command> — for a leader trusted to help, not to type for you.
+    ignorePartyHint:
+      Refuse the leader's @party <command> — for a leader trusted to help, not to type for you.
     ignorePartyLabel: Ignore @party If Following
-    ignoreWaitHint: Walk on through a follower's @wait. Wait For Party Members still stops for a member's health.
+    ignoreWaitHint:
+      Walk on through a follower's @wait. Wait For Party Members still stops for a member's health.
     ignoreWaitLabel: Ignore @wait If Leading
     leadLegend: Leading
-    leadNote: What this character does when others follow it. Every figure here comes from the party
+    leadNote:
+      What this character does when others follow it. Every figure here comes from the party
       listing, so how fresh it is depends on how often the listing is asked for.
     parAfterRoundHint: Ask for the party listing after every combat round as well.
     parAfterRoundLabel: Send par After Each Combat Round
@@ -5396,7 +5401,7 @@ automation:
       The way to {stepName} needs levers in {roomCount} different rooms and the realm does not say
       in which order. Pull them by hand and the way opens.
     reasonAmbiguous: I can no longer tell which room you are in
-    checkedElsewhere: 'The game refused {command} because you are in {roomName}, not where the route thought — planning again from here.'
+    checkedElsewhere: "The game refused {command} because you are in {roomName}, not where the route thought — planning again from here."
     reasonBarrier: '{barrier} blocked {command}. {detail}'
     reasonBashing: bashing the {barrier} to {stepName}
     reasonCombat: a fight started
@@ -5410,7 +5415,7 @@ automation:
     stoppedAtStart: the walk stopped before its first step went out
     reasonNotSent: '{command} never left the client'
     reasonNudge: forcing an answer after {command}
-    reasonCheckingRoom: 'reading the room again: the game refused {command}, and that may mean you are not where the route thinks'
+    reasonCheckingRoom: "reading the room again: the game refused {command}, and that may mean you are not where the route thinks"
     reasonOpening: opening the {barrier} to {stepName}
     reasonPicking: picking the {barrier} to {stepName}
     reasonPlayerTookOver: you moved the character yourself
@@ -5425,10 +5430,14 @@ automation:
     searchHolding:
       The realm says the way to {stepName} is hidden here. Searching for it, and staying put until
       it turns up.
-    reasonJoinCall: telling the party to join, so a straggler's client can catch up automatically
-    reasonPartyRelay: 'relaying "{command}" to the party before crossing'
-    reasonReinvite: 're-inviting {name}, who did not follow through the crossing'
     reasonSneak: sneaking before the route
+    reasonPartyRelay: 'telling the party to {command} too, before crossing'
+    reasonReinvite: 'inviting {name} back: the realm drops the party through a text exit'
+    partyHolding: Waiting here for {names} to come through behind you.
+    partyLeftBehind: '{names} did not come through; walking on without them.'
+    partyGoingBack: '{names} did not come on with the party; going back for them.'
+    partyRejoining: Waiting here for {names} to join the party again.
+    reasonPartyListing: checking who came on with the party after the text exit
     # Todo 104: the sheet's own figure decides, from `SneakCommand.cs`'s roll.
     sneakNoSkill: 'Not sneaking before steps: this character has no Stealth (the sheet says 0), so the server refuses every attempt. Sneak Before Each Step is ignored for this session.'
     reasonStepping: walking to {stepName}

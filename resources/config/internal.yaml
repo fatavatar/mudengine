@@ -854,6 +854,13 @@ tuning:
     # settles for nothing.
     followSettleMs: 350
 
+    # How long a leader stands in the room a text exit led to (go manhole, go
+    # portal), waiting for the party members who stood with it to arrive. The
+    # realm carries followers through a direction and not through a phrase, so
+    # each crosses on their own client; one who has not arrived by then is
+    # walked on without, and the walk says so.
+    partyCatchUpMs: 30000
+
     # How far the character may have wandered from what it was walking before
     # pressing play asks about it first.
     #
