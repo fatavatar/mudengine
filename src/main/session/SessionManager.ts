@@ -113,7 +113,7 @@ import { actionsFor } from './actions';
 import { CharacterTracker } from '../parse/CharacterTracker';
 import { Classifier } from '../parse/Classifier';
 import { LineTokenizer, plainText, stripAnsi } from '../net/LineTokenizer';
-import { TelnetClient } from '../net/TelnetClient';
+import { DialCancelled, TelnetClient } from '../net/TelnetClient';
 import { LinkWatch } from './LinkWatch';
 import { isPrompt, type Block } from '../../shared/blocks';
 import {
@@ -3643,6 +3643,7 @@ export class SessionManager {
       this.patch({ phase: 'connected', connectedAt: Date.now(), detail: null });
       this.sink.notice(t('session.connection.connected', { host: target.host, port: target.port }));
     } catch (error) {
+      if (error instanceof DialCancelled) return this.current; // `close` reports it
       const detail = errorMessage(error);
       this.patch({ phase: 'error', detail });
       this.sink.notice(t('session.connection.failed', { detail }));
