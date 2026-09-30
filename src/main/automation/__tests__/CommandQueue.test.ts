@@ -64,6 +64,35 @@ describe('pacing', () => {
     expect(sent).toEqual(['a', 'b', 'c']);
   });
 
+  /*
+   * `noGap` exists for exactly one measured failure: the party relay ahead
+   * of a text-exit crossing left enough of a gap (676ms, live capture
+   * 2026-09-28) for a follower's own client to hear it, replay it, and land
+   * in the new room before the leader's own move even reached the wire.
+   */
+  it('sends the next command with no gap when the last one asked for none', () => {
+    queue.enqueue({ command: 'a', priority: 'probe', noGap: true });
+    queue.enqueue({ command: 'b', priority: 'probe' });
+    // No `vi.advanceTimersByTime` at all: if this needed the ordinary gap,
+    // nothing but `a` would be here yet.
+    expect(sent).toEqual(['a', 'b']);
+  });
+
+  it('only excuses the one gap right behind a noGap send, not the next one after that', () => {
+    // A window wide enough that the cap this queue's own header describes
+    // (the server's real, measured limit) is not what stops `c` here — the
+    // ordinary `minGapMs` floor, resumed after the one excused gap, is.
+    const wide = make({ pacing: { window: 5, minGapMs: 100, ackTimeoutMs: 1000 } });
+    wide.enqueue({ command: 'a', priority: 'probe', noGap: true });
+    wide.enqueue({ command: 'b', priority: 'probe' });
+    wide.enqueue({ command: 'c', priority: 'probe' });
+    expect(sent).toEqual(['a', 'b']);
+
+    vi.advanceTimersByTime(100);
+    expect(sent).toEqual(['a', 'b', 'c']);
+    wide.dispose();
+  });
+
   it('reclaims credit when a command never produces a prompt', () => {
     // Not everything answers with a status line. Without this the window would
     // close permanently the first time one went unanswered.

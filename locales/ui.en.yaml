@@ -1072,6 +1072,7 @@ tabs:
     markSearching: searching
     markBlocked: blocked
     markLighting: lighting
+    markParty: waiting for party
     markBlind: blind
     markHeld: held
     markPoisoned: poisoned
@@ -2113,6 +2114,7 @@ cards:
       badgeSearching: searching
       badgeBlocked: blocked
       badgeDark: lighting
+      badgeParty: waiting for the party
       badgeStopped: stopped
       endedReason: 'Ended: {reason}'
       gatedLabel: Gated
@@ -3628,7 +3630,7 @@ settings:
     actionLabel: Action
     add: Add a message
     cancel: Cancel
-    chaseChip: chase — not used yet
+    chaseChip: chase — when following
     confirmReplace: Replace this realm's {count} messages with the ones in {file}? Edits made here are lost.
     conversationsHint:
       Also answer the sentence when somebody says it. Off unless you trust everyone in earshot —
@@ -3637,7 +3639,7 @@ settings:
     count:
       many: '{count} messages'
       one: '1 message'
-    countChase: '{count} chase rows kept but not used yet'
+    countChase: '{count} chase rows, answered when following'
     countOff: '{count} switched off'
     effectsLabel: Means
     enabledAria: 'Answer "{name}"'
@@ -5431,6 +5433,13 @@ automation:
       The realm says the way to {stepName} is hidden here. Searching for it, and staying put until
       it turns up.
     reasonSneak: sneaking before the route
+    reasonPartyRelay: 'telling the party to {command} too, before crossing'
+    reasonReinvite: 'inviting {name} back: the realm drops the party through a text exit'
+    partyHolding: Waiting here for {names} to come through behind you.
+    partyLeftBehind: '{names} did not come through; walking on without them.'
+    partyGoingBack: '{names} did not come on with the party; going back for them.'
+    partyRejoining: Waiting here for {names} to join the party again.
+    reasonPartyListing: checking who came on with the party after the text exit
     # Todo 104: the sheet's own figure decides, from `SneakCommand.cs`'s roll.
     sneakNoSkill: 'Not sneaking before steps: this character has no Stealth (the sheet says 0), so the server refuses every attempt. Sneak Before Each Step is ignored for this session.'
     reasonStepping: walking to {stepName}

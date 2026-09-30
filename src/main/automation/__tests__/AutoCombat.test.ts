@@ -16,6 +16,7 @@ import {
   type RoomOccupant
 } from '../../../shared/character';
 import { classifyOccupant, type AlignmentCost, type MobDisposition } from '../../../shared/mobs';
+import { mergeMonsterRules } from '../../../shared/monsterRules';
 import type { Block } from '../../../shared/blocks';
 import { REREAD_ROOM, ROOM_READ_KEY } from '../../../shared/commands';
 import type { ItemEntity, MobEntity } from '../../../shared/entities';
@@ -375,6 +376,33 @@ describe('opening a fight', () => {
     );
     drain();
     expect(sent).toEqual(['a shopkeeper']);
+  });
+
+  /*
+   * Skinny, 2026-09-29: storm giants marked Enemy over the realm's Avoid are
+   * Neutral in the realm data, and he stood beside Fatty's fight with them.
+   * MegaMUD's Enemy is attacked on sight, whatever the realm says it would do.
+   */
+  it('attacks a monster its row marks Enemy, though the realm calls it passive', () => {
+    const giant = { ...EMPTY_CHARACTER.room, occupants: [mob('storm giant', 'passive')] };
+    make(
+      combat({
+        monsters: mergeMonsterRules(
+          [{ mob: 'storm giant', relationship: 'avoid' }],
+          [{ mob: 'storm giant', relationship: 'enemy', notHostile: true }]
+        )
+      })
+    ).onCharacter(state({ room: giant }));
+    drain();
+    expect(sent).toEqual(['a storm giant']);
+
+    // A row that says something else leaves the disposition to `engage`.
+    sent = [];
+    make(combat({ monsters: [{ mob: 'storm giant', priority: 'high' }] })).onCharacter(
+      state({ room: giant })
+    );
+    drain();
+    expect(sent).toEqual([]);
   });
 
   it('starts nothing at all when told to only hit back', () => {
@@ -2105,6 +2133,20 @@ describe('casting in a fight', () => {
       vi.advanceTimersByTime(200);
       drain();
       expect(sent).toEqual(['poison cloud']);
+    });
+
+    /* The player, 2026-09-29: a monster its row calls Not hostile is not coming. */
+    it('does not count a monster marked Not hostile toward the crowd', () => {
+      const auto = make(
+        combat({ engage: 'none', monsters: [{ mob: 'giant rat 2', notHostile: true }] }),
+        true,
+        spells()
+      );
+      auto.onCharacter(crowded(3));
+      auto.onBlock(block('user-hits'));
+      vi.advanceTimersByTime(200);
+      drain();
+      expect(sent).toEqual(['ma giant rat']);
     });
 
     it('falls back to the single-target spell under the crowd floor', () => {

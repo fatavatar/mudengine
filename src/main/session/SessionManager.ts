@@ -2961,7 +2961,15 @@ export class SessionManager {
       stated: (held, started, ended) => {
         if (this.tracker.noteStated(held, started, ended)) this.reactToState();
       },
-      fired: (trigger) => this.onMessageFired(trigger)
+      fired: (trigger) => this.onMessageFired(trigger),
+      // MegaMUD's chase rows: after the leader this character follows, and
+      // not again where the leader's `@party` already sent it.
+      chase: (target, command) => {
+        if (!this.automationConfig.enabled) return false;
+        const leader = this.tracker.current.party.following;
+        if (leader === null || leader.toLowerCase() !== target.toLowerCase()) return false;
+        return !this.remotes.ranForParty(command);
+      }
     });
 
     /*

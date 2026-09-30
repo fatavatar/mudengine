@@ -631,6 +631,28 @@ export class Walker {
    */
   private hold: WalkHold = null;
   /**
+   * A party crossing a `Text:` exit behind this character, and how far its
+   * regrouping has got (`holdForParty`). Due when `index` reaches `due` on
+   * `route`, the room that phase's step leads to; any other room drops it, so
+   * a refused or replanned step waits for nobody.
+   *
+   * - `landing`: the relayed step's room. `members` are invited and waited for.
+   * - `listing`: the next step's room. Joined members came with it, so a `par`
+   *   there says who did not rejoin.
+   * - `returning`: the way back to the room they were left in (`regroup`).
+   * - `rejoin`: that room, with `route` the way on to `onTo`; nothing goes until
+   *   they have joined again.
+   */
+  private crossing: {
+    phase: 'landing' | 'listing' | 'returning' | 'rejoin';
+    route: Route;
+    due: number;
+    members: string[];
+    since: number | null;
+    listing: 'unasked' | 'asked' | 'read';
+    onTo: RoomId | null;
+  } | null = null;
+  /**
    * When the walk began waiting for a light, or null while it is not.
    *
    * **A moment, not a flag**, for `askedWhereAt`'s reason: the pack answers
@@ -1281,6 +1303,7 @@ export class Walker {
     if (this.status !== 'walking') return;
     this.clearTimer();
     this.checking = null;
+    this.crossing = null;
     // The outstanding step is not going to be answered as this step any more,
     // so the clock it was being timed against goes with it. See `answers`.
     this.stepSentAt = null;
@@ -1308,6 +1331,7 @@ export class Walker {
     this.answers = [];
     this.stepSentAt = null;
     this.clearTimer();
+    this.crossing = null;
     this.route = null;
     this.index = 0;
     // And the journey's own counter with it: `walked` survives a redrawn plan
@@ -1454,6 +1478,14 @@ export class Walker {
     if (block.type === 'user-dies') {
       this.stop(t('automation.walk.reasonDied'));
       return;
+    }
+
+    // The listing `holdForParty` asked for: who the realm still has in the party.
+    if (
+      (block.type === 'party-roster' || block.type === 'party-alone') &&
+      this.crossing?.listing === 'asked'
+    ) {
+      this.crossing.listing = 'read';
     }
 
     // A room printed after the check's Enter: what is on screen is now the
@@ -3426,8 +3458,10 @@ export class Walker {
      */
     const wasLeaving = this.leavingAFight;
     this.leavingAFight = false;
+    this.inviteCrossed();
 
     if (this.index >= this.route.steps.length) {
+      if (this.finishRegroup(state)) return;
       /*
        * Unless this walk came here for a lever, in which case arriving is the
        * middle of the journey and not the end of it. Ahead of everything
@@ -3618,6 +3652,8 @@ export class Walker {
      * into 4.5 seconds later.
      */
     if (fightIsRunning(state) && !this.leavingAFight) return this.answerFight();
+    // The party a relayed text exit left behind, once nothing is fighting.
+    if (this.holdForParty(state)) return true;
     /*
      * A hidden exit the room has not printed yet — todo 04's first point,
      * *"do not try the direction first unless it is available"*. Sending the
@@ -4385,6 +4421,270 @@ export class Walker {
   }
 
   /**
+   * Leading across a `Text:` exit, say the phrase to the party first, as
+   * `@party <command>`: the realm carries followers through a direction and
+   * not through a phrase, so each must cross on their own client. MegaMUD
+   * does the same for a path step written `@party <command>`, the say going
+   * out ahead of the move (`megamud.exe` 0x40a0eb). Both skip the pacing gap
+   * (`Intent.noGap`): 676ms behind it, a follower landed first and was
+   * pulled back to the room the leader had not yet left (2026-09-28).
+   *
+   * Keyed on the phrase, `requirement.commands`, rather than the exit's kind:
+   * a level-gated `go portal` is priced `kind: 'level'` and still needs it
+   * (2026-09-28). Once per step, so a retry is not a second relay. The members
+   * standing here go to `holdForParty`, by room rather than roster, because
+   * a leader is not told when the crossing drops somebody (2026-09-28).
+   */
+  private relayTextExit(step: RouteStep, state: CharacterState): void {
+    // Once per step, and not on the way back to regroup (`regroup`).
+    if (this.crossing?.route === this.route) {
+      const { phase, due } = this.crossing;
+      if ((phase === 'landing' && due === this.index + 1) || phase === 'returning') return;
+    }
+    if (!step.requirement?.commands?.length || state.party.following !== null) return;
+    if (this.route === null) return;
+    const self = state.name?.toLowerCase();
+    const here = new Set(state.room.occupants.map((who) => who.name.toLowerCase()));
+    const members = state.party.members
+      .filter((member) => !member.invited)
+      .map((member) => member.name)
+      .filter((name) => name.toLowerCase() !== self && here.has(name.toLowerCase()));
+    if (members.length === 0) return;
+    this.crossing = {
+      phase: 'landing',
+      route: this.route,
+      due: this.index + 1,
+      members,
+      since: null,
+      listing: 'unasked',
+      onTo: null
+    };
+    this.queue.enqueue({
+      command: `.@party ${step.command}`,
+      priority: 'movement',
+      noGap: true,
+      reason: t('automation.walk.reasonPartyRelay', { command: step.command })
+    });
+    // The say breaks a sneak, and `sneakFirst` reads the state from before it.
+    if (state.stealth === 'sneaking') {
+      this.queue.enqueue({
+        command: 'sn',
+        priority: 'movement',
+        coalesceKey: 'sneak',
+        noGap: true,
+        reason: t('automation.walk.reasonSneak')
+      });
+    }
+  }
+
+  /** Whether the room just reached is the one the crossing's phase is due in. */
+  private crossingDue(): boolean {
+    return this.crossing?.route === this.route && this.crossing.due === this.index;
+  }
+
+  /**
+   * The crossing has landed: invite everybody who stood with the leader, once.
+   * The realm drops the party through a text exit even for a follower who
+   * crossed (2026-09-29, twice), and the follower's `autoJoin` answers. One
+   * `invite` each rather than MegaMUD's telepathed `@join` as well
+   * (`megamud.exe` 0x408050 sends one or the other): `Remotes` reads the
+   * two as one join.
+   */
+  private inviteCrossed(): void {
+    if (this.crossing?.phase === 'landing' && this.crossingDue())
+      this.invite(this.crossing.members);
+  }
+
+  private invite(names: readonly string[]): void {
+    for (const name of names) {
+      this.queue.enqueue({
+        command: `invite ${name}`,
+        priority: 'movement',
+        reason: t('automation.walk.reasonReinvite', { name })
+      });
+    }
+  }
+
+  /**
+   * The party a relayed text exit may have split, regathered before the walk
+   * goes on — MegaMUD's *Invite To Party If Seen*, which re-invites a member
+   * left behind and waits for them. Each phase of `crossing` holds in its own
+   * room, bounded by `tuning.walk.partyCatchUpMs`; a member still missing
+   * then is walked on without, and said so.
+   */
+  private holdForParty(state: CharacterState): boolean {
+    const crossing = this.crossing;
+    if (crossing === null) return false;
+    if (crossing.route !== this.route || crossing.due < this.index) return this.letPartyGo();
+    if (crossing.due !== this.index || crossing.phase === 'returning') return false;
+    // Walking out of a fight nothing here will end: standing still is the one thing it must not do.
+    if (this.leavingAFight) return this.letPartyGo();
+
+    const here = new Set(state.room.occupants.map((who) => who.name.toLowerCase()));
+    const joined = new Set(
+      state.party.members
+        .filter((member) => !member.invited)
+        .map((member) => member.name.toLowerCase())
+    );
+    const now = Date.now();
+    crossing.since ??= now;
+    const late = now - crossing.since >= tuning().walk.partyCatchUpMs;
+
+    if (crossing.phase === 'landing') {
+      const missing = crossing.members.filter((name) => !here.has(name.toLowerCase()));
+      if (missing.length > 0 && !late) return this.holdPartyBeat(state, 'partyHolding', missing);
+      if (missing.length > 0) return this.walkOnWithout(missing);
+      // Everybody is here; the next step's room says who is still in the party.
+      crossing.phase = 'listing';
+      crossing.due += 1;
+      crossing.since = null;
+      return this.releasePartyHold();
+    }
+
+    if (crossing.phase === 'listing') {
+      if (crossing.listing === 'unasked') {
+        crossing.listing = 'asked';
+        this.queue.enqueue({
+          command: 'party',
+          priority: 'probe',
+          coalesceKey: 'walk:par',
+          reason: t('automation.walk.reasonPartyListing')
+        });
+      }
+      if (crossing.listing !== 'read') {
+        return late ? this.letPartyGo() : this.holdPartyBeat(state, null, []);
+      }
+      const missing = crossing.members.filter(
+        (name) => !here.has(name.toLowerCase()) || !joined.has(name.toLowerCase())
+      );
+      return missing.length === 0 ? this.letPartyGo() : this.regroup(state, missing);
+    }
+
+    // `rejoin`: back where they were left, invited again.
+    const missing = crossing.members.filter(
+      (name) => !here.has(name.toLowerCase()) || !joined.has(name.toLowerCase())
+    );
+    if (missing.length === 0) return this.letPartyGo();
+    if (late) return this.walkOnWithout(missing);
+    return this.holdPartyBeat(state, 'partyRejoining', missing);
+  }
+
+  /** One beat of `holdForParty`, said once on the way in when `say` names what it is for. */
+  private holdPartyBeat(
+    state: CharacterState,
+    say: 'partyHolding' | 'partyRejoining' | null,
+    names: readonly string[]
+  ): true {
+    if (this.hold !== 'party') {
+      this.hold = 'party';
+      if (say !== null && !this.quiet) {
+        this.events.notice?.(
+          say === 'partyHolding'
+            ? t('automation.walk.partyHolding', { names: names.join(', ') })
+            : t('automation.walk.partyRejoining', { names: names.join(', ') })
+        );
+      }
+      this.publish();
+    }
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.status !== 'walking') return;
+      if (this.holdBeforeSending(this.events.stateNow?.() ?? state)) return;
+      this.sendCurrent();
+    }, tuning().walk.holdMs);
+    this.holdTimer.unref?.();
+    return true;
+  }
+
+  private walkOnWithout(missing: readonly string[]): false {
+    if (!this.quiet) {
+      this.events.notice?.(t('automation.walk.partyLeftBehind', { names: missing.join(', ') }));
+    }
+    return this.letPartyGo();
+  }
+
+  /**
+   * Members the listing says did not come on with the party: walk back to the
+   * room they were left in, once, planned rather than reversed since the step
+   * may have no opposite. `finishRegroup` takes it from there. A way back the
+   * planner cannot give is walked on from, and said so.
+   */
+  private regroup(state: CharacterState, missing: readonly string[]): boolean {
+    const route = this.route;
+    const left = route?.steps[this.index - 1]?.from;
+    const onTo = route?.steps.at(-1)?.to;
+    if (route === null || left === undefined || onTo === undefined) return this.letPartyGo();
+    const back = this.events.replan?.(left, this.shortest);
+    if (back === undefined || typeof back === 'string' || back.blocked || back.steps.length === 0) {
+      return this.walkOnWithout(missing);
+    }
+    if (!this.quiet) {
+      this.events.notice?.(t('automation.walk.partyGoingBack', { names: missing.join(', ') }));
+    }
+    this.walked += this.index;
+    this.route = back;
+    this.index = 0;
+    this.crossing = {
+      phase: 'returning',
+      route: back,
+      due: back.steps.length,
+      members: [...missing],
+      since: null,
+      listing: 'unasked',
+      onTo
+    };
+    this.forgetBarrier();
+    this.forgetLock();
+    this.barrierRounds = 0;
+    this.carryOn(state);
+    return true;
+  }
+
+  /**
+   * Back in the room the missing members were left in: invite them again and
+   * plan the way on, whose first step `holdForParty` holds until they have
+   * joined. The one arrival that is not the journey's — `finishErrand`'s rule.
+   */
+  private finishRegroup(state: CharacterState): boolean {
+    const crossing = this.crossing;
+    if (crossing?.phase !== 'returning' || crossing.onTo === null || !this.crossingDue()) {
+      return false;
+    }
+    const on = this.events.replan?.(crossing.onTo, this.shortest);
+    if (on === undefined || typeof on === 'string' || on.blocked) {
+      this.crossing = null;
+      this.stop(typeof on === 'string' ? on : (on?.reason ?? t('automation.walk.refusalNoRoute')));
+      return true;
+    }
+    if (on.steps.length === 0) {
+      this.crossing = null;
+      return false;
+    }
+    this.invite(crossing.members);
+    this.walked += this.index;
+    this.route = on;
+    this.index = 0;
+    this.crossing = { ...crossing, phase: 'rejoin', route: on, due: 0, since: null };
+    this.carryOn(state);
+    return true;
+  }
+
+  /** A phase is settled and the next is armed: the hold, not the crossing, lets go. */
+  private releasePartyHold(): false {
+    if (this.hold === 'party') {
+      this.hold = null;
+      this.publish();
+    }
+    return false;
+  }
+
+  /** The crossing is settled, one way or another: nothing holds for it now. */
+  private letPartyGo(): false {
+    this.crossing = null;
+    return this.releasePartyHold();
+  }
+
+  /**
    * A beat while the room is being read again: a monster came, went or died,
    * and the Enter that says who is left has not been answered
    * (`SessionManager.rereadRoom`). Stepping out first is walking away from
@@ -4779,6 +5079,7 @@ export class Walker {
        */
       if (this.pullLeversFirst(step, now)) return;
     }
+    if (now !== undefined) this.relayTextExit(step, now);
     if (now !== undefined) this.sneakFirst(now);
     /*
      * And where the realm's own spell will put the character, for an exit

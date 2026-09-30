@@ -168,6 +168,8 @@ export type WalkHold =
   | 'dark'
   /** Waiting out what the realm's message table says is on the character. */
   | 'condition'
+  /** Party members a relayed text exit left behind, not yet here. See `Walker.holdForParty`. */
+  | 'party'
   | null;
 
 /**

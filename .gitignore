@@ -74,7 +74,16 @@ image*.png
 # (a paste renamed by hand, an archived screenshot named after its todo)
 # escaped `image*.png` one filename at a time.
 todo/
-docs/
+docs/*
+
+# Except the MegaMUD reference (2026-09-29): what megamud.exe does, read from
+# the binary with addresses, the map of every MegaMUD setting, and the tool
+# that reads them. It is a record the code cites rather than notes on a
+# session, and the user asked for it to be kept in the repository, since
+# MegaMUD may one day be rebuilt on this engine. The exe itself stays out:
+# the tool reads it from the MegaMUD zip.
+!/docs/megamud/
+!/docs/megamud/*.md
 
 # The one exception, and it is deliberate: the root README is the front page
 # of the repository, so it is the one piece of prose worth keeping under

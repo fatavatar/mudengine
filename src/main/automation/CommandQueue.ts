@@ -118,6 +118,13 @@ export interface Intent {
    */
   typed?: boolean;
   /**
+   * Skip `pacing.minGapMs` before whichever command sends next: for a pair
+   * that must reach the server back to back. Only the party relay and the
+   * move behind it (`Walker.relayTextExit`): 676ms apart, a follower landed
+   * first and was pulled back (2026-09-28).
+   */
+  noGap?: boolean;
+  /**
    * The command has just been written to the socket.
    *
    * For a proposer whose own deadline measures the **server's** silence. The
@@ -200,6 +207,8 @@ export class CommandQueue {
   private inFlight = 0;
   private seq = 0;
   private lastSentAt = 0;
+  /** Whether the last command written asked for no gap before the next. See `Intent.noGap`. */
+  private skipNextGap = false;
   /**
    * What has been written to the socket lately, oldest first, so an intent can
    * be put back when the server says it threw that one away.
@@ -485,6 +494,7 @@ export class CommandQueue {
     this.inFlight = 0;
     this.outstanding = [];
     this.typingHeld = false;
+    this.skipNextGap = false;
     // Nothing is in flight any more, so there is nothing a fumble could be
     // about — and replaying a command from before a disconnect is the one
     // thing `resendLast` must never do.
@@ -636,6 +646,7 @@ export class CommandQueue {
     this.inFlight += 1;
     this.outstanding.push(now);
     this.lastSentAt = now;
+    this.skipNextGap = next.noGap === true;
     /*
      * Trimmed **on the way in**, which is what makes the bound real: the only
      * other trim is inside `resendLast`, and that runs on a fumble — an event
@@ -691,6 +702,10 @@ export class CommandQueue {
      * login. Waiting there is pure latency.
      */
     if (this.inFlight === 0) return 0;
+
+    // The last send asked, via `noGap`, that whatever comes next skip this
+    // floor — see `Intent.noGap`. The window cap above still applies.
+    if (this.skipNextGap) return 0;
 
     const sinceLast = now - this.lastSentAt;
     return sinceLast >= this.config.pacing.minGapMs ? 0 : this.config.pacing.minGapMs - sinceLast;

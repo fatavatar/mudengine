@@ -4533,6 +4533,151 @@ describe('a follower pacing the loop', () => {
 });
 
 /*
+ * A leader's crossing of a `Text:` exit end to end, over a real socket (PR #35).
+ * The hold itself is `Walker.test.ts`'s: `1/3 → 1/4` is a route's last step.
+ */
+describe('a party relay crossing a text exit', () => {
+  // Lines, not raw text: `.@party go manhole` ends in the bytes of `go manhole`.
+  const wire = (socket: net.Socket): (() => string[]) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1').split('\r\n');
+  };
+
+  const relayConfig = (): AutomationConfig => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 3000 }
+  });
+
+  /** The party listing: Vaelor (self, leading) and Pip, both frontrank. */
+  const partyListing =
+    [
+      'The following people are in your travel party:',
+      '  Vaelor                        (Mystic)     [M:100%] [H:100%]  - Frontrank',
+      '  Pip                            (Warrior)             [H:100%]  - Frontrank',
+      '[HP=100/MA=50]:'
+    ].join('\r\n') + PROMPT_REPAINT;
+
+  /** Connected at Rat Lair (1/3), leading Pip, who is standing there too. */
+  async function atTheCrossing(world: WorldGraph, config: AutomationConfig): Promise<net.Socket> {
+    manager = new SessionManager(collect().sink, world, config);
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('Welcome back, Vaelor!\r\n');
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write(
+      'Location:            1,3\r\nRat Lair\r\nAlso here: Pip.\r\nObvious exits: south\r\n'
+    );
+    await until(() => manager!.character.room.number === 3);
+    socket.write(partyListing);
+    await until(() => manager!.character.party.members.length === 2);
+    return socket;
+  }
+
+  it('says @party before the move, and the move follows', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig());
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+    expect(lines().indexOf('.@party go manhole')).toBeGreaterThanOrEqual(0);
+    expect(lines().indexOf('.@party go manhole')).toBeLessThan(lines().indexOf('go manhole'));
+  });
+
+  /* The realm drops the party through a text exit even for a follower who crossed (2026-09-29). */
+  it('invites whoever stood with the leader once it lands, and says no @join', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig());
+    const lines = wire(socket);
+
+    expect(manager!.walkRoute(world.route('1/3', '1/4'))).toBeNull();
+    await until(() => lines().includes('go manhole'));
+    socket.write('Sewer\r\nAlso here: Pip.\r\nObvious exits: up\r\n');
+    await until(() => lines().includes('invite Pip'));
+    expect(lines().some((line) => line.includes('@join'))).toBe(false);
+  });
+
+  it('does not relay or invite for a hand-typed crossing', async () => {
+    const world = haven();
+    const socket = await atTheCrossing(world, relayConfig());
+    const lines = wire(socket);
+
+    manager!.send('go manhole\r\n');
+    await until(() => lines().includes('go manhole'));
+    expect(lines().some((line) => line.includes('@party'))).toBe(false);
+  });
+});
+
+/*
+ * MegaMUD's chase rows, from its Messages.md: a follower sees its leader leave
+ * through a special exit and follows (`{target} enters a manhole in the
+ * ground!` → `go manhole`, Skinny Inc's table, 2026-09-29).
+ */
+describe('a follower chasing its leader through a special exit', () => {
+  const lines = (socket: net.Socket): (() => string[]) => {
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString('latin1').split('\r\n');
+  };
+
+  const chasing = (over: Partial<AutomationConfig['remotes']> = {}): AutomationConfig => ({
+    ...DEFAULT_CONFIG.automation,
+    enabled: true,
+    pacing: { window: 20, minGapMs: 0, ackTimeoutMs: 3000 },
+    remotes: { ...DEFAULT_CONFIG.automation.remotes, ...over }
+  });
+
+  async function following(config: AutomationConfig): Promise<net.Socket> {
+    manager = new SessionManager(collect().sink, undefined, config);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'chase (manhole)',
+          match: '{target} enters a manhole in the ground!',
+          response: 'go manhole',
+          chase: true
+        }
+      ]
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('Welcome back, Vaelor!\r\n');
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('You are following Pip.\r\n');
+    await until(() => manager!.character.party.following === 'Pip');
+    return socket;
+  }
+
+  it('follows the leader it is following, and nobody else', async () => {
+    const socket = await following(chasing());
+    const seen = lines(socket);
+    socket.write('Bob enters a manhole in the ground!\r\n');
+    socket.write('Pip enters a manhole in the ground!\r\n');
+    await until(() => seen().includes('go manhole'));
+    expect(seen().filter((line) => line === 'go manhole')).toHaveLength(1);
+    expect(manager!.automation.firings.at(-1)).toMatchObject({ commands: ['go manhole'] });
+  });
+
+  it('does not go twice when the leader’s @party already sent it', async () => {
+    const socket = await following(
+      chasing({ enabled: true, players: { pip: { allow: ['party'], deny: [] } } })
+    );
+    const seen = lines(socket);
+    socket.write('Pip says "@party go manhole"\r\n');
+    socket.write('Pip enters a manhole in the ground!\r\n');
+    await until(() => seen().includes('go manhole'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(seen().filter((line) => line === 'go manhole')).toHaveLength(1);
+    // The @party moved it; the chase row stood down.
+    expect(manager!.automation.firings.some((firing) => firing.rule.includes('chase'))).toBe(false);
+  });
+});
+
+/*
  * The reaction to a player opening on this character — MegaMUD's NotifyGang,
  * from the evidence the client already reads: `<Name> moves to attack you!`
  * puts the attacker in `attackers` and starts the five-minute clock, and the
