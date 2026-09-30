@@ -269,7 +269,7 @@ A row's effect bits (row `+0x114`) set these flags on onset (`0x46aada`–`0x46a
 
 ## Party movement
 
-Read for PR #35/#39, 2026-09-29.
+Read for PR #35/#39, 2026-09-29, and PR #41, 2026-09-30.
 
 - **`@party` path steps.** A path step whose command starts with `@party `
   (the check is a `strncmp` of 7 characters, at `0x409df8`, `0x40a0eb` and
@@ -286,14 +286,33 @@ Read for PR #35/#39, 2026-09-29.
   queued rather than sent. More than 200 pending (`+0x2374`) logs "[Pending
   command overflow]".
 - **Invite** (`0x408039`, "Inviting player %s"): sends either `invite %s` or
-  the telepath `/%s @join`, chosen by a flag (`0x408050`), never both.
-- **Per-player flags** (the Players dialog, `idh_dlg_plyrinfo`):
-  - "Invite To Party If Seen": re-invite a member left behind, "then waits
-    for the player to join and then continues on".
-  - "Join Party If Invited".
-  - "Chase Player If Seen": follow them when seen leaving.
-
-  None of the three has been located in the exe yet.
+  the telepath `/%s @join`, chosen by a flag (`0x408050`), never both in one
+  pass.
+- **The invite scan** (`0x407ee0`, read for PR #41, 2026-09-30) is step
+  `0x1b` of the automation loop at `0x40bab0`, so it runs on every pass and
+  sends at most one command. It does nothing while following (`e2e8`), while
+  `a32c` is set, or while all four automation switches `e168`/`e184`/`e18c`/
+  `e178` are off. It walks the players in the room (the list at `+0x24f8`,
+  count `+0x24ec`):
+  - alone (no leader name at `+0x8b28`), or a player not in the party list:
+    `invite %s` if their record has flag `0x10` at `+0x54`, then the name is
+    added to the party list with flag `4` (invited);
+  - leading, a player in the party list with flag `4` but not `0x200`:
+    `/%s @join`, then `0x200` is set, so the telepath goes once, on a pass
+    after the invite. This does not look at `0x10`;
+  - leading, a member with any of `0x188` and no `4` (left behind): invited
+    again, whatever their record says.
+- **Per-player flags** (the Players dialog, `idh_dlg_plyrinfo`; record flags
+  at `+0x54`):
+  - "Invite To Party If Seen" (`0x10`, the scan above): re-invite a member
+    left behind, "then waits for the player to join and then continues on".
+  - "Join Party If Invited" (`0x20`): on "`X` has invited you to follow",
+    `join X` (`0x47e1ac`), unless already following ("[Already following]").
+  - "Chase Player If Seen": follow them when seen leaving. Not located yet.
+- **Party rank** (`PartyRank`, `0x883c`: 0 front, 1 mid, the default, 2 back;
+  the dialog's radio buttons `0x482`, `0x4ff`, `0x412`). Sent only straight
+  after that `join` (`0x47e281`): `frontrank` for 0, `backrank` for 2, and
+  nothing for mid. It is never checked against the listing afterwards.
 - **Chase rows.** `Messages.md` rows flagged `0x4000` pair a departure
   sentence with the command that follows it (`{target} enters a manhole in the
   ground!` → `go manhole`). The string "Chasing" is at `0x54eab0`, used by
