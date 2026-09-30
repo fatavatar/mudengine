@@ -5932,6 +5932,67 @@ describe('wearing and removing', () => {
     expect(item(tracker, 'padded boots')?.slot).toBe('Feet');
   });
 
+  /*
+   * Skinny's swap (2026-09-30): `wear jewel-encrusted warhammer` over the vortex
+   * staff printed the holding line and nothing about the staff, which went back
+   * into the pack. Two listings teach both weapons' slot, as a session does.
+   */
+  describe('a swap in a one-item slot', () => {
+    const pack = (held: string, spare: string): void => {
+      const { feed } = current;
+      feed('[HP=815]:');
+      feed(`You are carrying ${held} (Weapon Hand), ${spare}, dented wizard's hat (Head)`);
+      feed('You have no keys.');
+      feed('Wealth: 0 copper farthings');
+      feed('Encumbrance: 260/3360 - None [7%]');
+      feed('[HP=815]:');
+    };
+    let current: ReturnType<typeof feeder>;
+    const skinny = (): ReturnType<typeof feeder> => {
+      current = feeder();
+      pack('jewel-encrusted warhammer', 'vortex staff');
+      pack('vortex staff', 'jewel-encrusted warhammer');
+      return current;
+    };
+
+    it('takes the old weapon out of the hand the new one goes into', () => {
+      const { tracker, feed } = skinny();
+      feed('You are now holding jewel-encrusted warhammer.');
+      expect(item(tracker, 'jewel-encrusted warhammer')).toMatchObject({
+        equipped: true,
+        slot: 'Weapon Hand'
+      });
+      expect(item(tracker, 'vortex staff')).toMatchObject({ equipped: false, slot: null });
+      expect(item(tracker, "dented wizard's hat")).toMatchObject({ equipped: true, slot: 'Head' });
+    });
+
+    it('reads a name with a hyphen or an apostrophe coming off and going on', () => {
+      const { tracker, feed } = skinny();
+      feed("You have removed dented wizard's hat.");
+      expect(item(tracker, "dented wizard's hat")?.equipped).toBe(false);
+      feed("You are now wearing dented wizard's hat.");
+      expect(item(tracker, "dented wizard's hat")).toMatchObject({ equipped: true, slot: 'Head' });
+    });
+
+    /* The swap's own line unread, the refusal of the next `wear` says where it is. */
+    it('reads a refusal to wear it again as the item being on', () => {
+      const { tracker, feed } = skinny();
+      feed('You do not have jewel-encrusted warhammer left unequipped.');
+      expect(item(tracker, 'jewel-encrusted warhammer')).toMatchObject({
+        equipped: true,
+        slot: 'Weapon Hand'
+      });
+      expect(item(tracker, 'vortex staff')?.equipped).toBe(false);
+    });
+
+    it('adds nothing for a refusal naming an item not in the pack', () => {
+      const { tracker, feed } = skinny();
+      const before = tracker.current.inventory.items;
+      feed('You are already wearing padded helm!');
+      expect(tracker.current.inventory.items).toBe(before);
+    });
+  });
+
   /* And the whole capture, in order, ending where it ended. */
   it('replays the capture', () => {
     const { tracker, feed, listed } = feeder();

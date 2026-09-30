@@ -186,6 +186,28 @@ describe('opening a fight', () => {
     expect(sent).toEqual(['a giant rat']);
   });
 
+  /* Skinny's warhammer (2026-09-30): the fight waits for the kit it is fought in. */
+  it('waits for the kit before opening a fight', () => {
+    let ready = false;
+    const auto = new AutoCombat(combat(), true, queue, {
+      notice: (m) => notices.push(m),
+      decided: (decision) => decisions.push(decision),
+      kitReady: () => ready
+    });
+    const rat = state({
+      room: { ...EMPTY_CHARACTER.room, occupants: [mob('giant rat', 'hostile')] }
+    });
+    auto.onCharacter(rat);
+    drain();
+    expect(sent).toEqual([]);
+    expect(auto.awaitingKit).toBe(true);
+    ready = true;
+    auto.onCharacter(rat);
+    drain();
+    expect(sent).toEqual(['a giant rat']);
+    expect(auto.awaitingKit).toBe(false);
+  });
+
   /* MegaMUD's PoliteAttacks: a monster a stranger was seen fighting is left to
      them, and the trace says whose it was. Joining is the default, as it is
      MegaMUD's own, so the switch is what makes a character stand aside. */
@@ -2027,9 +2049,9 @@ describe('casting in a fight', () => {
       expect(notices.filter((line) => line.includes('no effect'))).toHaveLength(1);
     });
 
-    /* MegaMUD's MaxCastCnt, counted on the server's confirmation: a fizzle is
-       not a cast, and the server's own next round casts again. Spent, the fight
-       goes back to the attack verb. */
+    /* MegaMUD's MaxCastCnt, counted when the cast goes off: a fizzle is not a
+       cast, and the server's own next round casts again. Spent, the fight goes
+       back to the attack verb. */
     it('goes back to the attack verb after the configured casts per target', () => {
       const auto = make(rounds(), true, spells({ attackCasts: 1 }));
       auto.onCharacter(crowded(1));
@@ -2104,7 +2126,7 @@ describe('casting in a fight', () => {
     /* A heal confirmed in the same window is a different spell and spends
        nothing of the round spell's count. */
     it('counts only the spell it proposed', () => {
-      const auto = make(rounds(), true, spells({ attackCasts: 1 }));
+      const auto = make(rounds(), true, spells({ attackCasts: 2 }));
       auto.onCharacter(crowded(1));
       auto.onBlock(block('user-hits'));
       vi.advanceTimersByTime(200);
@@ -2115,6 +2137,126 @@ describe('casting in a fight', () => {
       drain();
       // Unspent: the fight would have gone back to the attack verb.
       expect(sent).toEqual(['ma giant rat']);
+    });
+
+    /*
+     * Skinny's soul rip (2026-09-30): the count is the monster's, not the
+     * fight's. A heal or a buff answered by `*Combat Off*`, or a bodyguard
+     * taking the spell and dying, re-opened the fight with the spell again.
+     */
+    describe('a count kept per monster', () => {
+      const off = (fight: CharacterState): CharacterState => ({
+        ...fight,
+        inCombat: false,
+        combat: EMPTY_CHARACTER.combat
+      });
+
+      const reopening = (): AutoCombat =>
+        make(combat({ engage: 'all', refreshRounds: 0 }), true, spells({ attackCasts: 1 }));
+
+      /* The rip went off, then `mahe` broke the fight: the rat is owed the weapon. */
+      it('re-opens with the attack verb after a heal, the spell gone off', () => {
+        const auto = reopening();
+        const fight = crowded(1);
+        auto.onCharacter(fight);
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat']);
+        auto.onBlock(block('user-hits'));
+        auto.onBlock(block('combat-status', { status: 'Off' }), 'mahe');
+        auto.onCharacter(off(fight));
+        vi.advanceTimersByTime(4001);
+        auto.onCharacter(off(fight));
+        drain();
+        expect(sent).toEqual(['ma giant rat', 'a giant rat']);
+      });
+
+      /* `mahe` broke the fight before the rip went off: it is cast again. */
+      it('casts it again when a heal breaks the fight before it went off', () => {
+        const auto = reopening();
+        const fight = crowded(1);
+        auto.onCharacter(fight);
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat']);
+        auto.onBlock(block('mob-hits'));
+        auto.onBlock(block('combat-status', { status: 'Off' }), 'mahe');
+        auto.onCharacter(off(fight));
+        vi.advanceTimersByTime(4001);
+        auto.onCharacter(off(fight));
+        drain();
+        expect(sent).toEqual(['ma giant rat', 'ma giant rat']);
+      });
+
+      /* The giant swings before the rip goes off: `a` then would replace it. */
+      it('waits for its own round before going back to the attack verb', () => {
+        const auto = make(rounds(), true, spells({ attackCasts: 1 }));
+        auto.onCharacter(crowded(1));
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat']);
+        auto.onBlock(block('mob-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat']);
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat', 'a giant rat']);
+      });
+
+      it('keeps the count while another monster is fought and dies', () => {
+        const auto = make(rounds(), true, spells({ attackCasts: 1 }));
+        const fight = crowded(2);
+        auto.onCharacter(fight);
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat']);
+        // The bodyguard steps in, is fought, and dies; the rat is next again.
+        const guard = { ...fight.combat, target: 'giant rat 1' };
+        auto.onCharacter({ ...fight, combat: guard });
+        auto.onCharacter({
+          ...fight,
+          room: { ...fight.room, occupants: fight.room.occupants.slice(0, 1) }
+        });
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent.filter((command) => command === 'ma giant rat')).toHaveLength(1);
+      });
+
+      it('opens the book again for a second monster of the same name', () => {
+        const auto = make(
+          combat({ engage: 'all', refreshRounds: 0 }),
+          true,
+          spells({ attackCasts: 1 })
+        );
+        const rats = (count: number): CharacterState =>
+          state({
+            inCombat: true,
+            combat: { ...EMPTY_CHARACTER.combat, engaged: true, target: 'giant rat' },
+            vitals: { ...EMPTY_CHARACTER.vitals, mana: 40, manaMax: 100, manaType: 'MA' },
+            room: {
+              ...EMPTY_CHARACTER.room,
+              occupants: Array.from({ length: count }, () => mob('giant rat', 'hostile'))
+            }
+          });
+        auto.onCharacter(rats(2));
+        auto.onBlock(block('user-hits'));
+        vi.advanceTimersByTime(200);
+        drain();
+        expect(sent).toEqual(['ma giant rat']);
+        // The first rat dies; the second, the same name, is a new monster.
+        auto.onCharacter(off(rats(1)));
+        vi.advanceTimersByTime(4001);
+        auto.onCharacter(off(rats(1)));
+        drain();
+        expect(sent).toEqual(['ma giant rat', 'ma giant rat']);
+      });
     });
 
     it('starts the count again on a new target', () => {

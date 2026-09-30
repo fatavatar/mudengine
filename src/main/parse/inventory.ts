@@ -33,7 +33,7 @@ import type {
 } from '../../shared/character';
 import { bankKey, DENOMINATIONS } from '../../shared/character';
 import { wireItem, type ItemEntity } from '../../shared/entities';
-import { bareName, countedName, sameItem } from '../../shared/items';
+import { bareName, capacityOf, countedName, sameItem } from '../../shared/items';
 
 /**
  * A purchase or a sale moving the purse, in the copper the server quoted.
@@ -325,6 +325,15 @@ export function withoutItem(state: CharacterState, item: string, count = 1): Cha
  * **One instance.** With a spare pair of gloves beside the worn pair, `You are
  * now wearing padded gloves.` puts the spare on and leaves the worn pair as it
  * was; marking every row by name would have shown two pairs on two hands.
+ *
+ * **What it displaces.** A slot that holds one item swaps: `wear
+ * jewel-encrusted warhammer` over a vortex staff printed only `You are now
+ * holding jewel-encrusted warhammer.`, the staff going back into the pack
+ * unannounced (skinny, 2026-09-30). So whatever else the slot held comes off
+ * here, or the pack reads as two weapons in one hand and a kit wanting the
+ * staff back finds it already on. A two-place slot is not touched: the
+ * server refuses a third ring rather than swapping one (`swapPlan`'s
+ * `makeRoom`), so nothing is displaced there.
  */
 export function withEquipped(
   state: CharacterState,
@@ -351,7 +360,11 @@ export function withEquipped(
       ...state,
       inventory: {
         ...state.inventory,
-        items: [...items, { ...wireItem(item, { slot, equipped: true }), ...source }]
+        items: displaced(
+          [...items, { ...wireItem(item, { slot, equipped: true }), ...source }],
+          item,
+          slot
+        )
       }
     };
   }
@@ -373,7 +386,27 @@ export function withEquipped(
     delete kept.slotSource;
     return equipped ? { ...kept, ...source } : kept;
   });
-  return { ...state, inventory: { ...state.inventory, items: changed } };
+  return {
+    ...state,
+    inventory: {
+      ...state.inventory,
+      items: equipped ? displaced(changed, item, slot) : changed
+    }
+  };
+}
+
+/** Everything else in a one-item `slot` taken out of use, for `item` going in. See `withEquipped`. */
+function displaced(items: CarriedItem[], item: string, slot: string | null): CarriedItem[] {
+  if (slot === null || capacityOf(slot) !== 1) return items;
+  const place = slot.toLowerCase();
+  return items.map((held) => {
+    if (!held.equipped || sameItem(held.name, item) || held.slot?.toLowerCase() !== place) {
+      return held;
+    }
+    const off: CarriedItem = { ...held, slot: null, equipped: false };
+    delete off.slotSource;
+    return off;
+  });
 }
 
 /**
