@@ -7,6 +7,7 @@ import {
   AUTOMATION_SWITCHES,
   CP437_FALLBACK_FONT,
   DEFAULT_CONFIG,
+  drainHolding,
   readAutomationSwitch,
   normalizeConfig,
   resumeAtMana,
@@ -537,6 +538,36 @@ describe('the resting pair', () => {
  * keeps *after* the trap ahead has fired, on which the floor slides with the
  * trap's damage. 45% is the figure both of the player's own examples land on.
  */
+/* Drain when hurt (2026-09-28): the heal's hysteresis pair, for the round spell. */
+describe('the drain pair', () => {
+  const spells = (raw: Record<string, unknown>) =>
+    normalizeConfig({ automation: { spells: raw } }).automation.spells;
+
+  it('ships off', () => {
+    expect(spells({})).toMatchObject({ drain: '', areaDrain: '', drainBelow: 0, drainTo: 0 });
+  });
+
+  it('lifts a ceiling under the floor, and keeps 0 as no ceiling', () => {
+    expect(spells({ drainBelow: 0.5, drainTo: 0.3 }).drainTo).toBe(0.5);
+    expect(spells({ drainBelow: 0.5, drainTo: 0 }).drainTo).toBe(0);
+  });
+
+  it('starts under drainBelow and stops at drainTo', () => {
+    const pair = spells({ drainBelow: 0.5, drainTo: 0.7 });
+    expect(drainHolding(pair, 55, 100, false)).toBe(false);
+    expect(drainHolding(pair, 45, 100, false)).toBe(true);
+    expect(drainHolding(pair, 65, 100, true)).toBe(true);
+    expect(drainHolding(pair, 70, 100, true)).toBe(false);
+  });
+
+  it('holds only to drainBelow with no ceiling, and never on an unknown figure', () => {
+    const pair = spells({ drainBelow: 0.5 });
+    expect(drainHolding(pair, 55, 100, true)).toBe(false);
+    expect(drainHolding(pair, null, 100, true)).toBe(false);
+    expect(drainHolding(spells({}), 1, 100, false)).toBe(false);
+  });
+});
+
 describe('resting before a trap', () => {
   const health = (raw: Record<string, unknown>) =>
     normalizeConfig({ automation: { health: raw } }).automation.health;

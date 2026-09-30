@@ -106,6 +106,15 @@ export function editYaml(file: string, options: EditOptions): EditResult {
     if (complaint !== null) return { ok: false, error: complaint };
   }
 
+  /*
+   * An edit that changes nothing is not written. A settings page saves every
+   * loop file it lists on every keystroke, and a realm holding a MegaMUD
+   * folder's two hundred (2026-09-29) would otherwise spend two hundred
+   * writes, and overwrite two hundred backups with copies of themselves, on
+   * a changed port number.
+   */
+  if (exists && text === source) return { ok: true };
+
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // One rolling backup, taken from what is on disk right now.

@@ -58,6 +58,7 @@ import {
 } from '../../shared/notifications';
 import { DEFAULT_REWRITES, type RewriteDesign, type RewriteEntity } from '../../shared/rewrites';
 import { DEFAULT_INTERNAL } from '../../shared/internal';
+import { asShippedWorld } from '../../shared/worlds';
 import { DENOMINATIONS } from '../../shared/character';
 import { SERVER_FILE, type Home } from '../app/home';
 import { directoryNames } from './dirs';
@@ -270,6 +271,9 @@ function migrateAll(options: MigrationOptions): void {
   theMobRulesBecameMonsterRows(home, note);
   statedTheMeditateTarget(home, note, options.template);
   statedTheFleeGoto(home, note, options.template);
+  statedTheDrain(home, note, options.template);
+  statedTheAutoJoin(home, note);
+  statedTheHealChoice(home, note, options.template);
 }
 
 /**
@@ -5417,17 +5421,27 @@ function loopsTookTheirRecordedNames(
 ): void {
   if (shelf === undefined) return;
 
-  const files = [
+  const scopes = [
     home.globalLoops,
-    ...directories(home.serversDir).map((id) => home.server(id).loops),
+    /*
+     * Not a realm with its own database (2026-09-29). The shelf was recorded
+     * on Paradigm's bundled map, so nothing on such a realm is a copy of it --
+     * but its own MegaMUD folder, imported, walks many of the same rooms under
+     * the same areas (MudRev's `Royal Guards` is Paradigm's `Dark-elf Royal
+     * Guards`), and renaming those made the next import write each one back
+     * beside its renamed self.
+     */
+    ...directories(home.serversDir)
+      .filter((id) => !ownsItsMap(home.server(id).file))
+      .map((id) => home.server(id).loops),
     ...directories(home.profilesDir).map((id) => home.profile(id).loops)
-  ].flatMap((dir) =>
+  ].map((dir) =>
     listing(dir)
       .filter((name) => /\.ya?ml$/i.test(name))
       .map((name) => path.join(dir, name))
   );
   // Nothing copied, nothing to bring across — and the shelf stays unread.
-  if (files.length === 0) return;
+  if (scopes.every((files) => files.length === 0)) return;
 
   const byPlaces = new Map<string, Loop | null>();
   for (const loop of shelf()) {
@@ -5436,17 +5450,41 @@ function loopsTookTheirRecordedNames(
   }
 
   const renamed: string[] = [];
-  for (const file of files) {
-    edit(file, (document) => {
-      const loop = asLoops([document.toJS() as unknown])[0];
-      if (loop === undefined) return false;
-      const shelved = byPlaces.get(placesKey(loop));
-      if (!shelved || shelved.name === loop.name) return false;
-      if (loopCategory(loop.name) !== shelved.category) return false;
-      document.set('name', shelved.name);
-      renamed.push(`${loop.name} -> ${shelved.name}`);
-      return true;
-    });
+  for (const files of scopes) {
+    /*
+     * Never onto a name the scope already holds (2026-09-29). A realm's own
+     * MegaMUD folder, imported, can walk the very rooms a shelf loop walks
+     * under the same area and still be a loop of its own: MudRev's
+     * `Newhaven Arena - Arena Up Down` is Paradigm's `NewHaven Arena Loop`,
+     * and MudRev has a `NewHaven Arena Loop` too. Renamed, the scope held two
+     * loops of one name — one of them unreachable, since a name is the address
+     * — and the next import wrote the renamed one back as a third file.
+     */
+    const held = new Set(
+      files.flatMap((file) => {
+        try {
+          const loop = asLoops([parseDocument(fs.readFileSync(file, 'utf8')).toJS() as unknown])[0];
+          return loop === undefined ? [] : [loop.name.toLowerCase()];
+        } catch {
+          return [];
+        }
+      })
+    );
+    for (const file of files) {
+      edit(file, (document) => {
+        const loop = asLoops([document.toJS() as unknown])[0];
+        if (loop === undefined) return false;
+        const shelved = byPlaces.get(placesKey(loop));
+        if (!shelved || shelved.name === loop.name) return false;
+        if (loopCategory(loop.name) !== shelved.category) return false;
+        if (held.has(shelved.name.toLowerCase())) return false;
+        held.delete(loop.name.toLowerCase());
+        held.add(shelved.name.toLowerCase());
+        document.set('name', shelved.name);
+        renamed.push(`${loop.name} -> ${shelved.name}`);
+        return true;
+      });
+    }
   }
 
   if (renamed.length === 0) return;
@@ -5456,6 +5494,20 @@ function loopsTookTheirRecordedNames(
       ? t('notices.migration.loopsRenamed.one', params)
       : t('notices.migration.loopsRenamed.many', params)
   );
+}
+
+/** Whether a realm's file names a database of its own rather than a bundled world. */
+function ownsItsMap(file: string): boolean {
+  try {
+    const database = parseDocument(fs.readFileSync(file, 'utf8')).get('database');
+    return (
+      typeof database === 'string' &&
+      database.trim().length > 0 &&
+      asShippedWorld(database) === null
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -6164,6 +6216,59 @@ function statedTheFleeGoto(
 }
 
 /**
+ * `automation.spells.drain`, `areaDrain`, `drainBelow` and `drainTo`
+ * (2026-09-28): a necrolyte's `vampiric assault` and `necromantic storm` cast
+ * in place of the attack spells while health is low. Written off, after
+ * `areaCasts`, with the template's paragraph on the first, into every file
+ * that states a spells block.
+ */
+function statedTheDrain(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.drain');
+  const defaults = DEFAULT_CONFIG.automation.spells;
+  const keys = [
+    ['drain', defaults.drain],
+    ['areaDrain', defaults.areaDrain],
+    ['drainBelow', defaults.drainBelow],
+    ['drainTo', defaults.drainTo]
+  ] as const;
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('drain')) return false;
+      const pairs = keys
+        .filter(([key]) => !spells.has(key))
+        .map(([key, value]) => document.createPair(key, value) as Pair);
+      const first = pairs[0];
+      if (typeof comment === 'string' && first !== undefined && isScalar(first.key)) {
+        first.key.commentBefore = comment;
+      }
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'areaCasts'
+      );
+      if (after === -1) spells.items.push(...pairs);
+      else spells.items.splice(after + 1, 0, ...pairs);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.drainStated.one', params)
+      : t('notices.migration.drainStated.many', params)
+  );
+}
+
+/**
  * `mobRules` became monster rows (2026-09-24): the two lists about named
  * monsters were one question asked in two panels.
  *
@@ -6302,6 +6407,83 @@ function statedTheConfusionWait(home: Home, note: (message: string) => void): vo
  * fourth exists, so it is written in after `disease`, where a player
  * reading the block will find it. Idempotent; nothing stated is overwritten.
  */
+/**
+ * `automation.spells.autoChooseHeal` into every file that states `spells:`
+ * without it, after `healParty` and with the template's comment (upstream
+ * 3b60de1, ported 2026-09-29). The heal was chosen under `autoChoose` until it
+ * had its own switch, so each file's new key takes that file's `autoChoose`:
+ * a player who had the heals chosen still has them chosen.
+ */
+function statedTheHealChoice(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.spells.autoChooseHeal');
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const spells = document.getIn(['automation', 'spells'], true);
+      if (!isMap(spells) || spells.has('autoChooseHeal')) return false;
+      const pair = document.createPair('autoChooseHeal', spells.get('autoChoose') === true) as Pair;
+      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+      const after = spells.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'healParty'
+      );
+      if (after === -1) spells.items.push(pair);
+      else spells.items.splice(after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.healChoiceStated.one', params)
+      : t('notices.migration.healChoiceStated.many', params)
+  );
+}
+
+/**
+ * `automation.remotes.autoJoin` into every file that states `remotes:` without
+ * it, off, after `gangpath` (upstream 759fc4d, ported 2026-09-29). Its
+ * explanation is in the template's block comment above `remotes:`, so the key
+ * carries none.
+ */
+function statedTheAutoJoin(home: Home, note: (message: string) => void): void {
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const remotes = document.getIn(['automation', 'remotes'], true);
+      if (!isMap(remotes) || remotes.has('autoJoin')) return false;
+      const pair = document.createPair(
+        'autoJoin',
+        DEFAULT_CONFIG.automation.remotes.autoJoin
+      ) as Pair;
+      const after = remotes.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'gangpath'
+      );
+      remotes.items.splice(after === -1 ? 0 : after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.autoJoinStated.one', params)
+      : t('notices.migration.autoJoinStated.many', params)
+  );
+}
+
 function statedTheFreedomCure(home: Home, note: (message: string) => void): void {
   const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
   const stated: string[] = [];
@@ -6672,6 +6854,8 @@ function theTuningBlockGainedKeys(
       addGroup(group, { ...DEFAULT_INTERNAL.tuning[group] });
     }
     addKey('spells', 'healRequestMs', DEFAULT_INTERNAL.tuning.spells.healRequestMs);
+    addKey('spells', 'healUrgency', DEFAULT_INTERNAL.tuning.spells.healUrgency);
+    addKey('spells', 'healNearEnough', DEFAULT_INTERNAL.tuning.spells.healNearEnough);
     addKey('remotes', 'healAskAgainMs', DEFAULT_INTERNAL.tuning.remotes.healAskAgainMs);
     addKey('hunting', 'measuredFightsMin', DEFAULT_INTERNAL.tuning.hunting.measuredFightsMin);
     addKey('view', 'questRunLingerMs', DEFAULT_INTERNAL.tuning.view.questRunLingerMs);

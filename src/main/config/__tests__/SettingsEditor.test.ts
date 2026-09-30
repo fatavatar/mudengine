@@ -7,7 +7,12 @@ import { parse } from 'yaml';
 import { SettingsEditor } from '../SettingsEditor';
 import { homeAt, type Home } from '../../app/home';
 import { resolveProfile } from '../../../shared/profiles';
-import type { GlobalDraft, ProfileDraft, ServerDraft } from '../../../shared/drafts';
+import {
+  LOOP_LIMITS,
+  type GlobalDraft,
+  type ProfileDraft,
+  type ServerDraft
+} from '../../../shared/drafts';
 import { ServerStore } from '../ServerStore';
 import { LoopStore } from '../LoopStore';
 import { DEFAULT_CONFIG, normalizeConfig } from '../../../shared/config';
@@ -590,12 +595,22 @@ describe('what a character plays against, and what keeps it alive', () => {
   it('writes a character’s own answer to `@` commands', () => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
     expect(automation['remotes']).toEqual({
       enabled: true,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       party: [],
       players: {}
@@ -653,6 +668,7 @@ describe('what a character plays against, and what keeps it alive', () => {
     expect(automation['remotes']).toEqual({
       enabled: false,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       // Copied from Global, which is where the shipped party list lives. The
       // switch is off, so it grants nobody anything until somebody turns
@@ -671,16 +687,35 @@ describe('what a character plays against, and what keeps it alive', () => {
   it('keeps the key when it is turned back off', () => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: false, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: false,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
     const automation = read('vaelor')['automation'] as Record<string, unknown>;
     expect(automation['remotes']).toEqual({
       enabled: false,
       gangpath: false,
+      autoJoin: false,
       gang: [],
       party: [],
       players: {}
@@ -1100,6 +1135,77 @@ describe('filing one loop from the Loops modal', () => {
   });
 });
 
+/*
+ * A MegaMUD folder imported onto a realm (2026-09-29): many loops at once,
+ * each filed by name the way the modal files one.
+ */
+describe('filing a MegaMUD folder of loops on a realm', () => {
+  const realm = (loops: Loop[] = []): ServerDraft => ({
+    name: 'MudRev',
+    host: '127.0.0.1',
+    port: 2427,
+    encoding: 'cp437',
+    login: [],
+    locate: 'rm',
+    loops,
+    database: '',
+    hangPenalties: null,
+    coins: {}
+  });
+  const loop = (name: string): Loop => ({
+    name,
+    stops: [{ room: 'Sewer Tunnel 1/606' }, { room: 'Sewer Tunnel 1/604' }]
+  });
+  const held = (): string[] =>
+    new LoopStore(home)
+      .forServer('mudrev')
+      .map((entry) => entry.name)
+      .sort();
+
+  /*
+   * Run twice, an import rewrites its own files rather than doubling them,
+   * and a loop drawn by hand under another name stays.
+   */
+  it("adds beside the realm's own loops, and a second import replaces by name", () => {
+    editor.saveServer(null, realm([loop('Drawn by hand')]));
+    expect(editor.addLoops('server', 'MudRev', [loop('Sewers: A'), loop('Sewers: B')])).toEqual({
+      ok: true,
+      replaced: 0
+    });
+    expect(editor.addLoops('server', 'MudRev', [loop('Sewers: A'), loop('Sewers: B')])).toEqual({
+      ok: true,
+      replaced: 2
+    });
+    expect(held()).toEqual(['Drawn by hand', 'Sewers: A', 'Sewers: B']);
+  });
+
+  /*
+   * The realm's page saves the whole list it holds and removes every file
+   * that list does not name, so loops past what it can carry would be written
+   * now and deleted by the next keystroke there.
+   */
+  it('refuses, whole, an import that would take the realm past what its page can carry', () => {
+    editor.saveServer(null, realm([loop('Drawn by hand')]));
+    const many = Array.from({ length: LOOP_LIMITS.loops }, (_, i) => loop(`Loop ${i}`));
+    expect(editor.addLoops('server', 'MudRev', many).ok).toBe(false);
+    expect(held()).toEqual(['Drawn by hand']);
+  });
+
+  /* What the page then saves is what is on disk, and saving it writes nothing. */
+  it('leaves every file alone when the page saves the list it took up', () => {
+    editor.saveServer(null, realm());
+    editor.addLoops('server', 'MudRev', [loop('Sewers: A')]);
+    const file = path.join(home.server('mudrev').loops, 'sewers-a.yaml');
+    const before = fs.statSync(file).mtimeMs;
+    fs.utimesSync(file, new Date(0), new Date(0));
+    expect(editor.saveServer('MudRev', realm(new LoopStore(home).forServer('mudrev')))).toEqual({
+      ok: true
+    });
+    expect(fs.statSync(file).mtimeMs).toBe(0);
+    expect(before).toBeGreaterThan(0);
+  });
+});
+
 describe('a character theme', () => {
   it('writes ui.theme, clears one the form showed, and leaves one it could not', () => {
     const file = home.profile('vaelor').file;
@@ -1279,7 +1385,16 @@ describe('one player’s @ command permissions', () => {
   beforeEach(() => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
   });
 
@@ -1423,7 +1538,16 @@ describe('the gang list and the gangpath switch', () => {
   beforeEach(() => {
     editor.saveProfile(
       'vaelor',
-      draft({ remotes: { enabled: true, gangpath: false, gang: [], party: [], players: {} } })
+      draft({
+        remotes: {
+          enabled: true,
+          gangpath: false,
+          autoJoin: false,
+          gang: [],
+          party: [],
+          players: {}
+        }
+      })
     );
   });
 

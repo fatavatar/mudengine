@@ -107,6 +107,31 @@ export function reduceWaypoints(
   return waypointsOf(reduceMore(graph, path, traveller, seedReduction(first)), path);
 }
 
+/**
+ * `reduceWaypoints`, handing the thread back after every route it plans.
+ *
+ * For a caller reducing hundreds of recorded loops on the thread that holds
+ * every session's socket (`megamudLoops.ts`, 2026-09-29): MudRev's 285 plan
+ * about eleven thousand routes, half a minute of work, and a character
+ * playing while its realm imports must not stand still for any of it. The
+ * reduction resumes where it stopped — the property a draft grows by one
+ * pick on — so the answer is `reduceWaypoints`' own.
+ */
+export async function reduceWaypointsYielding(
+  graph: WorldGraph,
+  path: readonly RoomId[],
+  traveller: Traveller = {}
+): Promise<RoomId[]> {
+  const first = path[0];
+  if (first === undefined) return [];
+  let state = seedReduction(first);
+  for (let end = state.next + 1; end <= path.length; end += 1) {
+    state = reduceMore(graph, path.slice(0, end), traveller, state);
+    await new Promise<void>((next) => setImmediate(next));
+  }
+  return waypointsOf(state, path);
+}
+
 /** A draft and the working the next pick carries on from. */
 interface Built {
   picks: RoomId[];

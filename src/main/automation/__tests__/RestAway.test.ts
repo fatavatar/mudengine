@@ -204,6 +204,16 @@ describe('everywhere else', () => {
     expect(sent).toEqual([]);
   });
 
+  /* The leader chooses where the party stands; a follower rests beside it. */
+  it('leaves a follower to rest with the party, in the lair', () => {
+    const following = hurtInTheLair({
+      party: { ...EMPTY_CHARACTER.party, following: 'Fatty' }
+    });
+    expect(make().consider(following, true)).toBe('not-mine');
+    drain();
+    expect(sent).toEqual([]);
+  });
+
   it('waits out a move in flight, a marching walk and an escape rather than stepping', () => {
     for (const over of [
       { moveInFlight: () => true },

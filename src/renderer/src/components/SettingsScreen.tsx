@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { MessageImport, MessageTable, MessageTrigger } from '@shared/messageTriggers';
 import type { MonsterImport, MonsterRule, MonsterTable } from '@shared/monsterRules';
+import type { LoopImport, MegaMudPath } from '@shared/megamudPaths';
 import { asShippedWorld } from '@shared/worlds';
 import { DENOMINATIONS } from '@shared/character';
 import { STOCK_COINS } from '@shared/coins';
@@ -29,11 +30,12 @@ import Advanced from './Advanced';
 import CarrySections from './CarrySections';
 import BlessingList from './BlessingList';
 import CureFields from './CureFields';
-import SpellField, { castableOn, refusesTarget } from './SpellPicker';
+import SpellField, { castableOn, drainsIn, refusesTarget } from './SpellPicker';
 import { castsOnOthers, castsOnSelf } from '@shared/spellcraft';
 import FormActions from './FormActions';
 import GlobalSettings from './GlobalSettings';
 import LoopSection from './LoopSection';
+import MegaMudLoopImport from './MegaMudLoopImport';
 import RemoteList from './RemoteList';
 import RewritesDesigner from './RewriteDesigner';
 
@@ -329,6 +331,8 @@ export interface SettingsScreenProps {
   loadMonsters(realm: string): Promise<MonsterTable>;
   importMonsters(realm: string, fileName: string, monsters: MonsterRule[]): Promise<MonsterImport>;
   saveMonsters(realm: string, monsters: MonsterRule[]): Promise<string | null>;
+  /** A MegaMUD folder's loops onto a realm. See `MegaMudLoopImport`. */
+  importLoops(realm: string, paths: MegaMudPath[]): Promise<LoopImport>;
   /**
    * The loops the client ships, for the Movement tab to offer.
    *
@@ -512,6 +516,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
   ],
   spells: [
     { id: 'spells-round', label: t('settings.spells.legend') },
+    { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
@@ -648,12 +653,19 @@ interface CharacterForm {
   spellAreaAttack: string;
   /** Derive the round spell and the cures from the book. */
   spellAutoChoose: boolean;
+  /** *Auto Choose Best Heal*: each heal picked from the book. See `SpellsConfig.autoChooseHeal`. */
+  spellAutoChooseHeal: boolean;
   spellAreaMinMobs: string;
   spellAreaMinMana: string;
   /** The fallback once the round spell has no effect, and the per-target cast caps (0 is no limit). */
   spellAttackFallback: string;
   spellAttackCasts: string;
   spellAreaCasts: string;
+  /** The drain spells cast instead while health is low, and the pair that starts and stops it. */
+  spellDrain: string;
+  spellAreaDrain: string;
+  spellDrainBelow: string;
+  spellDrainTo: string;
   /**
    * The heal, per character: a spell cast on this character, a spell cast on a
    * member, and the pair of figures that start and stop the casting.
@@ -762,6 +774,8 @@ interface CharacterForm {
   rewrites: RewritesUiConfig;
   /** Whether the gang's own channel is one of the channels it answers on. */
   remoteGangpath: boolean;
+  /** Whether a leader's invitation is joined without waiting for `@join`. */
+  remoteAutoJoin: boolean;
   /** What anybody in this character's gang may ask for. */
   remoteGang: RemoteName[];
   /** Remotes anybody who has joined this character's party may ask for. */
@@ -852,12 +866,17 @@ function formOf(entry: ProfileEditable): CharacterForm {
     useWards: entry.health.useWards,
     spellAttack: entry.spells.attack,
     spellAutoChoose: entry.spells.autoChoose,
+    spellAutoChooseHeal: entry.spells.autoChooseHeal,
     spellAreaAttack: entry.spells.areaAttack,
     spellAreaMinMobs: String(entry.spells.areaMinMobs),
     spellAreaMinMana: percent(entry.spells.areaMinMana),
     spellAttackFallback: entry.spells.attackFallback,
     spellAttackCasts: String(entry.spells.attackCasts),
     spellAreaCasts: String(entry.spells.areaCasts),
+    spellDrain: entry.spells.drain,
+    spellAreaDrain: entry.spells.areaDrain,
+    spellDrainBelow: percent(entry.spells.drainBelow),
+    spellDrainTo: percent(entry.spells.drainTo),
     spellHeal: entry.spells.heal,
     spellHealPartyWith: entry.spells.healPartyWith,
     spellHealBelow: percent(entry.spells.healBelow),
@@ -914,6 +933,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     afkReply: entry.afk.reply,
     answerRemotes: entry.remotes.enabled,
     remoteGangpath: entry.remotes.gangpath,
+    remoteAutoJoin: entry.remotes.autoJoin,
     remoteGang: [...entry.remotes.gang],
     remoteParty: [...entry.remotes.party],
     remotePlayers: entry.remotes.players,
@@ -1065,12 +1085,17 @@ function draftOf(form: CharacterForm): ProfileDraft {
     spells: {
       attack: form.spellAttack.trim(),
       autoChoose: form.spellAutoChoose,
+      autoChooseHeal: form.spellAutoChooseHeal,
       areaAttack: form.spellAreaAttack.trim(),
       areaMinMobs: Math.max(1, Number.parseInt(form.spellAreaMinMobs, 10) || 3),
       areaMinMana: fractionOf(form.spellAreaMinMana),
       attackFallback: form.spellAttackFallback.trim(),
       attackCasts: Math.max(0, Number.parseInt(form.spellAttackCasts, 10) || 0),
       areaCasts: Math.max(0, Number.parseInt(form.spellAreaCasts, 10) || 0),
+      drain: form.spellDrain.trim(),
+      areaDrain: form.spellAreaDrain.trim(),
+      drainBelow: fractionOf(form.spellDrainBelow),
+      drainTo: fractionOf(form.spellDrainTo),
       heal: form.spellHeal.trim(),
       healPartyWith: form.spellHealPartyWith.trim(),
       healBelow: fractionOf(form.spellHealBelow),
@@ -1161,6 +1186,7 @@ function draftOf(form: CharacterForm): ProfileDraft {
     remotes: {
       enabled: form.answerRemotes,
       gangpath: form.remoteGangpath,
+      autoJoin: form.remoteAutoJoin,
       gang: form.remoteGang,
       party: form.remoteParty,
       players: form.remotePlayers
@@ -1405,12 +1431,17 @@ function emptyForm(
     useWards: health.useWards,
     spellAttack: spells.attack,
     spellAutoChoose: spells.autoChoose,
+    spellAutoChooseHeal: spells.autoChooseHeal,
     spellAreaAttack: spells.areaAttack,
     spellAreaMinMobs: String(spells.areaMinMobs),
     spellAreaMinMana: percent(spells.areaMinMana),
     spellAttackFallback: spells.attackFallback,
     spellAttackCasts: String(spells.attackCasts),
     spellAreaCasts: String(spells.areaCasts),
+    spellDrain: spells.drain,
+    spellAreaDrain: spells.areaDrain,
+    spellDrainBelow: percent(spells.drainBelow),
+    spellDrainTo: percent(spells.drainTo),
     spellHeal: spells.heal,
     spellHealPartyWith: spells.healPartyWith,
     spellHealBelow: percent(spells.healBelow),
@@ -1464,6 +1495,7 @@ function emptyForm(
     afkReply: afk.reply,
     answerRemotes: remotes.enabled,
     remoteGangpath: remotes.gangpath,
+    remoteAutoJoin: remotes.autoJoin,
     remoteGang: [...remotes.gang],
     remoteParty: [...remotes.party],
     remotePlayers: remotes.players,
@@ -1550,6 +1582,7 @@ export default function SettingsScreen({
   loadMonsters,
   importMonsters,
   saveMonsters,
+  importLoops,
   loadLoops,
   loadTrainers,
   loadBanks,
@@ -1802,7 +1835,8 @@ export default function SettingsScreen({
        * so a derivative realm loses no options.
        */
       selfHeals: castableOn(spells, castsOnSelf),
-      partyHeals: castableOn(spells, castsOnOthers)
+      partyHeals: castableOn(spells, castsOnOthers),
+      drains: drainsIn(spells)
     };
   }, [characters, selected]);
   const servers = useMemo(() => snapshot?.servers ?? [], [snapshot]);
@@ -1967,6 +2001,18 @@ export default function SettingsScreen({
     setServerHistory((current) => withLoopToggled(current, loop, sameJson));
     setSaved(null);
   }, []);
+
+  /**
+   * A MegaMUD folder's loops were written beside this realm's: the page takes
+   * up the list on disk as it takes up a realm it opens -- a fresh history,
+   * not an edit, so Undo cannot take two hundred loops back off in one press.
+   */
+  const importedServerLoops = useCallback(async () => {
+    const next = await refresh();
+    const loops = serverPick === null ? undefined : next.loops.servers[serverPick];
+    if (loops === undefined) return;
+    setServerHistory((current) => (current ? begin({ ...current.present, loops }) : current));
+  }, [refresh, serverPick]);
 
   const chooseServer = useCallback(
     (name: string | null) => {
@@ -3451,8 +3497,56 @@ export default function SettingsScreen({
                         <p className="settings-note">{t('settings.spells.note')}</p>
                       </fieldset>
 
+                      <fieldset className="settings-menus" data-fieldset="spells-drain">
+                        <legend>{t('settings.spells.drainLegend')}</legend>
+                        <p className="settings-note">{t('settings.spells.drainNote')}</p>
+                        <div className="settings-inline">
+                          <SpellField
+                            hint={t('settings.spells.drainHint')}
+                            label={t('settings.spells.drainLabel')}
+                            name="drain"
+                            onChange={(value) => patch({ spellDrain: value })}
+                            spells={shownBook.drains}
+                            value={form.spellDrain}
+                          />
+                          <SpellField
+                            hint={t('settings.spells.areaDrainHint')}
+                            label={t('settings.spells.areaDrainLabel')}
+                            name="area-drain"
+                            onChange={(value) => patch({ spellAreaDrain: value })}
+                            spells={shownBook.drains}
+                            value={form.spellAreaDrain}
+                          />
+                          <NumberField
+                            hint={t('settings.spells.drainBelowHint')}
+                            label={t('settings.spells.drainBelowLabel')}
+                            name="drain-below"
+                            onChange={(value) => patch({ spellDrainBelow: value })}
+                            bar={barOfHealth(form.spellDrainBelow)}
+                            figure={ofHealth(form.spellDrainBelow)}
+                            value={form.spellDrainBelow}
+                          />
+                          <NumberField
+                            hint={t('settings.spells.drainToHint')}
+                            label={t('settings.spells.drainToLabel')}
+                            name="drain-to"
+                            onChange={(value) => patch({ spellDrainTo: value })}
+                            bar={barOfHealth(form.spellDrainTo)}
+                            figure={ofHealth(form.spellDrainTo)}
+                            value={form.spellDrainTo}
+                          />
+                        </div>
+                      </fieldset>
+
                       <fieldset className="settings-menus" data-fieldset="spells-heal">
                         <legend>{t('settings.spells.healLegend')}</legend>
+                        <CheckField
+                          checked={form.spellAutoChooseHeal}
+                          hint={t('settings.spells.autoChooseHealHint')}
+                          label={t('settings.spells.autoChooseHeal')}
+                          name="spell-auto-choose-heal"
+                          onChange={(value) => patch({ spellAutoChooseHeal: value })}
+                        />
                         <div className="settings-inline">
                           <SpellField
                             hint={t('settings.spells.healHint')}
@@ -3935,6 +4029,13 @@ export default function SettingsScreen({
                             label={t('settings.remotes.gangpathLabel')}
                             name="remotes-gangpath"
                             onChange={(value) => patch({ remoteGangpath: value })}
+                          />
+                          <CheckField
+                            checked={form.remoteAutoJoin}
+                            hint={t('settings.remotes.autoJoinHint')}
+                            label={t('settings.remotes.autoJoinLabel')}
+                            name="remotes-auto-join"
+                            onChange={(value) => patch({ remoteAutoJoin: value })}
                           />
                           {/*
                             Nothing on the wire establishes who shares a gang
@@ -4750,7 +4851,14 @@ export default function SettingsScreen({
                     onOpenPicker={openPicker}
                     onToggle={toggleServerLoop}
                     picking={picking}
-                  />
+                  >
+                    <MegaMudLoopImport
+                      beforeImport={serverSave.flush}
+                      importLoops={importLoops}
+                      onImported={() => void importedServerLoops()}
+                      realm={serverPick === NEW_SERVER ? null : serverPick}
+                    />
+                  </LoopSection>
 
                   {/*
                     And what the place's sentences mean: a realm's message

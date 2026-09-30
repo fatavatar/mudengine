@@ -94,6 +94,7 @@ import type { CardChrome } from './components/BentoCard';
 import type { AppConfig } from '@shared/config';
 import type { MessageTrigger } from '@shared/messageTriggers';
 import type { MonsterRule } from '@shared/monsterRules';
+import type { MegaMudPath } from '@shared/megamudPaths';
 import type { IpcApi } from '@shared/ipc';
 import { CONSOLE_PALETTES, TERMINAL_THEMES, THEME_PREFERENCES, THEMES } from '@shared/themes';
 import { usePaneWidths } from './hooks/usePaneWidths';
@@ -2950,6 +2951,7 @@ export default function App() {
       loadMonsters: (realm: string) => api.loadMonsters(realm),
       importMonsters: (realm: string, fileName: string, monsters: MonsterRule[]) =>
         api.importMonsters(realm, fileName, monsters),
+      importLoops: (realm: string, paths: MegaMudPath[]) => api.importLoops(realm, paths),
       saveMonsters: (realm: string, monsters: MonsterRule[]) => api.saveMonsters(realm, monsters),
       // The shelf of shipped loops, for the Movement tab. Asked for when
       // that picker opens rather than with the snapshot: four hundred
@@ -6073,6 +6075,7 @@ export default function App() {
         saveMessages={settingsApi.saveMessages}
         loadMonsters={settingsApi.loadMonsters}
         importMonsters={settingsApi.importMonsters}
+        importLoops={settingsApi.importLoops}
         saveMonsters={settingsApi.saveMonsters}
         loadLoops={settingsApi.loadLoops}
         loadTrainers={settingsApi.loadTrainers}

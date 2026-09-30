@@ -49,7 +49,7 @@
  */
 import type { LoopProgress } from '../../shared/loops';
 import { stillFor, type StillReason, type WalkProgress } from '../../shared/walk';
-import type { Block } from '../../shared/blocks';
+import { isPrompt, type Block } from '../../shared/blocks';
 import { gangOnRoster, joinedTheParty, ownGang, type CharacterState } from '../../shared/character';
 import type { AutomationConfig, RemotesConfig } from '../../shared/config';
 import {
@@ -89,7 +89,7 @@ import { t } from '../app/i18n';
 import { CLIENT_NAME, CLIENT_VERSION } from '../app/version';
 import { bareName, countedLabel } from '../../shared/items';
 import { playerKey } from '../../shared/players';
-import type { CommandQueue } from './CommandQueue';
+import type { CommandQueue, Intent } from './CommandQueue';
 import { tuning } from '../app/tuning';
 
 /**
@@ -290,6 +290,8 @@ export class Remotes {
   private wantsHeal = false;
   /** Whether the character is known to be seen, so a say costs no stealth. */
   private seen = false;
+  /** The leader a `join` went to (`joinKey`), until the next prompt, which follows its answer. */
+  private joinSentTo: string | null = null;
 
   /**
    * Who stood in this character's room as of the last tick, lower-cased. See
@@ -330,6 +332,7 @@ export class Remotes {
   onBlock(block: Block, state: CharacterState): void {
     this.noteRound(block, state);
     if (!this.config.enabled || !this.config.remotes.enabled) return;
+    this.autoJoinOn(block, state);
     const channel = CHANNELS.get(block.type);
     if (channel === undefined) return;
 
@@ -868,6 +871,7 @@ export class Remotes {
     this.askedForHealAt = null;
     this.wantsHeal = false;
     this.seen = false;
+    this.joinSentTo = null;
   }
 
   /**
@@ -893,6 +897,57 @@ export class Remotes {
    * notice is — because a safety feature that silently declines is worse than
    * one never offered. The asker hears nothing.
    */
+  /**
+   * Whether a `join` to `leader` is already on its way: waiting in the queue,
+   * or sent and not yet answered. The queue is asked rather than remembered,
+   * so a `join` the queue dropped (a hold, a disconnect) is not waited on.
+   */
+  private joining(leader: string): boolean {
+    const key = joinKey(leader);
+    return this.joinSentTo === key || this.queue.queued((intent) => intent.coalesceKey === key);
+  }
+
+  /**
+   * Joining a party when its leader invites this character, without waiting
+   * for the `@join` that follows (captures/112: the invitation, `Swampfox
+   * telepaths: @join`, `join Swampfox`). `automation.remotes.autoJoin`, from
+   * upstream 759fc4d. Gated as `@join` is (`judgeRemote`), so it lets in
+   * nobody `@join` would refuse; never while already in a party, since what
+   * `join` does to one is uncaptured. Every refusal is said. The `@join`
+   * usually arrives after this `join` went and before its answer, so the
+   * `@join` case asks `joining` and no second `join` goes.
+   */
+  private autoJoinOn(block: Block, state: CharacterState): void {
+    if (isPrompt(block.type)) this.joinSentTo = null;
+    if (block.type !== 'party-invited' || !this.config.remotes.autoJoin) return;
+    // `leader` is somebody inviting this character; `player` is this character inviting somebody.
+    const leader = block.groups['leader'];
+    if (leader === undefined || this.joining(leader)) return;
+    if (inAParty(state)) {
+      this.events.notice?.(t('automation.remotes.autoJoinInParty', { from: leader }));
+      return;
+    }
+    const verdict = judgeRemote(leader, 'join', this.config.remotes, evidenceAbout(leader, state));
+    if (!verdict.allowed) {
+      this.events.notice?.(
+        verdict.because === 'denied'
+          ? t('automation.remotes.autoJoinDenied', { from: leader })
+          : t('automation.remotes.autoJoinNotGranted', {
+              from: leader,
+              unresolvedClause: unresolvedClauseOf(verdict)
+            })
+      );
+      return;
+    }
+    const key = joinKey(leader);
+    this.queue.enqueue({
+      ...joinIntent(leader, t('automation.remotes.reasonAutoJoin', { from: leader })),
+      onSent: () => {
+        this.joinSentTo = key;
+      }
+    });
+  }
+
   private refuse(from: string, command: RemoteCall, verdict: RemoteVerdict): void {
     if (verdict.allowed) return;
     if (verdict.because === 'denied') {
@@ -914,11 +969,7 @@ export class Remotes {
      * "not granted" would send the player looking through permissions that
      * are already right.
      */
-    const unresolvedClause = verdict.gangUnresolved
-      ? t('automation.remotes.unresolvedGang')
-      : verdict.notInParty
-        ? t('automation.remotes.notInParty')
-        : '';
+    const unresolvedClause = unresolvedClauseOf(verdict);
     this.events.notice?.(
       t('automation.remotes.refusedNotGranted', { from, raw: command.raw, unresolvedClause })
     );
@@ -1250,12 +1301,9 @@ export class Remotes {
       }
 
       case 'join': {
-        this.queue.enqueue({
-          command: `join ${from}`,
-          priority: 'user',
-          coalesceKey: `remote:join:${from.toLowerCase()}`,
-          reason: t('automation.remotes.reasonJoin', { from })
-        });
+        // The invitation's own `join` is queued or still unanswered (`autoJoinOn`).
+        if (this.joining(from)) return;
+        this.queue.enqueue(joinIntent(from, t('automation.remotes.reasonJoin', { from })));
         return;
       }
 
@@ -1478,6 +1526,33 @@ const ROUND_BLOWS: ReadonlySet<string> = new Set([
  * says whom it follows and nothing about who else is there — and a follower
  * that waited for a listing to count itself in a party never asked for one.
  */
+/** `join <leader>`, one per leader however it was asked for: an invitation and a `@join` are one join. */
+function joinIntent(leader: string, reason: string): Intent {
+  return { command: `join ${leader}`, priority: 'user', coalesceKey: joinKey(leader), reason };
+}
+
+function joinKey(leader: string): string {
+  return `remote:join:${leader.toLowerCase()}`;
+}
+
+/*
+ * A gang grant that could not be evaluated is named, because the two reasons
+ * somebody sees nothing happen are opposite: nothing grants this command to
+ * anybody, or the gang grants it and this client cannot yet tell whether the
+ * asker is in the gang. Saying "not granted" for the second is how a feature
+ * gets reported as broken. And the party clause beside it, for the same reason
+ * in the other direction: the party grants this command and the asker is not
+ * on the listing, a fact one `party` away.
+ */
+function unresolvedClauseOf(verdict: RemoteVerdict): string {
+  if (verdict.allowed || verdict.because !== 'not-granted') return '';
+  return verdict.gangUnresolved
+    ? t('automation.remotes.unresolvedGang')
+    : verdict.notInParty
+      ? t('automation.remotes.notInParty')
+      : '';
+}
+
 function inAParty(state: CharacterState): boolean {
   return state.party.following !== null || partyMembers(state).length > 0;
 }

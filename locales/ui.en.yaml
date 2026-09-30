@@ -51,6 +51,9 @@ app:
     invalidName: Invalid path/loop name.
     invalidLoop: Invalid loop definition.
     invalidPicks: The loop builder sent something that is not a list of at most {max} rooms.
+    noLoopsSent: Nothing sent was a MegaMUD loop, so this realm's loops were left as they were.
+    noneFit: None of the {count} loops fit this realm's map, so nothing was added. Choose the
+      MegaMUD folder recorded on this realm.
     notFound: No loop named {name} in this character's options.
     unknownScope: Invalid loop scope.
   onboarding:
@@ -170,6 +173,11 @@ notices:
         with the paragraph that explains it: {fileList}'
       many: 'Fleeing by sys goto is a setting, off by default, and was written into {count} files
         with the paragraph that explains it: {fileList}'
+    drainStated:
+      one: 'Casting a drain spell while health is low is a setting, off by default, and was written
+        into {count} file with the paragraph that explains it: {fileList}'
+      many: 'Casting a drain spell while health is low is a setting, off by default, and was written
+        into {count} files with the paragraph that explains it: {fileList}'
     confusionWaitStated:
       one: 'Walking on while confused is a setting, off by default, and was written into {count}
         file with the paragraph that explains it: {fileList}'
@@ -185,6 +193,14 @@ notices:
         and {count} file was moved over to it: {fileList}'
       many: 'Using the vortexes and entering the Negative Power Plane are now the Keep Out Of list,
         and {count} files were moved over to it: {fileList}'
+    healChoiceStated:
+      many: 'Auto Choose Best Heal was added to {count} files, turned on where Auto Choose Best Spell
+        is on: {fileList}'
+      one: 'Auto Choose Best Heal was added to {fileList}, turned on where Auto Choose Best Spell is
+        on.'
+    autoJoinStated:
+      many: 'Join When Invited was added, off, to {count} files: {fileList}'
+      one: 'Join When Invited was added, off, to {fileList}'
     freedomCureStated:
       one: 'A Freedom spell -- cast when the character cannot move -- is a setting, blank by
         default, and was written into the cures of {count} file: {fileList}'
@@ -3493,7 +3509,8 @@ settings:
     restNextDoor: Rest Next Door to a Lair
     restNextDoorHint:
       A room that makes monsters on a short clock is not a resting place. Looks into a neighbour the
-      realm holds no lair in, steps there only if it is empty, rests, and steps back.
+      realm holds no lair in, steps there only if it is empty, rests, and steps back. Never while
+      following, since a follower rests where the party is.
     restingNote: One pair for both, because nothing rests while a loop is marching — a separate
       pause figure under the resting floor left the character walking while it was too hurt to sit
       down. Resting is a state the character is in, and only moving, attacking and casting break
@@ -3532,6 +3549,20 @@ settings:
     searchPlaceholderLoading: Search the shipped loops
   loopSection:
     addLoop: Add a loop
+    importDropped: 'Left out: {start} whose first room this realm''s map does not have, {steps} whose
+      steps do not fit it, {short} too short to walk.'
+    importLabel: Import MegaMUD loops…
+    importNoRooms: The folder has no Rooms.md, so each first room was found by its name alone.
+    importNone: That folder has no MegaMUD loops. MegaMUD keeps them as .mp files in its data
+      folder, beside Rooms.md.
+    importNote: Choose a MegaMUD data folder, the one holding Rooms.md and the .mp paths. Every loop
+      in it that fits this realm's map is added here, for every character on this realm; a loop
+      already here under the same name is replaced.
+    importReading: Reading the folder…
+    importUnreadable: The folder could not be read.
+    imported:
+      many: 'Added {count} loops ({replaced} replaced one of the same name).'
+      one: 'Added 1 loop ({replaced} replaced one of the same name).'
     empty: None. A loop is a list of rooms walked in sequence; add one below, and start it from the palette.
     heading: Loops
     inheritedNote: 'It also walks {count} it does not own, edited where {itLivesOrTheyLive}:'
@@ -3890,6 +3921,9 @@ settings:
     gangpathHint: 'A gangpath answer is spoken to the whole gang — “gb @exp” is answered “gb
       {Made…}” where every member sees both halves.'
     gangpathLabel: Allow Remotes on Gangpath
+    autoJoinHint: Joins a party as soon as its leader invites this character, without waiting for
+      @join. Only a leader allowed @join is joined, and never while already in a party.
+    autoJoinLabel: Join When Invited
     legend: Answering Other Players
     playerLegend: Permissions for {name}
     partyListNote:
@@ -4162,10 +4196,15 @@ settings:
     autoChoose: Auto Choose Best Spell
     autoChooseHint:
       Picks the round spell each round from your spellbook and the realm's figures — never one the
-      monster resists, the cheapest that would finish it, else the hardest hitter. Healing is
-      chosen the same way against the hit points actually missing, so a scratch is not mended with
-      a major heal, and the cures are picked where their boxes are blank. The spells below are cast
-      with this off, and with it on wherever the spellbook cannot answer.
+      monster resists, the cheapest that would finish it, else the hardest hitter. The cures are
+      picked where their boxes are blank. The spells below are cast with this off, and with it on
+      wherever the spellbook cannot answer.
+    autoChooseHeal: Auto Choose Best Heal
+    autoChooseHealHint:
+      Picks each heal from your spellbook and the realm's figures against the hit points actually
+      missing, so a scratch is not mended with a major heal, and casts a party heal like healing
+      rain when it does more than one heal on the worst hurt. The healing spells below are cast
+      with this off, or wherever it cannot choose.
     fallbackCastHint:
       Cast instead for the rest of the fight once the game says the combat spell has no effect on
       the target. Blank leaves the fight to the round attacks.
@@ -4176,6 +4215,21 @@ settings:
     attackCastsLabel: Casts Per Target
     areaCastsHint: Casts of the AE spell per fight. 0 is no limit.
     areaCastsLabel: AE Casts Per Fight
+    drainLegend: Drain When Hurt
+    drainNote:
+      A drain hurts the target and heals you by it. Below the threshold the drain spells stand in
+      for the combat and AE spells, under their own caps, crowd and mana tests, until health is
+      back up. Only spells the realm says drain are offered.
+    drainHint: Stands in for the combat spell while hurt. Blank keeps it, or picks from the spellbook with Auto Choose on.
+    drainLabel: Drain Spell
+    areaDrainHint: Stands in for the AE spell while hurt, when the room earns one. Blank keeps the AE spell.
+    areaDrainLabel: AE Drain Spell
+    drainBelowHint: Switch to the drain spells below this share of health. 0 never drains.
+    drainBelowLabel: Drain If Below HP %
+    drainToHint:
+      Keep draining until health is back to this. 0 switches back as soon as it is over the
+      threshold — and every switch restarts your combat round.
+    drainToLabel: Drain Up To HP %
     healBelowInCombatHint:
       A separate floor while fighting. 0 uses the one beside it for both; set it lower so a scratch
       does not cost a round.
@@ -4343,6 +4397,8 @@ errors:
     duplicateRealmName: There is already a realm called {name}.
     globalAddressMismatch: the address did not survive being saved
     loopScopeUnknown: Nowhere to put that loop — the character or realm it named is not there.
+    tooManyLoops: That would give this realm more than {max} loops (it holds {held}), more than its
+      page can keep. Remove some first.
     remoteNameRequired: No name given.
     realmInUse: '{name} is still where {users} {playsOrPlay}. Move them first, or they would have
       nowhere to connect.'
@@ -4862,6 +4918,7 @@ automation:
     spellIneffective: '{spell} has no effect here; casting {fallback} instead for this fight.'
     spellIneffectiveArea: '{spell} has no effect here; the combat spell carries this fight.'
     spellIneffectiveNoFallback: '{spell} has no effect here, and no fallback spell is set; the round attacks carry this fight.'
+    drainIneffective: '{spell} has no effect here; the combat spell carries this fight.'
     whyUnweighed: 'first of {count} here: the realm cannot weigh {target}, and unknown is not safe'
     hazardList: '; {list}'
     hazard:
@@ -4891,6 +4948,8 @@ automation:
     emptyBook: 'Auto Choose Best Spell: the spellbook is empty — this character has no spells yet.'
     noAttackSpells: 'Auto Choose Best Spell: nothing in the spellbook attacks a single target.'
     allResisted: 'Auto Choose Best Spell: every attack spell in the book is resisted by this target; the round attacks carry the fight.'
+    drainStarts: 'Health under {below}%: casting the drain spell until it is back to {to}%.'
+    drainEnds: Health is back up; the combat spell again.
   train:
     reason: 'spending {cp} character points at the trainer'
     # Going to collect the level -- `TrainErrand` (todo 18). Every sentence
@@ -4995,6 +5054,7 @@ automation:
     reasonParty: 'heal: {memberName} is at {percent}%'
     reasonRequested: 'heal: {memberName} asked (@heal)'
     reasonSelf: 'heal: health is low'
+    reasonArea: 'heal: {count} in the party are hurt'
     requestHealOff: '{from} asked for a heal (@heal), and healing is off (Heal If Below is 0) — nothing is cast.'
     requestLapsed: '{from} asked for a heal (@heal) and none went out within {seconds}s.'
     requestLowMana: '{from} asked for a heal (@heal); it waits for mana over the floor.'
@@ -5005,6 +5065,11 @@ automation:
       cover the {deficit} hp missing.'
     choseMost: 'Healing with {spell} ({min}-{max}, about {expected} a cast, {cost} mana): the most
       one cast mends, and {deficit} hp are missing.'
+    choseArea:
+      many: 'Healing the party with {spell} ({min}-{max} each, {cost} mana): {count} are hurt,
+        and one heal on the worst does no better for the mana.'
+      one: 'Healing the party with {spell} ({min}-{max} each, {cost} mana): it does at least as
+        much as one heal for the mana.'
     noChoice: 'No heal in the spellbook fits, so {spell} is cast as configured.'
     noChoiceNoSpell: No heal in the spellbook fits, and none is configured, so nothing is cast.
     noFiguresSelf:
@@ -5192,6 +5257,11 @@ automation:
     reasonParEvery: 'the party listing, every {seconds}s (Par Every)'
     reasonParRound: the party listing after the round (Send par After Each Combat Round)
     ignoredParty: '{from} asked the party to "{command}"; Ignore @party If Following is on, so it was not sent.'
+    autoJoinInParty: '{from} invited this character; not joining, because it is already in a party.'
+    autoJoinDenied: '{from} invited this character; not joining, because @join is denied to {from}
+      by name.'
+    autoJoinNotGranted: '{from} invited this character; not joining, because {from} has not been
+      granted @join.{unresolvedClause}'
     ignoredWait: '{from} asked the party to wait; Ignore @wait If Leading is on, so the walk goes on.'
     waitedLongEnough: 'Waited {minutes} min for {who}; walking on, as Wait No Longer Than says.'
     peerIsOurs:
@@ -5220,6 +5290,7 @@ automation:
     reasonGetAll: '@get-all from {from}'
     reasonInvite: '@invite from {from}'
     reasonJoin: '@join from {from}'
+    reasonAutoJoin: 'invited by {from}'
     reasonParty: '@party from {from}'
     refusal:
       hangup: an unclean disconnect costs a percentage of maximum health and is fatal at low health;

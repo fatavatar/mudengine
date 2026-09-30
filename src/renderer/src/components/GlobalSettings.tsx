@@ -7,7 +7,7 @@ import { MonsterRuleList } from './MonsterRules';
 import GearSetList from './GearSetList';
 import PotionList from './PotionList';
 import SettingsNav, { type NavFieldset } from './SettingsNav';
-import SpellField, { castableOn, refusesTarget } from './SpellPicker';
+import SpellField, { castableOn, drainsIn, refusesTarget } from './SpellPicker';
 import { castsOnOthers, castsOnSelf } from '@shared/spellcraft';
 import CarrySections from './CarrySections';
 import Icon from './Icon';
@@ -173,6 +173,7 @@ const SECTION_FIELDSETS: Record<Section, readonly NavFieldset[]> = {
     { id: 'health-pvp', label: t('settings.health.pvpLegend') }
   ],
   spells: [
+    { id: 'spells-drain', label: t('settings.spells.drainLegend') },
     { id: 'spells-heal', label: t('settings.spells.healLegend') },
     { id: 'spells-cures', label: t('settings.spells.cureLegend') },
     { id: 'spells-blessings', label: t('settings.spells.blessingsLegend') }
@@ -278,6 +279,7 @@ export default function GlobalSettings({
    */
   const selfHeals = useMemo(() => castableOn(realmSpells, castsOnSelf), [realmSpells]);
   const partyHeals = useMemo(() => castableOn(realmSpells, castsOnOthers), [realmSpells]);
+  const drains = useMemo(() => drainsIn(realmSpells), [realmSpells]);
 
   /**
    * One block at a time, merged onto the draft.
@@ -1412,8 +1414,65 @@ export default function GlobalSettings({
                 value={String(draft.automation.spells.areaCasts)}
               />
             </div>
+            <fieldset className="settings-menus" data-fieldset="spells-drain">
+              <legend>{t('settings.spells.drainLegend')}</legend>
+              <p className="settings-note">{t('settings.spells.drainNote')}</p>
+              <div className="settings-inline">
+                <SpellField
+                  hint={t('settings.spells.drainHint')}
+                  label={t('settings.spells.drainLabel')}
+                  name="global-drain"
+                  onChange={(value) =>
+                    automation({ spells: { ...draft.automation.spells, drain: value } })
+                  }
+                  spells={drains}
+                  value={draft.automation.spells.drain}
+                />
+                <SpellField
+                  hint={t('settings.spells.areaDrainHint')}
+                  label={t('settings.spells.areaDrainLabel')}
+                  name="global-area-drain"
+                  onChange={(value) =>
+                    automation({ spells: { ...draft.automation.spells, areaDrain: value } })
+                  }
+                  spells={drains}
+                  value={draft.automation.spells.areaDrain}
+                />
+                <NumberField
+                  hint={t('settings.spells.drainBelowHint')}
+                  label={t('settings.spells.drainBelowLabel')}
+                  name="global-drain-below"
+                  onChange={(value) =>
+                    automation({
+                      spells: { ...draft.automation.spells, drainBelow: fraction(value) }
+                    })
+                  }
+                  bar={barOfHealth(draft.automation.spells.drainBelow)}
+                  value={percent(draft.automation.spells.drainBelow)}
+                />
+                <NumberField
+                  hint={t('settings.spells.drainToHint')}
+                  label={t('settings.spells.drainToLabel')}
+                  name="global-drain-to"
+                  onChange={(value) =>
+                    automation({ spells: { ...draft.automation.spells, drainTo: fraction(value) } })
+                  }
+                  bar={barOfHealth(draft.automation.spells.drainTo)}
+                  value={percent(draft.automation.spells.drainTo)}
+                />
+              </div>
+            </fieldset>
             <fieldset className="settings-menus" data-fieldset="spells-heal">
               <legend>{t('settings.spells.healLegend')}</legend>
+              <CheckField
+                checked={draft.automation.spells.autoChooseHeal}
+                hint={t('settings.spells.autoChooseHealHint')}
+                label={t('settings.spells.autoChooseHeal')}
+                name="global-spell-auto-choose-heal"
+                onChange={(value) =>
+                  automation({ spells: { ...draft.automation.spells, autoChooseHeal: value } })
+                }
+              />
               <div className="settings-inline">
                 <SpellField
                   hint={t('settings.spells.healHint')}
@@ -2373,6 +2432,15 @@ export default function GlobalSettings({
                   name="global-remotes-gangpath"
                   onChange={(value) =>
                     automation({ remotes: { ...draft.automation.remotes, gangpath: value } })
+                  }
+                />
+                <CheckField
+                  checked={draft.automation.remotes.autoJoin}
+                  hint={t('settings.remotes.autoJoinHint')}
+                  label={t('settings.remotes.autoJoinLabel')}
+                  name="global-remotes-auto-join"
+                  onChange={(value) =>
+                    automation({ remotes: { ...draft.automation.remotes, autoJoin: value } })
                   }
                 />
                 <p className="settings-warn">{t('settings.remotes.gangWarning')}</p>

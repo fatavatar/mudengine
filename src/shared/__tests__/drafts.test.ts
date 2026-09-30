@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { asProfileDraft, asProfileId, asServerDraft } from '../drafts';
+import { asProfileDraft, asProfileId, asServerDraft, LOOP_LIMITS } from '../drafts';
 import { UNCATEGORISED } from '../loops';
 
 /*
@@ -317,8 +317,13 @@ describe('a character', () => {
         healPartyWith: '',
         attackFallback: '',
         autoChoose: false,
+        autoChooseHeal: false,
         attackCasts: 0,
         areaCasts: 0,
+        drain: '',
+        areaDrain: '',
+        drainBelow: 0,
+        drainTo: 0,
         healBelow: 0,
         healBelowInCombat: 0,
         healTo: 0,
@@ -394,8 +399,13 @@ describe('a character', () => {
         minMana: 0,
         attackFallback: '',
         autoChoose: false,
+        autoChooseHeal: false,
         attackCasts: 0,
         areaCasts: 0,
+        drain: '',
+        areaDrain: '',
+        drainBelow: 0,
+        drainTo: 0,
         cures: { blindness: '', poison: '', disease: '', freedom: '' },
         blessings: [],
         notifyPartyOnWearOff: false,
@@ -475,11 +485,11 @@ describe('a character', () => {
     /* The ceiling exists so a window bug cannot write an unbounded file, not to
        limit a loop: MegaMUD's longest of 420 is under forty stops. */
     it('bounds a list no person typed', () => {
-      const many = Array.from({ length: 400 }, (_, at) => ({
+      const many = Array.from({ length: LOOP_LIMITS.loops + 200 }, (_, at) => ({
         name: `loop ${at}`,
         stops: ['A', 'B']
       }));
-      expect(asProfileDraft({ ...good, loops: many })?.loops.length).toBe(200);
+      expect(asProfileDraft({ ...good, loops: many })?.loops.length).toBe(LOOP_LIMITS.loops);
     });
   });
 

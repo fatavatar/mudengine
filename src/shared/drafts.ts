@@ -82,8 +82,12 @@ import { asMonsterRules, type MonsterRule } from './monsterRules';
 
 const ENCODINGS: readonly StreamEncoding[] = ['cp437', 'utf8', 'latin1'];
 
-/** See `ProfileDraft.loops`: a ceiling on a payload, not a limit on a loop. */
-export const LOOP_LIMITS = { loops: 200, stops: 500 } as const;
+/**
+ * See `ProfileDraft.loops`: a ceiling on a payload, not a limit on a loop.
+ * Room for a whole MegaMUD folder on one realm (2026-09-29): MudRev's
+ * `Default` holds 282 loops and Paradigm's 488 recorded paths.
+ */
+export const LOOP_LIMITS = { loops: 1000, stops: 500 } as const;
 
 /**
  * One loop, from a payload that crossed the IPC boundary.
@@ -241,6 +245,7 @@ export interface GlobalDraft {
     spells: {
       /** Derive the round spell and the cures from the book. See `SpellsConfig`. */
       autoChoose: boolean;
+      autoChooseHeal: boolean;
       attack: string;
       areaAttack: string;
       areaMinMobs: number;
@@ -248,6 +253,10 @@ export interface GlobalDraft {
       attackFallback: string;
       attackCasts: number;
       areaCasts: number;
+      drain: string;
+      areaDrain: string;
+      drainBelow: number;
+      drainTo: number;
       heal: string;
       healPartyWith: string;
       healBelow: number;
@@ -548,6 +557,7 @@ export interface ProfileDraft {
   spells: {
     /** Derive the round spell and the cures from the book. See `SpellsConfig`. */
     autoChoose: boolean;
+    autoChooseHeal: boolean;
     attack: string;
     areaAttack: string;
     areaMinMobs: number;
@@ -556,6 +566,11 @@ export interface ProfileDraft {
     attackFallback: string;
     attackCasts: number;
     areaCasts: number;
+    /** See `SpellsConfig`: the drain spells cast instead while health is low. */
+    drain: string;
+    areaDrain: string;
+    drainBelow: number;
+    drainTo: number;
     /**
      * The heal, per character.
      *
@@ -642,6 +657,8 @@ export interface StatlineDraft {
 export interface RemotesDraft {
   enabled: boolean;
   gangpath: boolean;
+  /** Join a party when its leader invites. See `RemotesConfig.autoJoin`. */
+  autoJoin: boolean;
   /** What anybody in this character's gang may ask for. Validated against `REMOTE_NAMES`. */
   gang: RemoteName[];
   /** What anybody who has joined this character's party may ask for. */
@@ -1057,6 +1074,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
     spells: {
       // Off unless said: it spends mana on a reading the player did not type.
       autoChoose: spells['autoChoose'] === true,
+      autoChooseHeal: spells['autoChooseHeal'] === true,
       // The whole name, unlike a command word: the server matches a spell on a
       // prefix, so `ice` would cast whatever begins with it.
       attack: typeof spells['attack'] === 'string' ? spells['attack'].trim().slice(0, 40) : '',
@@ -1071,6 +1089,11 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       // 0 is no limit, so a missing or unreadable figure is the unlimited one.
       attackCasts: Math.max(0, Math.min(99, Math.round(Number(spells['attackCasts']) || 0))),
       areaCasts: Math.max(0, Math.min(99, Math.round(Number(spells['areaCasts']) || 0))),
+      drain: typeof spells['drain'] === 'string' ? spells['drain'].trim().slice(0, 40) : '',
+      areaDrain:
+        typeof spells['areaDrain'] === 'string' ? spells['areaDrain'].trim().slice(0, 40) : '',
+      drainBelow: unit(spells['drainBelow']),
+      drainTo: unit(spells['drainTo']),
       heal: typeof spells['heal'] === 'string' ? spells['heal'].trim().slice(0, 40) : '',
       healPartyWith:
         typeof spells['healPartyWith'] === 'string'
@@ -1133,6 +1156,7 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
     remotes: {
       enabled: remotes['enabled'] === true,
       gangpath: remotes['gangpath'] === true,
+      autoJoin: remotes['autoJoin'] === true,
       gang: remoteNames(remotes['gang']),
       party: remoteNames(remotes['party']),
       players: playerGrants(remotes['players'])
@@ -1269,6 +1293,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
       afk: asIf.afk,
       spells: {
         autoChoose: spells['autoChoose'] === true,
+        autoChooseHeal: spells['autoChooseHeal'] === true,
         attack: text(spells['attack']).slice(0, 40),
         areaAttack: text(spells['areaAttack']).slice(0, 40),
         areaMinMobs: Math.max(1, Math.min(99, Math.round(Number(spells['areaMinMobs']) || 3))),
@@ -1276,6 +1301,10 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
         attackFallback: text(spells['attackFallback']).slice(0, 40),
         attackCasts: Math.max(0, Math.min(99, Math.round(Number(spells['attackCasts']) || 0))),
         areaCasts: Math.max(0, Math.min(99, Math.round(Number(spells['areaCasts']) || 0))),
+        drain: text(spells['drain']).slice(0, 40),
+        areaDrain: text(spells['areaDrain']).slice(0, 40),
+        drainBelow: unit(spells['drainBelow']),
+        drainTo: unit(spells['drainTo']),
         heal: text(spells['heal']).slice(0, 40),
         healPartyWith: text(spells['healPartyWith']).slice(0, 40),
         healBelow: unit(spells['healBelow']),
@@ -1297,6 +1326,7 @@ export function asGlobalDraft(value: unknown): GlobalDraft | null {
       remotes: {
         enabled: remotes['enabled'] === true,
         gangpath: remotes['gangpath'] === true,
+        autoJoin: remotes['autoJoin'] === true,
         gang: remoteNames(remotes['gang']),
         party: remoteNames(remotes['party']),
         players: playerGrants(remotes['players'])

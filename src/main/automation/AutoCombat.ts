@@ -83,6 +83,7 @@ import { ATTACK_COMMANDS, commandOf, REREAD_ROOM, ROOM_READ_KEY } from '../../sh
 import {
   DEFAULT_CONFIG,
   DEFAULT_MOB_PRIORITY,
+  drainHolding,
   type CombatConfig,
   type MobPriorityBand,
   type MobRule,
@@ -152,6 +153,12 @@ export interface AutoCombatEvents {
    * Avoid row for `rogue` is not about an `orc rogue`. See `ruleFor`.
    */
   knownMob?(key: string): boolean;
+  /**
+   * Whether the realm says a spell heals its caster by what it hits
+   * (`spellServes(…).drains`), for *Auto Choose Best Spell* to pick a drain
+   * while health is low. Absent, nothing is known to drain.
+   */
+  drains?(spell: string): boolean;
   /**
    * A round of a fight this character is in has come round (todo 00).
    *
@@ -390,6 +397,8 @@ export class AutoCombat {
    * starts the fight (`swing`). Dropped with the fight.
    */
   private proposed: CastProposal[] = [];
+  /** Whether the drain spells stand in for the attack spells — `drainHolding`'s latch. */
+  private draining = false;
   /** Spells the server has said have no effect on the current target, this fight. */
   private readonly ineffective = new Set<string>();
   /** Confirmed casts against the current target, by configured spell — `attackCasts` / `areaCasts`. */
@@ -512,11 +521,16 @@ export class AutoCombat {
       attackFallback: '',
       attackCasts: 0,
       areaCasts: 0,
+      drain: '',
+      areaDrain: '',
+      drainBelow: 0,
+      drainTo: 0,
       heal: '',
       healPartyWith: '',
       healBelow: 0,
       healBelowInCombat: 0,
       healTo: 0,
+      autoChooseHeal: false,
       healParty: false,
       invokeItems: false,
       minMana: 0,
@@ -666,6 +680,7 @@ export class AutoCombat {
     this.standDownUntil = 0;
     this.movePendingNow = false;
     this.areaEngaged = false;
+    this.draining = false;
     this.clearAreaTimer();
     this.lastDecision = null;
     this.clearRound();
@@ -1002,14 +1017,19 @@ export class AutoCombat {
    * no attack (the player, 2026-09-24) — so it is the realm's answer where
    * the realm has one, the abilities the server hits with (`Spell.cs`:
    * `DamageNoMR`, `DamageWithMR`, `Drain`). Where it has none, the room
-   * spell, the configured round spell or its fallback, and what the fight is
+   * spell, the configured round spell, its fallback or the drain, and what the fight is
    * repeating now are the attacks this character is known to cast.
    */
   private attackCast(cast: { word: string; argument: string }): boolean {
     if (this.isArea(cast.word)) return true;
     const abilities = this.realmSpell(cast.word)?.abilities;
     if (abilities !== undefined) return abilities.some(([id]) => DAMAGING.has(id));
-    const kept = [this.spells.attack, this.spells.attackFallback, this.combatAction ?? ''];
+    const kept = [
+      this.spells.attack,
+      this.spells.attackFallback,
+      this.spells.drain,
+      this.combatAction ?? ''
+    ];
     return kept.some((spell) => spell.trim().length > 0 && this.sameSpell(cast.word, spell));
   }
 
@@ -1985,6 +2005,23 @@ export class AutoCombat {
         continue;
       }
       /*
+       * A row the player marked Enemy is past the disposition, as `engage:
+       * all` is for every monster. MegaMUD's Enemy is *attacked on sight*
+       * (`idh_relationships`); whether the realm data says it would have
+       * swung first is this client's own caution, not the player's.
+       * Reported on Skinny (2026-09-29): storm giants he marked Enemy over
+       * the realm's Avoid are `Align` 3, Neutral, so `passive`, and he stood
+       * beside Fatty's fight until it reached him through `defendParty`.
+       *
+       * Only a row that *says* Enemy. It is also what an unlisted monster
+       * reads as (`relationOf`), and those stay with `engage`. The caps
+       * above stand, being the player's own too.
+       */
+      if (this.ruleOf(who.name)?.relationship === 'enemy') {
+        willing.push(who);
+        continue;
+      }
+      /*
        * Or it *might*, because the rows sharing this name disagree. Same coin
        * toss as an uncertain disposition and settled by the same setting —
        * refusing it outright is what would have made this not work on `giant
@@ -2261,9 +2298,12 @@ export class AutoCombat {
     return this.castIn(command)?.word ?? null;
   }
 
+  /** Whether `spell` is a configured room spell — the attack's or the drain's. */
   private isArea(spell: string | null): boolean {
-    const area = this.spells.areaAttack.trim();
-    return spell !== null && area.length > 0 && this.sameSpell(spell, area);
+    if (spell === null) return false;
+    return [this.spells.areaAttack, this.spells.areaDrain].some(
+      (area) => area.trim().length > 0 && this.sameSpell(spell, area.trim())
+    );
   }
 
   /**
@@ -2840,6 +2880,7 @@ export class AutoCombat {
     { preAttack = true }: { preAttack?: boolean } = {}
   ): { spell: string; area: boolean } | null {
     const fraction = manaFraction(state);
+    const draining = this.drainingNow(state);
 
     /*
      * The room spell first, when the fight is crowded enough to earn it —
@@ -2855,8 +2896,10 @@ export class AutoCombat {
      * spends them unasked, the same refusal `choose` makes one at a time —
      * and the crowd is *threats* (what is in this fight or would join it),
      * never `countMobs`, which counts a shopkeeper and a guard dog alike.
+     * While draining, the room's drain is the room spell, under the same tests.
      */
-    const area = this.spells.areaAttack.trim();
+    const areaDrain = this.spells.areaDrain.trim();
+    const area = draining && areaDrain.length > 0 ? areaDrain : this.spells.areaAttack.trim();
     if (
       area.length > 0 &&
       !this.ineffective.has(area) &&
@@ -2875,7 +2918,15 @@ export class AutoCombat {
         (who) =>
           who.kind === 'mob' && (this.leftAlone(who.name) || this.relationOf(who.name) !== 'enemy')
       );
-      const crowd = Math.max(countThreats(state), state.combat.attackers.length);
+      /*
+       * A row marked Not hostile is no threat either, whatever the realm
+       * rates it: the same reading `Recovery` rests by. Otherwise the player
+       * said the monster would not join, and the spell was cast for a crowd
+       * that was not coming (the player, 2026-09-29). One already swinging
+       * is counted by `attackers`.
+       */
+      const threats = countThreats(state, (name) => this.ruleOf(name)?.notHostile === true);
+      const crowd = Math.max(threats, state.combat.attackers.length);
       const floor = Math.max(this.spells.areaMinMana, this.spells.minMana);
       if (
         !costly &&
@@ -2897,6 +2948,17 @@ export class AutoCombat {
      * server said has no effect on this target is passed over, as the round
      * spell's is.
      */
+    /*
+     * Low health: the drain, ahead of what the monster table names, since the
+     * row is a preference about the monster and this is the character's own
+     * survival. A drain the server says has no effect here (`AffectsLivingOnly`
+     * against the undead) falls through to the ordinary choice.
+     */
+    if (draining) {
+      const drain = this.drainSpell(state, fraction);
+      if (drain !== undefined) return drain;
+    }
+
     const target = state.combat.target;
     const row = target === null ? undefined : this.rowSpell(target, fraction, preAttack);
     if (row !== undefined) return row;
@@ -2952,6 +3014,53 @@ export class AutoCombat {
     return undefined;
   }
 
+  /**
+   * Whether the drain spells stand in for the attack spells, now —
+   * `drainBelow` to start and `drainTo` to stop — said out loud on each edge,
+   * because a fight changing spell is a decision somebody will read back.
+   */
+  private drainingNow(state: CharacterState): boolean {
+    const { hp, hpMax } = state.vitals;
+    const { drain, areaDrain, autoChoose } = this.spells;
+    // Nothing that could drain is nothing to announce.
+    const armed = drain.trim().length > 0 || areaDrain.trim().length > 0 || autoChoose;
+    const draining = armed && drainHolding(this.spells, hp, hpMax, this.draining);
+    if (draining !== this.draining) {
+      const percent = (value: number): number => Math.round(value * 100);
+      this.events.notice?.(
+        draining
+          ? t('automation.spells.drainStarts', {
+              below: percent(this.spells.drainBelow),
+              to: percent(Math.max(this.spells.drainTo, this.spells.drainBelow))
+            })
+          : t('automation.spells.drainEnds')
+      );
+    }
+    this.draining = draining;
+    return draining;
+  }
+
+  /**
+   * The single-target drain: `drain` as configured, else — with *Auto Choose
+   * Best Spell* on — the best of the book's drains. Undefined when there is
+   * none to cast (blank, refused on this target, capped by `attackCasts`), so
+   * the ordinary choice decides; null under the mana floor.
+   */
+  private drainSpell(
+    state: CharacterState,
+    fraction: number | null
+  ): { spell: string; area: boolean } | null | undefined {
+    const drain = this.spells.drain.trim();
+    if (drain.length === 0) {
+      if (!this.spells.autoChoose) return undefined;
+      if (!this.aboveFloor(fraction)) return null;
+      return this.chosenSpell(state, true) ?? undefined;
+    }
+    if (this.ineffective.has(drain) || this.capped(drain, this.spells.attackCasts))
+      return undefined;
+    return this.aboveFloor(fraction) ? { spell: drain, area: false } : null;
+  }
+
   /** Whether the pool is above `minMana`; an unknown maximum always is. */
   private aboveFloor(fraction: number | null): boolean {
     return this.spells.minMana <= 0 || fraction === null || fraction >= this.spells.minMana;
@@ -2968,8 +3077,15 @@ export class AutoCombat {
    * server has refused on this target and the ones capped this fight are
    * excluded, which is how the fallback derives itself. A choice that changes
    * is said; a refusal is said once per kind, and an unread book is asked for.
+   *
+   * `drainsOnly` narrows the book to the spells the realm says drain, for low
+   * health; finding none there is not a refusal to say, since the ordinary
+   * choice is asked next.
    */
-  private chosenSpell(state: CharacterState): { spell: string; area: boolean } | null {
+  private chosenSpell(
+    state: CharacterState,
+    drainsOnly = false
+  ): { spell: string; area: boolean } | null {
     const { combat, magery, family } = this.realmClass();
     const excluded = new Set<string>(this.ineffective);
     if (this.spells.attackCasts > 0) {
@@ -2978,11 +3094,15 @@ export class AutoCombat {
       }
     }
     const entity = state.combat.targetEntity;
+    const book = drainsOnly
+      ? (state.spellbook?.filter((spell) => this.events.drains?.(spell.name) === true) ?? null)
+      : state.spellbook;
+    if (drainsOnly && (book === null || book.length === 0)) return null;
     const choice = chooseAttackSpell(
-      state.spellbook === null
+      book === null
         ? { book: null }
         : {
-            book: state.spellbook,
+            book,
             realm: this.realmSpell,
             level: state.progress.level,
             mana: state.vitals.mana,
@@ -2998,7 +3118,7 @@ export class AutoCombat {
           }
     );
     if (choice.chosen === null) {
-      this.sayChoiceRefusal(choice.refusal);
+      if (!drainsOnly) this.sayChoiceRefusal(choice.refusal);
       return null;
     }
     this.sayChoice(choice);
@@ -3111,8 +3231,10 @@ export class AutoCombat {
     if (this.ineffective.has(cast.spell)) return;
     this.ineffective.add(cast.spell);
     const fallback = this.spells.attackFallback.trim();
-    if (cast.spell === this.spells.areaAttack.trim()) {
+    if (this.isArea(cast.spell)) {
       this.events.notice?.(t('automation.combat.spellIneffectiveArea', { spell: cast.spell }));
+    } else if (this.sameSpell(cast.spell, this.spells.drain.trim() || null)) {
+      this.events.notice?.(t('automation.combat.drainIneffective', { spell: cast.spell }));
     } else if (fallback.length > 0 && fallback !== cast.spell && !this.ineffective.has(fallback)) {
       this.events.notice?.(
         t('automation.combat.spellIneffective', { spell: cast.spell, fallback })
@@ -3162,10 +3284,12 @@ export class AutoCombat {
      * Nothing to do on the tick means no tick at all. Two reasons to arm one:
      * a look, and a spell.
      */
+    const { attack, areaAttack, drain, areaDrain, drainBelow, autoChoose } = this.spells;
     if (
       this.config.refreshRounds <= 0 &&
-      this.spells.attack.trim().length === 0 &&
-      this.spells.areaAttack.trim().length === 0 &&
+      [attack, areaAttack, drain, areaDrain].every((spell) => spell.trim().length === 0) &&
+      // A drain the book chooses is a spell the tick may be owed.
+      !(drainBelow > 0 && autoChoose) &&
       !this.config.monsters.some((row) => row.attack !== undefined || row.preAttack !== undefined)
     ) {
       return;

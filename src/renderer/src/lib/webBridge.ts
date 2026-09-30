@@ -268,6 +268,7 @@ export function createWebBridge(): IpcApi {
     importMonsters: (realm, fileName, monsters) =>
       invoke(Invoke.importMonsters, realm, fileName, monsters),
     saveMonsters: (realm, monsters) => invoke(Invoke.saveMonsters, realm, monsters),
+    importLoops: (realm, paths) => invoke(Invoke.importLoops, realm, paths),
     searchRooms: (session, query) => invoke(Invoke.searchRooms, session, query),
     mobNames: (session) => invoke(Invoke.mobNames, session),
     worldInfo: (session) => invoke(Invoke.worldInfo, session),
