@@ -5725,6 +5725,23 @@ export class CharacterTracker {
       }
 
       /*
+       * A `wear` refused because the item is already on — `You are already
+       * wearing …!` or `You do not have … left unequipped.` — is the realm
+       * saying where it is. Read as the wearing line it stands in for, so a
+       * swap whose confirmation went unread is not asked for again every
+       * half minute until an `i` (skinny's warhammer, 2026-09-30). Only for
+       * an item in the pack: a refusal is not a pickup.
+       */
+      case 'user-equipped-failed': {
+        const item = g['item'];
+        if (!item) return null;
+        const carried = s.inventory.items.filter((held) => sameItem(held.name, item));
+        if (carried.length === 0 || carried.some((held) => held.equipped)) return null;
+        const where = this.slotOf(item);
+        return withEquipped(s, item, true, where.slot, where.source);
+      }
+
+      /*
        * Taken off. Still carried — this is not a drop — so the entry stays and
        * only loses its slot. The *memory* of the slot is kept, which is what
        * lets putting it back on name the slot again with no `i` in between.

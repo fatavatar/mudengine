@@ -98,6 +98,25 @@ const make = (config = gear(), over: Partial<EquipmentSources> = {}): EquipmentM
   );
 
 describe('which kit to be in', () => {
+  /*
+   * Skinny's kit (2026-09-30): the staff to rest in, the warhammer to fight
+   * in. Putting a weapon on ends a fight here, so it goes on before one opens.
+   */
+  it('puts the fighting kit on for a fight about to open, and not before', () => {
+    const sets: GearSet[] = [
+      { name: 'Rest Set', when: 'resting', mob: '', wear: ['vortex staff'] },
+      { name: 'Normal Set', when: 'fighting', mob: '', wear: ['jewel-encrusted warhammer'] }
+    ];
+    const hands = { slotOf: () => WEAPON_HAND };
+    const pack = [worn('vortex staff', WEAPON_HAND), carried('jewel-encrusted warhammer')];
+    const manager = make(gear({ sets }), hands);
+    manager.onCharacter(standing(pack), false, null);
+    expect(sent).toEqual([]);
+    manager.onCharacter(standing(pack), false, null, true);
+    expect(sent).toEqual(['wear jewel-encrusted warhammer']);
+    expect(manager.dressing).toBe(true);
+  });
+
   it('puts the base kit on with nothing else happening', () => {
     make().onCharacter(standing([carried('plate boots'), carried('lifestealer')]), false, null);
     expect(sent).toEqual(['wear lifestealer', 'wear plate boots']);
