@@ -60,6 +60,11 @@ reading strings is `0x4476f0`.
 | `e230` | mana-full spell cast since mana last dropped below ManaFull% | `0x41474f` |
 | `e2b0` | resting to full (set beside `resting HP's to full`) | `0x40de99` |
 | `32290`/`32294` | the clock: `_time64(NULL)`, in seconds | `0x42cbb5` calls `0x4da535` with 0 |
+| `a444` | the attack mode the fight is engaged in (numbers under *Attack casts*) | `0x466544`, `0x40f98e` |
+| `db28` | the attack mode being decided this pass | `0x42657f`, `0x4287e8` |
+| `a3e8`–`a400` | casts counted per attack mode (table under *Attack casts*) | `0x425b60`, getter `0x425f70` |
+| `a50c`–`a524` | rounds with no spell message seen, per attack mode | `0x426560` |
+| `a458`/`a45c` | when that round counter last moved (`GetTickCount64`) | `0x4266ad` |
 
 ## Settings used below
 
@@ -80,6 +85,10 @@ The exe reads these; the settings map has the rest.
 | `Spells.FluxMin` | `a65c` | `spells.regen.manaMinTick` (PR #40) |
 | `Spells.HpFullCmd` | `a6d9` | `spells.regen.hpFull` (PR #40) |
 | `Spells.MaFullCmd` | `a6ee` | `spells.regen.manaFull` (PR #40) |
+| `Combat.MaxCastCnt` | `a414` | `spells.attackCasts` |
+| `Combat.MaxCastCnt2` | `a418` | the second attack spell's cap (no equivalent yet) |
+| `Combat.MultCastCnt` | `a408` | `spells.areaCasts` |
+| `Combat.PreCastCnt` / `PreMultCastCnt` | `a40c` / `a404` | a monster row's `preAttack` count |
 
 ## Health: the rest decision (`0x414300`)
 
@@ -176,6 +185,62 @@ Read for PR #37 on 2026-09-29.
   It returns 1 when it sent something (the caller waits a pass), 0 when
   nothing is needed, and -1 when the item is already worn. Whatever puts it
   back afterwards has not been read yet.
+
+## Attack casts: what is counted and when
+
+Read 2026-09-30, after skinny's `attackCasts: 1` soul rip was cast at every
+fight to the end.
+
+**The attack modes.** One number names each way of attacking. It keys the
+counter tables and the log labels (jump tables at `0x426918` and `0x425c18`):
+
+| Mode | Label | Casts | Rounds with no message |
+|---|---|---|---|
+| `9` | pre-multi-attack | `a3e8` | `a50c` |
+| `0xa` | multi-attack | `a3ec` | `a510` |
+| `0xb` | pre-attack | `a3f0` | `a514` |
+| `0xc` | aux-attack | `a3f8` | `a51c` |
+| `0xd` | main-attack | `a3f4` | `a518` |
+| `0xe` | alt-attack | `a3fc` | `a520` |
+| `0xf` | user-attack | `a400` | `a524` |
+
+- **Counting (`0x425b60(session, mode, all)`).** It increments the mode's
+  counter by one. With `all` set, on the modes `9`, `0xb`, `0xe` and `0xf`
+  and a spell whose record has `+0x54 & 2`, it raises the counter to the
+  mode's cap (`0x426060`) instead: the spell is spent at once.
+  - It is called from the line handler `0x427120` (at `0x4287ef`, with the
+    mode being decided, `db28`), from the attack decision `0x40f510` (at
+    `0x40fe23`, beside the log line `[%s: spell message not seen]`) and from
+    `0x429bb0` (at `0x42ada1`, after `[%s works vs %s after all - clearing
+    immunity]`).
+  - Nothing else increments these counters. **The count moves on the
+    spell's message, every round the server repeats the spell, not on the
+    command MegaMUD sent.** The server repeats an engaged spell by itself, so
+    counting sends would count one.
+- **Resetting.** Sending the command that engages a mode sets that mode's
+  counter to 0 and `a444` to the mode (`0x466544`–`0x466598`, again at
+  `0x48b90e`–`0x48b96a`). `0x42bf60` and `0x42c360` clear every counter.
+  A spell the server calls ineffective has 9999 added to its counter
+  (`0x47c8c8`–`0x47c91b`), which spends it for the fight.
+- **The cap (`0x40f510`, from `0x40fb6f`).** For the main attack spell, a
+  monster record's own count (`+0x44`) wins when it is above 0. Otherwise
+  it is `Combat.MaxCastCnt` (`a414`), where 0 means no limit. A counter at
+  the cap passes the mode over, and the fight goes on with the next attack.
+  The aux spell takes the larger of `MaxCastCnt` and `MaxCastCnt2` (`a418`,
+  `0x40f825`).
+- **No message (`0x426560`, once a pass in the engaged mode).** It increments
+  the mode's round counter, at most once every 4 seconds (`0xfa0` against
+  `a458`).
+  - At 2 it logs `Retrying %s spell: no spell messages seen`.
+  - Above 2 it adds 9999 to the cast counter and logs `Skipping %s spell: no
+    spell message seen` and `[%s: no spell msg seen after multiple rounds]`.
+  - So a spell MegaMUD cannot recognise is given up on, rather than cast
+    uncounted all fight.
+
+Our equivalent (`AutoCombat.noteCast`) counts the frame `You cast X on Y!`,
+and also the caster's line of the spell's `StartMsg` row (ability 120). Soul
+rip carries row 3086, `You begin to chant in a fierce tone!`. The no-message
+watchdog has no equivalent yet.
 
 ## Messages.md effects → state
 
@@ -280,3 +345,7 @@ readers are in `src/shared/megamudDb.ts`.
 - What re-equips the normal item after an item-cast spell.
 - Where the per-player party flags live, and the chase gate.
 - What effect bit `0x20` (no-attack) sets.
+- The spell record's `+0x54 & 2` flag, which spends a spell's whole count on
+  one message (`0x425bf3`). Perhaps "kills in one".
+- How `0x427120` recognises a spell's message: the per-spell message lines
+  in `Spells.md`, or the `Messages.md` rows.
