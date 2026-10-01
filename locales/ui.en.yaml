@@ -206,6 +206,9 @@ notices:
     autoJoinStated:
       many: 'Join When Invited was added, off, to {count} files: {fileList}'
       one: 'Join When Invited was added, off, to {fileList}'
+    survivalFloorStated:
+      many: 'Only Open Fights Survived % was added, off, to {count} files: {fileList}'
+      one: 'Only Open Fights Survived % was added, off, to {fileList}'
     partyRankStated:
       many: 'Auto-Rank (MegaMUD''s Party Rank) was added, off and at Mid, to {count} files: {fileList}'
       one: 'Auto-Rank (MegaMUD''s Party Rank) was added, off and at Mid, to {fileList}'
@@ -3285,6 +3288,10 @@ settings:
     maxMonsterExpHint: Will not attack anything worth more experience than this. 0 is off,
       unknown monsters will be attacked.
     maxMonsterExpLabel: Max Monster Experience
+    minSurvivalHint: Before attacking, the room's fight is simulated from your health now. Under
+      this share of fights survived, or where you would have to run at once, the fight is turned
+      down and you rest first. 0 is off and attacks whatever the odds.
+    minSurvivalLabel: Only Open Fights Survived %
     minMobsLabel: Min Monsters in Room
     minMobsHint:
       Will not open a fight in a room holding fewer than this — for a character whose value is an

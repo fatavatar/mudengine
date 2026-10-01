@@ -465,6 +465,8 @@ describe('the round combat macro', () => {
       maxTargetHealth: 0,
       minMobs: 0,
       maxMonsterExperience: 0,
+      // And by `statedTheSurvivalFloor`, off.
+      minSurvival: 0,
       // And by `statedTheHideForOpener`, off.
       hideForOpener: false,
       // And by `statedTheMonsterRows`, empty, which is what the client already
@@ -6655,5 +6657,50 @@ describe('the party rank is stated', () => {
     );
     migrate();
     expect(party()).toMatchObject({ autoRank: true, preferredRank: 'back' });
+  });
+});
+
+/* The opening check, a player's choice (2026-10-01): off, after maxMonsterExperience. */
+describe('the survival floor is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const combat = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'combat'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-survival-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes it off after maxMonsterExperience, once', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  combat:\n    maxMonsterExperience: 0\n    monsters: []\n',
+      'utf8'
+    );
+    migrate();
+    expect(combat()['minSurvival']).toBe(0);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('minSurvival:')).toBeGreaterThan(text.indexOf('maxMonsterExperience:'));
+    expect(said.filter((line) => line.includes('Only Open Fights Survived'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated floor alone', () => {
+    fs.writeFileSync(home.options, 'automation:\n  combat:\n    minSurvival: 0.9\n', 'utf8');
+    migrate();
+    expect(combat()['minSurvival']).toBe(0.9);
   });
 });

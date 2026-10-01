@@ -515,16 +515,11 @@ const TUNING_DEFAULTS = {
     /** How old a sighting of the leader's target may be before it is nobody's. */
     assistFreshMs: 60_000,
     /**
-     * The share of the room's simulated fights survived, from the health the
-     * character has now, that opening one needs (`src/shared/danger.ts`). 0
-     * opens whatever the odds; a fight nothing can work out is not refused.
-     */
-    openAbove: 0.95,
-    /**
      * Run once the share of the room's simulated fights the character is dead
      * in within `runRounds` rounds, from the health it has now, is over
-     * `runRisk`; and open nothing that would have to run at once. `runRisk` 0
-     * leaves running to `safety.retreat.belowHealth` alone.
+     * `runRisk`; and, with `combat.minSurvival` on, open nothing that would
+     * have to run at once. `runRisk` 0 leaves running to
+     * `safety.retreat.belowHealth` alone.
      */
     runRounds: 3,
     runRisk: 0.05,

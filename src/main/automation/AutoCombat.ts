@@ -2442,15 +2442,17 @@ export class AutoCombat {
   /**
    * Why opening on `target` is not survived well enough, or null: the room's
    * fight with it in, simulated from the health the character has now
-   * (`openingRefusal`). Not asked of a monster already swinging: hitting back
+   * (`openingRefusal`). Only with `minSurvival` on: off, the default, attacks
+   * whatever the odds. Not asked of a monster already swinging: hitting back
    * is not opening, and the run decides that fight.
    */
   private wontSurvive(state: CharacterState, target: string): string | null {
-    if (this.guard === null) return null;
+    const openAbove = this.config.minSurvival;
+    if (this.guard === null || openAbove <= 0) return null;
     const key = mobKey(target);
     if (state.combat.attackers.some((name) => mobKey(name) === key)) return null;
     const { hp, hpMax } = state.vitals;
-    const { openAbove, runRounds, runRisk } = tuning().combat;
+    const { runRounds, runRisk } = tuning().combat;
     const fight = this.guard.opening(target);
     if (fight === undefined) return null;
     const refusal = openingRefusal(fight, hp, hpMax, { openAbove, runRounds, runRisk });

@@ -982,6 +982,16 @@ export interface CombatConfig {
    * do nothing on a derivative realm.
    */
   maxMonsterExperience: number;
+  /**
+   * Open a fight only where the room's simulated fight, from the health the
+   * character has now, is survived more than this share of the time; and
+   * never one it would have to run from at once (`openingRefusal`, upstream
+   * 5ffdf91). Declined, the character rests towards the health that would
+   * change the answer. 0, the default, attacks whatever the odds: the player
+   * chooses to have fights turned down (2026-10-01). A fight the realm's data
+   * cannot work out is never refused for it.
+   */
+  minSurvival: number;
 }
 
 /**
@@ -2853,7 +2863,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       monsters: [],
       maxTargetHealth: 0,
       minMobs: 0,
-      maxMonsterExperience: 0
+      maxMonsterExperience: 0,
+      minSurvival: 0
     },
     // Off, like everything automated. A client that sits down on its own is one
     // deciding when a fight is over.
@@ -4489,6 +4500,7 @@ function normalizeCombat(value: unknown): CombatConfig {
     monsters: asMonsterRules(raw['monsters']),
     minMobs: int(raw['minMobs'], d.minMobs, 0, 99),
     maxMonsterExperience: int(raw['maxMonsterExperience'], d.maxMonsterExperience, 0, 100_000_000),
+    minSurvival: fraction(raw['minSurvival'], d.minSurvival),
     // Capped far above any health the shipped realm states, so a typo cannot
     // silently mean "never fight anything".
     maxTargetHealth: int(raw['maxTargetHealth'], d.maxTargetHealth, 0, 1_000_000)

@@ -4251,6 +4251,8 @@ describe('opening only a fight it walks out of', () => {
     opening: () => survival,
     fled: () => fled
   });
+  // The player's switch: off by default, 95% as upstream shipped it (2026-10-01).
+  const on = combat({ minSurvival: 0.95 });
   const odds = (survives: number, worstRound: number, standing = 1): Survival =>
     ({
       survives,
@@ -4258,15 +4260,23 @@ describe('opening only a fight it walks out of', () => {
       horizons: [{ rounds: 3, standing, won: 0, lost: { least: 0, mean: 0, most: 0 } }]
     }) as unknown as Survival;
 
+  it('attacks whatever the odds with the setting off, the default', () => {
+    make(combat(), true, undefined, undefined, undefined, guard(odds(0.1, 30, 0.2))).onCharacter(
+      at(20)
+    );
+    drain();
+    expect(sent).toEqual(['a thug']);
+  });
+
   it('opens a fight survived from here (the control)', () => {
-    const auto = make(combat(), true, undefined, undefined, undefined, guard(odds(1, 11)));
+    const auto = make(on, true, undefined, undefined, undefined, guard(odds(1, 11)));
     auto.onCharacter(at(34));
     drain();
     expect(sent).toEqual(['a thug']);
   });
 
   it('does not open a fight survived too seldom, and rests to full first', () => {
-    const auto = make(combat(), true, undefined, undefined, undefined, guard(odds(0.6, 5)));
+    const auto = make(on, true, undefined, undefined, undefined, guard(odds(0.6, 5)));
     auto.onCharacter(at(30));
     drain();
     expect(sent).toEqual([]);
@@ -4275,20 +4285,20 @@ describe('opening only a fight it walks out of', () => {
   });
 
   it('leaves a fight nobody can work out to the run and the hang-up', () => {
-    make(combat(), true, undefined, undefined, undefined, guard(null)).onCharacter(at(34));
+    make(on, true, undefined, undefined, undefined, guard(null)).onCharacter(at(34));
     drain();
     expect(sent).toEqual(['a thug']);
   });
 
   it('opens as before on a realm with no world database to weigh against', () => {
     const blind: OpeningGuard = { opening: () => undefined, fled: () => [] };
-    make(combat(), true, undefined, undefined, undefined, blind).onCharacter(at(34));
+    make(on, true, undefined, undefined, undefined, blind).onCharacter(at(34));
     drain();
     expect(sent).toEqual(['a thug']);
   });
 
   it('opens on a monster whose worst blow is half its health, at full health (the cave bear)', () => {
-    make(combat(), true, undefined, undefined, undefined, guard(odds(0.99, 18, 0.999))).onCharacter(
+    make(on, true, undefined, undefined, undefined, guard(odds(0.99, 18, 0.999))).onCharacter(
       at(34)
     );
     drain();
@@ -4296,7 +4306,7 @@ describe('opening only a fight it walks out of', () => {
   });
 
   it('does not open what it would have to run from at once, and rests to full first', () => {
-    const auto = make(combat(), true, undefined, undefined, undefined, guard(odds(0.75, 11, 0.8)));
+    const auto = make(on, true, undefined, undefined, undefined, guard(odds(0.75, 11, 0.8)));
     auto.onCharacter(at(20));
     drain();
     expect(sent).toEqual([]);
@@ -4307,7 +4317,7 @@ describe('opening only a fight it walks out of', () => {
 
   it('leaves alone a monster it ran from, until it is two levels past it', () => {
     const fled = [{ name: 'thug', level: 1, at: Date.now() }];
-    const auto = make(combat(), true, undefined, undefined, undefined, guard(odds(1, 11), fled));
+    const auto = make(on, true, undefined, undefined, undefined, guard(odds(1, 11), fled));
     auto.onCharacter(at(34));
     drain();
     expect(sent).toEqual([]);

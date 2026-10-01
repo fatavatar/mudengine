@@ -19,7 +19,7 @@
  */
 import type { Survival } from './survival';
 
-/** `tuning.combat`'s figures for opening a fight and running from one. */
+/** The figures for opening a fight and running from one: `combat.minSurvival` and `tuning.combat`'s run. */
 export interface DangerTuning {
   /** The share of fights survived from here that opening one needs; 0 never refuses for it. */
   openAbove: number;

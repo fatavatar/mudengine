@@ -520,6 +520,7 @@ describe('a character', () => {
         maxTargetHealth: 0,
         minMobs: 0,
         maxMonsterExperience: 0,
+        minSurvival: 0,
         // Stated above, keyed the way the wire spells it.
         monsters: [{ mob: 'town guard', relationship: 'friend' }],
         engage: 'all',

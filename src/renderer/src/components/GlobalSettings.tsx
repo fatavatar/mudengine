@@ -911,6 +911,17 @@ export default function GlobalSettings({
                 }
                 value={String(draft.automation.combat.maxMonsterExperience)}
               />
+              <NumberField
+                hint={t('settings.combat.minSurvivalHint')}
+                label={t('settings.combat.minSurvivalLabel')}
+                name="global-min-survival"
+                onChange={(value) =>
+                  automation({
+                    combat: { ...draft.automation.combat, minSurvival: fraction(value) }
+                  })
+                }
+                value={percent(draft.automation.combat.minSurvival)}
+              />
             </fieldset>
             <fieldset className="settings-menus" data-fieldset="combat-monster-rows">
               <legend>{t('settings.combat.monsterRowsLegend')}</legend>

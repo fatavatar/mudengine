@@ -1874,6 +1874,14 @@ automation:
     minMobs: 0
     maxMonsterExperience: 0
 
+    # Only open fights survived more than this share of the time. Before it
+    # attacks, the room's fight is simulated blow by blow from the health the
+    # character has now; under this share, or where it would have to run at
+    # once, the fight is turned down and the character rests towards the health
+    # that would change the answer. 0 attacks whatever the odds. A fight the
+    # realm's data cannot work out is never turned down for it.
+    minSurvival: 0
+
   # Following somebody: what this character does about the party it travels in.
   #
   # All off, and with one more reason than usual. Whether the server's command
