@@ -108,6 +108,28 @@ describe('HP regen before a rest', () => {
     expect(sent).toEqual(['lfst', 'lfst']);
   });
 
+  /*
+   * 2026-10-01: skinny-inc has no row for `divine restoration`, and the cast
+   * was remembered until health and mana were both full — which a caster
+   * hardly ever is — so 73 rests sat down with it ended and no `rsto` first.
+   * The spell on the buff list is the realm saying it is up, and its going is
+   * the realm saying it has ended.
+   */
+  it('reads the spell on the buff list as up, and its going as ended', () => {
+    const regen = make({ hp: 'divine restoration' });
+    const restoring = state(
+      {},
+      { buffs: [{ spell: 'divine restoration', by: null, appliedAt: 0 }] }
+    );
+    expect(regen.beforeRest(state())).toBe(true);
+    regen.onCharacter(restoring);
+    expect(regen.beforeRest(restoring)).toBe(false);
+    regen.onCharacter(state());
+    expect(regen.beforeRest(state())).toBe(true);
+    expect(make({ hp: 'divine restoration' }).beforeRest(restoring)).toBe(false);
+    expect(sent).toEqual(['divine restoration', 'divine restoration']);
+  });
+
   /* The exe's thirty-second tick: a regen the realm never ends is forgotten when full. */
   it('is cast again after health and mana have both been full', () => {
     const regen = make({ hp: 'lfst' });

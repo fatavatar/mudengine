@@ -14,10 +14,17 @@
  *   reaches `meditateTo`, and is armed again when it drops below (0x4146aa).
  *
  * "Already regenerating" is the realm's own word where it has one — a message
- * row marked `hp-regen` or `mana-regen` — or this module's cast. The cast is
- * forgotten when the row's ending arrives, or once health and mana are both
- * full (the exe's thirty-second tick, 0x40a9c0), so a spell the realm never
- * says has ended is cast again only after a full recovery.
+ * row marked `hp-regen` or `mana-regen`, or the spell itself on the buff list
+ * — or this module's cast. The cast is forgotten when either ends, or once
+ * health and mana are both full (the exe's thirty-second tick, 0x40a9c0), so a
+ * spell nothing says has ended is cast again only after a full recovery.
+ *
+ * The buff list because a realm's table may carry no row for the spell, and
+ * then only a full recovery forgot the cast — which a caster, whose mana is
+ * rarely full when its health is, hardly ever has. Measured 2026-10-01:
+ * skinny's `divine restoration` (no row on skinny-inc) ended a minute after
+ * each cast, and 73 rests that evening sat down below `restBelow` with it
+ * ended, the mana to cast it, and no `rsto` before them.
  */
 import { OPEN_GATE, type CastGate } from './castRound';
 import type { CommandQueue } from './CommandQueue';
@@ -27,7 +34,7 @@ import { t } from '../app/i18n';
 import { tuning } from '../app/tuning';
 import { isStated, type CharacterState } from '../../shared/character';
 import type { HealthConfig, SpellsConfig } from '../../shared/config';
-import { resolveSpell, spellCost } from '../../shared/spellcraft';
+import { resolveSpell, sameSpell, spellCost } from '../../shared/spellcraft';
 import type { WorldSpell } from '../../shared/world';
 
 type Cast = 'hp' | 'mana' | 'hpFull' | 'manaFull';
@@ -130,11 +137,30 @@ export class Regen {
   }
 
   private hpRegenerating(state: CharacterState): boolean {
-    return this.hpUp || isStated(state, 'hp-regen');
+    return this.hpUp || this.heardHpNow(state);
   }
 
   private manaRegenerating(state: CharacterState): boolean {
-    return this.manaUp || isStated(state, 'mana-regen');
+    return this.manaUp || this.heardManaNow(state);
+  }
+
+  /** The realm saying HP regen is up: its message row, or the spell on the buff list. */
+  private heardHpNow(state: CharacterState): boolean {
+    return isStated(state, 'hp-regen') || this.buffUp(state, this.config.regen.hp);
+  }
+
+  private heardManaNow(state: CharacterState): boolean {
+    return isStated(state, 'mana-regen') || this.buffUp(state, this.config.regen.mana);
+  }
+
+  /** Whether `spell` is on the buff list, under any name its sentence could mean. */
+  private buffUp(state: CharacterState, spell: string): boolean {
+    if (spell.length === 0) return false;
+    return state.buffs.some((buff) =>
+      [buff.spell, ...(buff.candidates ?? [])].some((name) =>
+        sameSpell(name, spell, state.spellbook, this.realmSpell)
+      )
+    );
   }
 
   /**
@@ -143,8 +169,8 @@ export class Regen {
    * baseline; a gain is a tick, and so is no gain for `manaTickWaitMs`.
    */
   private observe(state: CharacterState): void {
-    const heardHp = isStated(state, 'hp-regen');
-    const heardMana = isStated(state, 'mana-regen');
+    const heardHp = this.heardHpNow(state);
+    const heardMana = this.heardManaNow(state);
     if (this.heardHp && !heardHp) this.hpUp = false;
     if (this.heardMana && !heardMana) this.manaUp = false;
     this.heardHp = heardHp;
