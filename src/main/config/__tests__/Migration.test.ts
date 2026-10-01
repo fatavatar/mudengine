@@ -2463,6 +2463,7 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       'leverErrandDepth',
       // How long a leader waits for the party through a text exit (PR #35).
       'partyCatchUpMs',
+      'sneakGiveUp',
       // How long a walk waits in a room too dark to read for the light that
       // fixes it. Appended by its own later pass: this file states no
       // `heldFallbackMs` to sit beside.
@@ -2522,7 +2523,8 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       followSettleMs: DEFAULT_INTERNAL.tuning.walk.followSettleMs,
       errandAskMs: DEFAULT_INTERNAL.tuning.walk.errandAskMs,
       leverErrandDepth: DEFAULT_INTERNAL.tuning.walk.leverErrandDepth,
-      partyCatchUpMs: DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs
+      partyCatchUpMs: DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs,
+      sneakGiveUp: DEFAULT_INTERNAL.tuning.walk.sneakGiveUp
     });
     expect(text).toContain("longer than this realm's own slowest answer");
     expect(text).not.toContain('so this is already the');

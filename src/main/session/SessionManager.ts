@@ -23,7 +23,7 @@ import {
 import { trainingCost } from '../../shared/training';
 import { carriedCount } from '../../shared/supplies';
 import type { TrainerChoice } from '../../shared/world';
-import { MASKED_COMMAND } from '../../shared/automation';
+import { MASKED_COMMAND, percentText } from '../../shared/automation';
 import type {
   AutomationSnapshot,
   EngageDecision,
@@ -99,6 +99,7 @@ import {
   parseLair,
   roomAddress,
   roomId,
+  mobKey,
   landingRooms,
   type WorldRoom,
   type Direction,
@@ -294,6 +295,8 @@ import {
   type SurvivalFoe,
   type SurvivalHeal
 } from '../../shared/survival';
+import { deathRisk, hangUpCost, runDue } from '../../shared/danger';
+import { withFled } from '../../shared/fled';
 
 /**
  * The part of a chunk of keystrokes the server's line editor would keep.
@@ -766,6 +769,20 @@ export class SessionManager {
    */
   private lastAskedToEscape = 0;
   /**
+   * When an escape last landed in another room. A monster that follows is
+   * run from again at once rather than after `cooldownMs`, which exists for a
+   * way out that failed: the thug that killed Soul followed and landed two
+   * blows inside the three seconds the cooldown held the second run
+   * (upstream 5ffdf91).
+   */
+  private escapeLandedAt = 0;
+  /**
+   * This fight has been run from: the character is going somewhere until it
+   * is over, so a second run is not refused for a walk the first one stopped
+   * (`goingSomewhere`).
+   */
+  private ranThisFight = false;
+  /**
    * When a move was last actually sent to get out of a fight. Zero for never.
    *
    * **Two clocks, because they answer two questions**, and they used to be one
@@ -787,6 +804,8 @@ export class SessionManager {
    * by an escape that goes, and by the fight ending.
    */
   private escapeRefusalSaid: string | null = null;
+  /** Said once a fight: the hang-up before death would itself kill. See `beforeDeath`. */
+  private costlyHangUpSaid = false;
   /** The room's last fight run and what it was run on, so a status line that moves nothing reruns nothing. */
   private ran: { key: string; survival: Survival | null } | null = null;
   /** The same for the fight an opening would make (`opening`). */
@@ -1729,6 +1748,8 @@ export class SessionManager {
       // typed direction and a leg left over from a walk combat stopped, which
       // are the moves a route cannot see and is desynchronised by.
       pendingMoves: () => this.tracker.pendingMoves,
+      // The health a fight turned down for health wants first (upstream 5ffdf91).
+      restFor: () => this.combat.restingFor,
       // A rest this client asked for a millisecond ago, whose answer has not
       // come back. The same kind of fact as a move in flight, and refused for
       // the same reason -- see `Recovery.restInFlight` and todo 14.
@@ -1920,7 +1941,9 @@ export class SessionManager {
        * legitimately differ — see `noteFamily` — and on the shipped
        * configuration they do.
        */
-      () => this.realmClass()
+      () => this.realmClass(),
+      // What opening a fight is weighed against: the fight it makes, and the monsters run from.
+      { opening: (name) => this.opening(name), fled: () => this.belongings.recallFled() }
     );
 
     /*
@@ -3617,6 +3640,8 @@ export class SessionManager {
     this.pvpSaid.clear();
     this.lastHangUpRefusal = null;
     this.lastAskedToEscape = 0;
+    this.escapeLandedAt = 0;
+    this.ranThisFight = false;
     this.lastEscapeSent = 0;
     this.escapeAwaiting = null;
     this.retreat = null;
@@ -4148,6 +4173,8 @@ export class SessionManager {
     this.pvpSaid.clear();
     this.lastHangUpRefusal = null;
     this.lastAskedToEscape = 0;
+    this.escapeLandedAt = 0;
+    this.ranThisFight = false;
     this.lastEscapeSent = 0;
     this.escapeAwaiting = null;
     this.retreat = null;
@@ -5540,9 +5567,10 @@ export class SessionManager {
     this.remotes.onCharacter(state);
     // And the members under the line, for the lap this character leads.
     this.paceForHealth(state);
-    // Running away is tried *first*, because it is the escape that works and
-    // the one that costs nothing: an unclean disconnect is penalised on this
-    // server family and can kill outright.
+    // The next round could kill: leave the realm, where the charge does not kill first.
+    if (this.beforeDeath(state)) return;
+    // Then running away, which costs nothing: an unclean disconnect is
+    // penalised on this server family and can kill outright.
     this.considerEscape(state);
     // And the walk home a `safe-haven` escape armed, once the fight is over.
     this.walkHomeIfDue(state);
@@ -5955,13 +5983,16 @@ export class SessionManager {
   }
 
   /**
-   * `Recovery`, told first what the walk is waiting for: a route standing
-   * still before a trap names the health it wants (`Walker.restingFor`), and
-   * that figure is above the resting floor, so the rest that ends the hold
-   * has to be asked for by the module that owns resting.
+   * `Recovery`, told first what the walk or a refused fight is waiting for: a
+   * route standing still before a trap names the health it wants
+   * (`Walker.restingFor`), as does a fight turned down for health
+   * (`AutoCombat.restingFor`), and either figure is above the resting floor,
+   * so the rest that ends the wait has to be asked for by the module that
+   * owns resting.
    */
   private restNow(state: CharacterState): void {
-    this.recovery.needAtLeast(this.walker.restingFor);
+    const owed = [this.walker.restingFor, this.combat.restingFor].filter((hp) => hp !== null);
+    this.recovery.needAtLeast(owed.length === 0 ? null : Math.max(...owed));
     this.recovery.onCharacter(state);
   }
 
@@ -7785,10 +7816,6 @@ export class SessionManager {
   }
 
   /** The rounded percentage a safety notice reports, e.g. `43%`. */
-  private percentText(fraction: number | null): string {
-    return `${Math.round((fraction ?? 0) * 100)}%`;
-  }
-
   /**
    * A player opened on this character — MegaMUD's NotifyGang moment, from the
    * evidence the client already reads: `<Name> moves to attack you!` and a
@@ -7921,11 +7948,17 @@ export class SessionManager {
     if (dreaded === null && !state.inCombat && state.combat.attackers.length === 0) {
       this.forgetRanFrom(Date.now());
       this.escapeRefusalSaid = null;
+      this.ranThisFight = false;
       return;
     }
 
     const now = Date.now();
-    if (now - this.lastAskedToEscape < safety.cooldownMs) return;
+    // Followed: something is swinging in the room the last run landed in.
+    const followed =
+      this.escapeLandedAt > 0 &&
+      this.escapeLandedAt >= this.lastAskedToEscape &&
+      state.combat.attackers.length > 0;
+    if (now - this.lastAskedToEscape < safety.cooldownMs && !followed) return;
     /*
      * And not while the escape already chosen is waiting for its answer.
      *
@@ -7989,7 +8022,15 @@ export class SessionManager {
       fraction !== null &&
       fraction <= fleeGoto.belowHealth;
 
-    const hurt = safety.enabled && fraction !== null && fraction <= safety.belowHealth;
+    /*
+     * The fight's own risk from here, which a share of maximum health is not
+     * (`src/shared/danger.ts`, upstream 5ffdf91): dead within `runRounds`
+     * rounds more than `runRisk` of the time runs, whatever the bar says.
+     */
+    const { runRounds, runRisk } = tuning().combat;
+    const risk = safety.enabled ? runDue(this.fight(), { runRounds, runRisk }) : null;
+    const hurt =
+      (safety.enabled && fraction !== null && fraction <= safety.belowHealth) || risk !== null;
     const outnumbered =
       safety.enabled &&
       safety.whenOutnumbered > 0 &&
@@ -8009,11 +8050,17 @@ export class SessionManager {
     if (!fleeing && !hurt && !outnumbered && !drained) return;
 
     const why =
-      fleeing || hurt
-        ? t('session.safety.whyHealth', { percent: this.percentText(fraction) })
-        : drained
-          ? t('session.safety.whyMana', { percent: this.percentText(manaFraction) })
-          : t('session.safety.whyAttackers', { count: state.combat.attackers.length });
+      risk !== null && !fleeing
+        ? t('session.safety.whyRisk', {
+            rounds: runRounds,
+            risk: percentText(risk),
+            hp: state.vitals.hp ?? 0
+          })
+        : fleeing || hurt
+          ? t('session.safety.whyHealth', { percent: percentText(fraction) })
+          : drained
+            ? t('session.safety.whyMana', { percent: percentText(manaFraction) })
+            : t('session.safety.whyAttackers', { count: state.combat.attackers.length });
     /*
      * **Only a character the client is taking somewhere runs** (todo 03): a
      * route that has arrived is where the player wanted to be. Said once a
@@ -8028,7 +8075,30 @@ export class SessionManager {
     if (!fleeing && !this.goingSomewhere()) return this.stayPut(STAYING, why, now, null);
 
     this.lastAskedToEscape = now;
-    this.escape(state, why, now, undefined, fleeing ? fleeGoto.destination : undefined);
+    this.escape(state, why, now, undefined, fleeing ? fleeGoto.destination : undefined, hurt);
+  }
+
+  /**
+   * The monsters swinging at the character as it runs for its health, and the
+   * one it was fighting, kept off at this level (`src/shared/fled.ts`, upstream 5ffdf91): not opened on
+   * again until the character is `fledLevels` past it or `fledForgetMs` has
+   * passed, and kept with the character's belongings across a restart.
+   */
+  private noteFled(state: CharacterState): void {
+    const fighting = [...state.combat.attackers, state.combat.target ?? ''];
+    const fled = [...new Set(fighting.map((name) => mobKey(name)))].filter((key) =>
+      state.room.occupants.some((who) => who.kind === 'mob' && mobKey(who.name) === key)
+    );
+    if (fled.length === 0) return;
+    const forgetMs = tuning().combat.fledForgetMs;
+    const entries = withFled(
+      this.belongings.recallFled(),
+      fled,
+      state.progress.level,
+      Date.now(),
+      forgetMs
+    );
+    this.belongings.rememberFled(entries);
   }
 
   /**
@@ -8061,6 +8131,64 @@ export class SessionManager {
   }
 
   /**
+   * The last resort, ahead of running (`tuning.combat.hangUpRisk`, upstream
+   * 5ffdf91): the next round of the room's simulated fight kills too often
+   * from here, so the character leaves the realm rather than the fight. Death
+   * drops everything carried in the room it happened in (`Player.Killed`); an
+   * unclean hang-up on a realm that charges takes a share of maximum health
+   * and some random items, and dies of it only where the share is more than
+   * is left (`Player.Disconnects`). So it hangs up wherever the charge leaves
+   * the character standing, and says why not where it would not. True when it
+   * hung up.
+   */
+  private beforeDeath(state: CharacterState): boolean {
+    const limit = tuning().combat.hangUpRisk;
+    if (!this.automationConfig.enabled || limit <= 0) return false;
+    if (state.phase !== 'in-game' || !this.client.connected) return false;
+    if (this.current.phase === 'closing') return false;
+    const fighting = state.inCombat || state.combat.attackers.length > 0;
+    const { hp, hpMax } = state.vitals;
+    // Down already, the realm kills a disconnect as surely as the next blow.
+    if (!fighting || hp === null || hp <= 0) {
+      if (!fighting) this.costlyHangUpSaid = false;
+      return false;
+    }
+    const risk = deathRisk(this.fight(), 1);
+    if (risk === null || risk <= limit) return false;
+    const menu = this.realmMenu.penalty;
+    const charged =
+      menu !== null ? menu.percent > 0 : this.automationConfig.safety.hangUp.penalties;
+    // `clean`, which words nothing: this runs per status line while the round could kill.
+    const unclean = charged && !this.hangUp.clean(state, Date.now());
+    const cost = unclean ? hangUpCost(hpMax, menu?.percent ?? null) : 0;
+    const why = t('session.safety.whyNextRound', { risk: percentText(risk), hp });
+    if (cost !== null && cost >= hp) {
+      if (!this.costlyHangUpSaid) {
+        this.costlyHangUpSaid = true;
+        this.sink.notice(t('session.safety.beforeDeathCostly', { why, cost }));
+        this.noteSafety({
+          at: Date.now(),
+          action: 'hang up',
+          because: why,
+          acted: false,
+          refused: t('session.safety.beforeDeathCostlyReason', { cost })
+        });
+      }
+      return false;
+    }
+    this.sink.notice(
+      cost === null
+        ? t('session.safety.beforeDeathUnknownCharge', { why })
+        : cost > 0
+          ? t('session.safety.beforeDeathCharged', { why, cost })
+          : t('session.safety.beforeDeath', { why })
+    );
+    this.noteSafety({ at: Date.now(), action: 'hang up', because: why, acted: true });
+    this.disconnect('client');
+    return true;
+  }
+
+  /**
    * Whether the client is taking this character anywhere: a walk under way or
    * held, a running lap or one a follower's `@wait` paused, a walk to the safe
    * room armed, or an errand or quest run whose leg a fight has ended — each
@@ -8068,6 +8196,7 @@ export class SessionManager {
    */
   private goingSomewhere(): boolean {
     return (
+      this.ranThisFight ||
       this.movement.moving ||
       this.pausedForFollowers ||
       this.retreat !== null ||
@@ -8244,7 +8373,9 @@ export class SessionManager {
     why: string,
     now: number,
     tried: ReadonlySet<Direction> = new Set(),
-    fleeDestination?: string
+    fleeDestination?: string,
+    /** A run for health: what is swinging is kept off at this level, once a way out goes. */
+    forHealth = false
   ): void {
     const safety = this.automationConfig.safety.retreat;
     const here =
@@ -8300,6 +8431,8 @@ export class SessionManager {
       return;
     }
     this.escapeRefusalSaid = null;
+    // Not a run for mana, numbers or a row: those are not the monster's doing.
+    if (forHealth) this.noteFled(state);
 
     /*
      * The room being run out of, so nothing walks back into it while the fight
@@ -8432,6 +8565,8 @@ export class SessionManager {
       state.room.map !== before.map ||
       state.room.number !== before.number;
     if (moved && state.room.name !== null) {
+      this.escapeLandedAt = Date.now();
+      this.ranThisFight = true;
       settle(true);
       return;
     }
@@ -9428,7 +9563,7 @@ export class SessionManager {
     if (!hurt && !company) return;
 
     const why = hurt
-      ? t('session.safety.whyHealth', { percent: this.percentText(fraction) })
+      ? t('session.safety.whyHealth', { percent: percentText(fraction) })
       : t('session.safety.whyCompany');
     this.hangUpBecause(state, why);
   }

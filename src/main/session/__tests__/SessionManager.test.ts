@@ -28,6 +28,9 @@ import type { StandDown } from '../../automation/LoginAutomator';
 import { NO_REALM_PLAYERS } from '../../../shared/players';
 import type { Find, Sighting } from '../../../shared/finds';
 import type { FightSink, MeasureAsk, MeasuredOutput } from '../../../shared/fights';
+import type { FledEntry } from '../../../shared/fled';
+import type { Belongings } from '../Belongings';
+import type { Survival } from '../../../shared/survival';
 import { DEFAULT_INTERNAL } from '../../../shared/internal';
 import { setTuning, tuning } from '../../app/tuning';
 import type { RewriteDesign } from '../../../shared/rewrites';
@@ -2773,6 +2776,69 @@ describe('which way out', () => {
     await until(() => manager!.character.vitals.hp === 9);
     expect(leaves()).toHaveLength(1);
     expect(seen()).not.toMatch(/\bs\r\n/);
+  });
+
+  /*
+   * Avoiding death (upstream 5ffdf91), on a fight stubbed rather than
+   * simulated: what is read off it is what these are about. `standing` is the
+   * share of fights still standing at each read.
+   */
+  const odds = (standing: { 1: number; 3: number }): Survival =>
+    ({
+      survives: standing[3],
+      worstRound: 0,
+      horizons: [
+        { rounds: 1, standing: standing[1], won: 0, lost: { least: 0, mean: 0, most: 0 } },
+        { rounds: 3, standing: standing[3], won: 0, lost: { least: 0, mean: 0, most: 0 } }
+      ]
+    }) as unknown as Survival;
+
+  it('runs on the fight’s own risk with health well above the floor, and keeps the monster off', async () => {
+    const { socket, seen } = await walkingToTheLair();
+    socket.write('Middle Road\r\nObvious exits: south, north\r\n');
+    await until(() => manager!.character.room.number === 2);
+    vi.spyOn(manager!, 'fight').mockReturnValue(odds({ 1: 1, 3: 0.5 }));
+    const belongings = (manager as unknown as { belongings: Belongings }).belongings;
+    const kept = vi.spyOn(belongings, 'rememberFled');
+    socket.write('Middle Road\r\nAlso here: thug.\r\nObvious exits: south, north\r\n');
+    await until(() => manager!.character.room.occupants.length === 1);
+    socket.write('The thug hits you for 2 damage!\r\n');
+    await until(() => manager!.character.combat.attackers.length === 1);
+    socket.write('*Combat Engaged*\r\n[HP=90]:\r\n');
+    await until(() =>
+      collected.notices.some((n) => /this fight kills you 50% of the time within 3 rounds/.test(n))
+    );
+    await until(() => /\bs\r\n/.test(seen()));
+    const fled: readonly FledEntry[] = kept.mock.calls.at(-1)?.[0] ?? [];
+    expect(fled.map((entry) => entry.name)).toEqual(['thug']);
+  });
+
+  it('hangs up before a round that kills too often, and says why', async () => {
+    const { socket } = await walkingToTheLair();
+    socket.write('Middle Road\r\nObvious exits: south, north\r\n');
+    await until(() => manager!.character.room.number === 2);
+    vi.spyOn(manager!, 'fight').mockReturnValue(odds({ 1: 0.5, 3: 0.2 }));
+    socket.write('*Combat Engaged*\r\n');
+    socket.write('[HP=10]:\r\n');
+    await until(() =>
+      collected.notices.some((n) =>
+        /^Hanging up: at \d+ HP the next round kills you 50% of the time/.test(n)
+      )
+    );
+    await until(() => manager!.state.phase !== 'connected');
+  });
+
+  it('stays connected while the next round is survived often enough', async () => {
+    const { socket } = await walkingToTheLair();
+    socket.write('Middle Road\r\nObvious exits: south, north\r\n');
+    await until(() => manager!.character.room.number === 2);
+    vi.spyOn(manager!, 'fight').mockReturnValue(odds({ 1: 0.9, 3: 0.97 }));
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=10]:\r\n');
+    await until(() => manager!.character.vitals.hp === 10);
+    expect(manager!.state.phase).toBe('connected');
+    expect(collected.notices.some((n) => /^Hanging up/.test(n))).toBe(false);
   });
 
   /* The other half: a route a fight is holding is still going somewhere. */

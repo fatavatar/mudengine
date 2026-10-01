@@ -6992,6 +6992,20 @@ function theTuningBlockGainedKeys(
      */
     addKey('spells', 'manaRegenShortfall', DEFAULT_INTERNAL.tuning.spells.manaRegenShortfall);
     addKey('spells', 'manaTickWaitMs', DEFAULT_INTERNAL.tuning.spells.manaTickWaitMs);
+    /*
+     * Avoiding death (upstream 5ffdf91, ported 2026-10-01): when the room's
+     * simulated fight is too dangerous to open, to stay in or to stay
+     * connected through, how long a monster run from is left alone, and how
+     * many refused sneaks stop the walk asking.
+     */
+    const danger = DEFAULT_INTERNAL.tuning.combat;
+    addKey('combat', 'openAbove', danger.openAbove);
+    addKey('combat', 'runRounds', danger.runRounds);
+    addKey('combat', 'runRisk', danger.runRisk);
+    addKey('combat', 'hangUpRisk', danger.hangUpRisk);
+    addKey('combat', 'fledLevels', danger.fledLevels);
+    addKey('combat', 'fledForgetMs', danger.fledForgetMs);
+    addKey('walk', 'sneakGiveUp', DEFAULT_INTERNAL.tuning.walk.sneakGiveUp);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {

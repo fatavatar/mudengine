@@ -29,6 +29,7 @@
  * Dependency-free like everything in `shared/`.
  */
 import type { AbilitySums, BankBalance, KnownSpell } from './character';
+import type { FledEntry } from './fled';
 import type { Loadout } from './gear';
 import type { CharacterIdentity } from './reset';
 import type { CombatTally } from './tally';
@@ -103,6 +104,10 @@ export interface BelongingsSink {
   rememberSpellDuration(spell: string, seconds: number): void;
   /** Drops a measured duration the stat sheet has contradicted. */
   forgetSpellDuration(spell: string): void;
+  /** The monsters this character ran from, and at what level. See `src/shared/fled.ts`. */
+  recallFled(): readonly FledEntry[];
+  /** The whole list as it stands after a run. */
+  rememberFled(entries: readonly FledEntry[]): void;
   /**
    * What `abil` last summed for this character, with the clock it was read on.
    *
@@ -172,6 +177,8 @@ export const NO_BELONGINGS: BelongingsSink = {
   recallSpellDurations: () => ({}),
   rememberSpellDuration: () => {},
   forgetSpellDuration: () => {},
+  recallFled: () => [],
+  rememberFled: () => {},
   recallAbilities: () => null,
   rememberAbilities: () => {},
   recallIdentity: () => null,

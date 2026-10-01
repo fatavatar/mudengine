@@ -178,3 +178,8 @@ export const EMPTY_AUTOMATION: AutomationSnapshot = {
   safety: [],
   engagements: []
 };
+
+/** A share as the whole percent a notice says; an unknown share reads as 0%. */
+export function percentText(fraction: number | null): string {
+  return `${Math.round((fraction ?? 0) * 100)}%`;
+}
