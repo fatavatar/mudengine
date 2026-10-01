@@ -2752,6 +2752,29 @@ describe('which way out', () => {
     expect(collected.traces.at(-1)?.safety[0]).toMatchObject({ action: 'retreat', acted: false });
   });
 
+  /*
+   * A follower leaves running to its leader, even with a route of its own under
+   * way (upstream f01f986): MegaMUD skips its run check while following
+   * (`e2e8` at `0x40e4aa`, megamud.exe, 2026-10-01).
+   */
+  it('leaves running to the leader it follows, and says so once', async () => {
+    const { socket, seen } = await walkingToTheLair();
+    socket.write('Middle Road\r\nObvious exits: south, north\r\n');
+    await until(() => manager!.character.room.number === 2);
+    socket.write('You are now following Fatty.\r\n');
+    await until(() => manager!.character.party.following === 'Fatty');
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=10]:\r\n');
+    const leaves = (): string[] =>
+      collected.notices.filter((n) => /Fatty is leading the party and decides/.test(n));
+    await until(() => leaves().length === 1);
+    socket.write('[HP=9]:\r\n');
+    await until(() => manager!.character.vitals.hp === 9);
+    expect(leaves()).toHaveLength(1);
+    expect(seen()).not.toMatch(/\bs\r\n/);
+  });
+
   /* The other half: a route a fight is holding is still going somewhere. */
   it('runs while a route is still under way', async () => {
     const { socket, seen } = await walkingToTheLair();
