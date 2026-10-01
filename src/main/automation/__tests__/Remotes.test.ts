@@ -16,6 +16,7 @@ import type { Block } from '../../../shared/blocks';
 import { NO_LOOP, type LoopProgress } from '../../../shared/loops';
 import type { WalkProgress } from '../../../shared/walk';
 import { ACTIONABLE_REMOTES } from '../../../shared/remotes';
+import { observe } from '../../../shared/players';
 
 /**
  * Every name these tests speak as.
@@ -67,6 +68,10 @@ const config: AutomationConfig = {
   },
   pacing: { window: 8, minGapMs: 0, ackTimeoutMs: 1000 }
 };
+
+/** `<player> started to follow you.`, or `You are now following <leader>.` */
+const joins = (group: 'player' | 'leader', name: string): Block =>
+  ({ type: 'party-joined', domain: 'presence', groups: { [group]: name } }) as unknown as Block;
 
 const said = (type: string, player: string, message: string): Block =>
   ({
@@ -492,56 +497,37 @@ describe('what it will not be driven by', () => {
 });
 
 describe('asking, which is the other half of the same vocabulary', () => {
-  it('asks every member of the party for its numbers when one is formed', () => {
-    peers.askParty(
-      who({
-        party: {
-          engaged: {},
-          threatened: {},
-          following: null,
-          members: [
-            {
-              name: 'Vaelor',
-              className: null,
-              health: null,
-              mana: null,
-              rank: null,
-              activity: null,
-              invited: false,
-              vitals: null
-            },
-            {
-              name: 'Soul',
-              className: null,
-              health: null,
-              mana: null,
-              rank: null,
-              activity: null,
-              invited: false,
-              vitals: null
-            },
-            {
-              name: 'Yang',
-              className: null,
-              health: null,
-              mana: null,
-              rank: null,
-              activity: null,
-              invited: true,
-              vitals: null
-            }
-          ]
-        }
-      })
+  it('asks somebody joining the party for its numbers and which client it runs', () => {
+    peers.onBlock(joins('player', 'Soul'), who());
+    drain();
+    // The second question decides the wording of every question after this one.
+    expect(sent).toEqual(['/Soul @health', '/Soul @version']);
+  });
+
+  /*
+   * Asked on every party change, the leader disbanding sent both to the member
+   * who had just left (festus, 2026-09-25). A second join asks `@health`
+   * again, and `@version` only while nothing has answered or lapsed.
+   */
+  it('asks nobody on a leave, and which client somebody runs once however often they join', () => {
+    peers.onBlock(joins('player', 'Soul'), who());
+    drain();
+    peers.onBlock(
+      { type: 'party-left', domain: 'presence', groups: { player: 'Soul' } } as unknown as Block,
+      who()
     );
     drain();
-    /*
-     * Not itself, and not somebody who has not accepted the invitation. The
-     * second question is which client they run: it decides the wording of
-     * every question after this one, and it is asked only while nothing has
-     * said — see `PlayerRecord.client`.
-     */
-    expect(sent).toEqual(['/Soul @health', '/Soul @version']);
+    peers.onBlock(joins('leader', 'Soul'), who());
+    drain();
+    expect(sent).toEqual(['/Soul @health', '/Soul @version', '/Soul @health']);
+  });
+
+  // A @version that went unanswered recorded `no` and no client (upstream 0bd7bc6).
+  it('does not ask which client somebody runs once a question to them lapsed', () => {
+    const lapsed = who({ players: observe({}, 'Soul', 0, { extendedRemotes: 'no' }) });
+    peers.onBlock(joins('player', 'Soul'), lapsed);
+    drain();
+    expect(sent).toEqual(['/Soul @health']);
   });
 
   /*
@@ -1622,7 +1608,7 @@ describe('party pacing', () => {
   });
 
   it('asks a joiner for nothing but the client they run when Request Party Health is off', () => {
-    withParty({ requestPartyHealth: false }).askParty(inParty());
+    withParty({ requestPartyHealth: false }).onBlock(joins('player', 'Soul'), inParty());
     drain();
     expect(sent).toEqual(['/Soul @version']);
   });
@@ -1855,7 +1841,7 @@ describe('Auto Invite when seen', () => {
     // `invite` is a plain game command, independent of this switch. The
     // `@join` telepath only does anything for a peer also running this
     // client with its own remote control on, so — like every other outgoing
-    // telepath (`askParty`, `@wait`/`@ok`) — it respects the switch.
+    // telepath (`askJoined`, `@wait`/`@ok`) — it respects the switch.
     const character = new Remotes(grantedTo('Soul', { enabled: false }), queue);
     character.onCharacter(emptyRoom);
     character.onCharacter(withOccupants(emptyRoom, 'Soul'));

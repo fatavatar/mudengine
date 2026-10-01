@@ -328,6 +328,10 @@ export class Remotes {
     this.noteRound(block, state);
     if (!this.config.enabled || !this.config.remotes.enabled) return;
     this.autoJoinOn(block, state);
+    if (block.type === 'party-joined') {
+      this.askJoined(block.groups['player'] ?? block.groups['leader'], state);
+      return;
+    }
     const channel = CHANNELS.get(block.type);
     if (channel === undefined) return;
 
@@ -510,35 +514,28 @@ export class Remotes {
   }
 
   /**
-   * Asks every other member of the party for its numbers.
-   *
-   * Called when the party changes, which is both the moment a roster becomes
-   * worth having and the moment it is emptiest. The party listing that fires
-   * alongside this gives percentages; this gives the numbers, and it spends a
-   * telepath rather than a command from the budget walking and fighting spend
-   * from.
-   *
-   * Coalesced per name, so a burst of joins and leaves is one question each
-   * rather than one per announcement.
+   * Asks somebody who just joined the party for its numbers: the member who
+   * started to follow this character, or the leader it now follows (upstream
+   * 0bd7bc6). Only on a join: asked on every party change, a leave or a
+   * disband sent `@health` and `@version` to the member who had just gone
+   * (festus, 2026-09-25). The listing that fires alongside gives percentages;
+   * this gives the numbers, by telepath rather than from the command budget.
    */
-  askParty(state: CharacterState): void {
-    if (!this.config.enabled || !this.config.remotes.enabled) return;
-    const me = state.name?.toLowerCase() ?? null;
-    for (const member of state.party.members) {
-      if (member.invited) continue;
-      if (me !== null && member.name.toLowerCase() === me) continue;
-      // MegaMUD's *Request Party Health*, on unless turned off.
-      if (this.config.party.requestPartyHealth) this.ask(member.name, 'health', state);
-      /*
-       * And which client they run, once, because it decides the wording of
-       * every question after this one. Only while nothing has said: the answer
-       * is a fact about the player and is kept realm-wide, so a party that
-       * re-forms all evening asks nobody twice.
-       */
-      if (state.players[playerKey(member.name)]?.client == null) {
-        this.ask(member.name, 'version', state);
-      }
-    }
+  private askJoined(who: string | undefined, state: CharacterState): void {
+    if (who === undefined) return;
+    // MegaMUD's *Request Party Health*, on unless turned off.
+    if (this.config.party.requestPartyHealth) this.ask(who, 'health', state);
+    /*
+     * And which client they run, once ever, because it decides the wording of
+     * every question after this one. An answer or a lapse is kept realm-wide
+     * on the player (`client`, `extendedRemotes`), so a party that re-forms
+     * all evening asks nobody twice, and one that never answers is not asked
+     * again either.
+     */
+    const peer = state.players[playerKey(who)];
+    const settled =
+      peer !== undefined && (peer.client != null || peer.extendedRemotes !== 'unknown');
+    if (!settled && !this.asked.has(playerKey(who))) this.ask(who, 'version', state);
   }
 
   /**

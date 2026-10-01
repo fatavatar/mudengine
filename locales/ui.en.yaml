@@ -4589,6 +4589,8 @@ session:
     escapeStanding: Standing and fighting.
     escapeStaying: 'Not running: {why}, but nothing is taking this character anywhere, so it stays where it is. {then}'
     escapeStayingReason: nothing is taking this character anywhere
+    escapeFollowing: 'Not running: {why}, but {leader} is leading the party and decides when to run. {then}'
+    escapeFollowingReason: following {leader}, who decides when to run
     escapeNotFighting: 'Not fighting: auto-combat is off.'
     escapeNoExitReason: no exit known from this room
     escapeOpening: 'The {barrier} {direction} is shut: opening it and running again.'

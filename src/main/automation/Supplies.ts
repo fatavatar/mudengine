@@ -570,7 +570,8 @@ export class Supplies {
       if (!nameAnswersTo(bareName(item.name), wanted)) continue;
       return item.name;
     }
-    return null;
+    // A key is never in a slot, so any one on the ring is a spare.
+    return state.inventory.keys.find((key) => nameAnswersTo(bareName(key), wanted)) ?? null;
   }
 
   /** One sentence per subject, so a standing condition is not said per line. */

@@ -135,6 +135,8 @@ import { preferredEdges } from '../world/loopDraft';
 const NO_EDGES: ReadonlySet<string> = new Set();
 /** `escapeRefusalSaid` for a character nothing is taking anywhere, which no room key can equal. */
 const STAYING = '\0staying';
+/** `escapeRefusalSaid` for a character following a party leader. */
+const FOLLOWING = '\0following';
 /** The item errand's phrase and the listing asked after it, so both can be taken back. */
 const COLLECT_SAY_KEY = 'collect:say';
 const COLLECT_AFTER_KEY = 'collect:after';
@@ -5196,17 +5198,14 @@ export class SessionManager {
     this.blessings.onBlock(block, this.tracker.current);
     /*
      * A party forming or breaking up is the moment its roster becomes worth
-     * having — and the moment it is emptiest, because nothing has asked.
+     * having — and the moment it is emptiest, because nothing has asked. The
+     * members' own numbers are asked of a joiner by `Remotes`.
      */
-    if (
+    const partyChanged =
       block.type === 'party-joined' ||
       block.type === 'party-left' ||
-      block.type === 'party-rank-changed'
-    ) {
-      this.routines.onPartyChanged();
-      // And the numbers behind the percentages, from the members' own clients.
-      this.remotes.askParty(this.tracker.current);
-    }
+      block.type === 'party-rank-changed';
+    if (partyChanged) this.routines.onPartyChanged();
     /*
      * Somebody was noticed with no listing to say what they are — entering the
      * realm, or walking into this room without already being on the roster at
@@ -5267,13 +5266,7 @@ export class SessionManager {
     const batchChanged = batch ? this.tracker.apply(batch, batch.rows) : false;
     // After `apply`: the realm confirming a rank this client asked for must
     // already read as held, or it would ask again.
-    if (
-      block.type === 'party-joined' ||
-      block.type === 'party-left' ||
-      block.type === 'party-rank-changed'
-    ) {
-      this.routines.checkPartyRank(this.tracker.current);
-    }
+    if (partyChanged) this.routines.checkPartyRank(this.tracker.current);
     // An escape in flight reads what the server said back (todo 06).
     if (this.escapeAwaiting !== null) this.settleEscape(block, roomBefore);
     /*
@@ -7959,9 +7952,19 @@ export class SessionManager {
      */
     if (this.tracker.pendingMoves > 0) return;
 
+    /*
+     * **A follower leaves running to its leader** (upstream f01f986): one that
+     * walks out alone leaves the party in the fight and is not beside it when
+     * the leader moves on. MegaMUD skips its whole run check while following
+     * (`e2e8` at `0x40e4aa`, before "Running: HP is too low"; megamud.exe,
+     * 2026-10-01). Not the `sys goto` flee, the desperate tier below.
+     */
+    const leader = state.party.following;
     if (dreaded !== null) {
+      const why = t('session.safety.whyDreaded', { mob: dreaded });
+      if (leader !== null) return this.stayPut(FOLLOWING, why, now, leader);
       this.lastAskedToEscape = now;
-      this.escape(state, t('session.safety.whyDreaded', { mob: dreaded }), now);
+      this.escape(state, why, now);
       return;
     }
 
@@ -8016,30 +8019,40 @@ export class SessionManager {
      * retreat's own threshold, and it is not a direction out of the room the
      * player chose — it is leaving before the character dies in it.
      */
-    if (!fleeing && !this.goingSomewhere()) {
-      if (this.escapeRefusalSaid === STAYING) return;
-      this.escapeRefusalSaid = STAYING;
-      const fighting = this.combat.willFight || this.combatLease.lending;
-      this.sink.notice(
-        t('session.safety.escapeStaying', {
-          why,
-          then: fighting
-            ? t('session.safety.escapeStanding')
-            : t('session.safety.escapeNotFighting')
-        })
-      );
-      this.noteSafety({
-        at: now,
-        action: 'retreat',
-        because: why,
-        acted: false,
-        refused: t('session.safety.escapeStayingReason')
-      });
-      return;
-    }
+    if (!fleeing && leader !== null) return this.stayPut(FOLLOWING, why, now, leader);
+    if (!fleeing && !this.goingSomewhere()) return this.stayPut(STAYING, why, now, null);
 
     this.lastAskedToEscape = now;
     this.escape(state, why, now, undefined, fleeing ? fleeGoto.destination : undefined);
+  }
+
+  /**
+   * An escape refused because the character stays where it is: nothing is
+   * taking it anywhere, or it follows `leader`, who decides. Said once a fight
+   * and traced, under `marker`.
+   */
+  private stayPut(marker: string, why: string, now: number, leader: string | null): void {
+    if (this.escapeRefusalSaid === marker) return;
+    this.escapeRefusalSaid = marker;
+    const then =
+      this.combat.willFight || this.combatLease.lending
+        ? t('session.safety.escapeStanding')
+        : t('session.safety.escapeNotFighting');
+    this.sink.notice(
+      leader === null
+        ? t('session.safety.escapeStaying', { why, then })
+        : t('session.safety.escapeFollowing', { why, leader, then })
+    );
+    this.noteSafety({
+      at: now,
+      action: 'retreat',
+      because: why,
+      acted: false,
+      refused:
+        leader === null
+          ? t('session.safety.escapeStayingReason')
+          : t('session.safety.escapeFollowingReason', { leader })
+    });
   }
 
   /**

@@ -57,6 +57,7 @@ import {
   parseKeyEntries,
   withBankBalance,
   withEquipped,
+  withJoinedItems,
   withOwnEquipment,
   withItem,
   withoutItem,
@@ -2684,9 +2685,13 @@ export class CharacterTracker {
      * Only when the pack actually changed. A status line arrives every few
      * hundred milliseconds and carries no inventory at all; running the merge
      * on each of them would be work for nothing on the thread that is framing
-     * bytes.
+     * bytes. An entry gained since the last `i` gets its realm row here too
+     * (`withJoinedItems`).
      */
-    if (this.state.inventory.items !== before.inventory.items) this.rememberGear(block.at);
+    if (this.state.inventory.items !== before.inventory.items) {
+      this.state = withJoinedItems(this.state, this.world);
+      this.rememberGear(block.at);
+    }
     if (this.state.inventory.items !== before.inventory.items || this.state.race !== before.race) {
       this.rememberSight();
     }
