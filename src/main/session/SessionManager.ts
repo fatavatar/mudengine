@@ -289,6 +289,7 @@ import {
 import { resolveSpell, spellCost, spellServes } from '../../shared/spellcraft';
 import {
   simulateFight,
+  SURVIVAL_HORIZONS,
   type Survival,
   type SurvivalFoe,
   type SurvivalHeal
@@ -786,6 +787,10 @@ export class SessionManager {
    * by an escape that goes, and by the fight ending.
    */
   private escapeRefusalSaid: string | null = null;
+  /** The room's last fight run and what it was run on, so a status line that moves nothing reruns nothing. */
+  private ran: { key: string; survival: Survival | null } | null = null;
+  /** The same for the fight an opening would make (`opening`). */
+  private ranOpening: { key: string; survival: Survival | null } | null = null;
   /** Talk-box lines queued this session, so each one's commands can be named together. */
   private macros = 0;
   /** What the realm menu said a hang-up costs on the realm chosen (todo 01). */
@@ -9932,24 +9937,53 @@ export class SessionManager {
   }
 
   /**
+   * The room's fight as it stands, simulated, for the run and the hang-up to
+   * read (`src/shared/danger.ts`): `verdict`'s survival without the rest of it.
+   */
+  fight(): Survival | null {
+    return this.fightWith(null);
+  }
+
+  /**
+   * The fight opening on `target` would make: the room's, with the target in
+   * it whether or not it would have started one (upstream 5ffdf91). Undefined
+   * where the realm has no world database, so there is nothing to weigh.
+   */
+  opening(target: string): Survival | null | undefined {
+    return this.world === undefined ? undefined : this.fightWith(target);
+  }
+
+  private fightWith(also: string | null): Survival | null {
+    const state = this.tracker.current;
+    if (state.phase !== 'in-game') return null;
+    const { combat, magery, family } = this.realmClass();
+    const sheet = prowessSheetOf(state, { combat, magery });
+    return this.survivalOf(state, sheet, wieldedWeapon(state.inventory.items), family, also);
+  }
+
+  /**
    * The room's fight run for this character as it stands (todo 02): what
    * here would fight, the heal the automation would cast, the regeneration
    * tick and the blessings that lapse before it is over. Everything the
    * appraisal cannot see, because only the session holds the configuration
-   * and the buffs. See `simulateFight` and mudengine-automation › *The
-   * verdict is also run as a fight*.
+   * and the buffs. `also` joins the fight when an opening on it is being
+   * weighed. Run again only when what it is run on moved: the run and the
+   * hang-up read it on every status line (upstream 519471e). See
+   * `simulateFight` and mudengine-automation › *The verdict is also run as a
+   * fight*.
    */
   private survivalOf(
     state: CharacterState,
     sheet: ProwessSheet,
     weapon: ProwessWeapon | null,
-    family: RealmFamily | null
+    family: RealmFamily | null,
+    also: string | null = null
   ): Survival | null {
     const { hp, hpMax, mana, manaMax } = state.vitals;
     if (hp === null || hpMax === null || hpMax <= 0) return null;
     const standing = ownAlignment(state);
     const fighting = new Set(
-      [...state.combat.attackers, state.combat.target ?? '']
+      [...state.combat.attackers, state.combat.target ?? '', also ?? '']
         .filter((name) => name.length > 0)
         .map((name) => name.toLowerCase())
     );
@@ -10032,7 +10066,7 @@ export class SessionManager {
       return cost === null || cost <= 0 ? [] : [{ round, cost }];
     });
 
-    return simulateFight({
+    const input = {
       hp,
       hpMax,
       mana,
@@ -10052,8 +10086,18 @@ export class SessionManager {
         riskyAbove: tuning().menace.survivalRiskyAbove
       },
       trials: tuning().menace.survivalTrials,
-      roundCap
-    });
+      roundCap,
+      // Read part way, for the death risk the run and the hang-up act on.
+      horizons: SURVIVAL_HORIZONS
+    };
+    // The recasts' rounds count down with the clock, so the key is what is drawn from, not the time.
+    const key = JSON.stringify({ ...input, recasts: input.recasts.length });
+    const kept = also === null ? this.ran : this.ranOpening;
+    if (kept?.key === key) return kept.survival;
+    const run = { key, survival: simulateFight(input) };
+    if (also === null) this.ran = run;
+    else this.ranOpening = run;
+    return run.survival;
   }
 
   /**
