@@ -34,6 +34,7 @@ import type {
 import { bankKey, DENOMINATIONS } from '../../shared/character';
 import { wireItem, type ItemEntity } from '../../shared/entities';
 import { bareName, capacityOf, countedName, sameItem } from '../../shared/items';
+import type { WorldGraph } from '../world/WorldGraph';
 
 /**
  * A purchase or a sale moving the purse, in the copper the server quoted.
@@ -425,6 +426,38 @@ export function withCharges(state: CharacterState, item: string, charges: number
   if (items[at]!.charges === charges) return state;
   const changed = items.map((held, index) => (index === at ? { ...held, charges } : held));
   return { ...state, inventory: { ...state.inventory, items: changed } };
+}
+
+/**
+ * The realm's row joined onto an item the pack gained between listings.
+ *
+ * A purchase, a pick-up or a `wear` adds a wire-only entry (`gained`,
+ * `withEquipped`), with no `kind` and no `weapon` until the next `i`: a staff
+ * bought and worn fought as a bare hand (upstream 0252d77, 2026-09-30). The
+ * wire's own facts go in as observations, so the join never overwrites them;
+ * an entry the realm cannot name stays as it is, and the same state comes back
+ * when nothing was joined.
+ */
+export function withJoinedItems(
+  state: CharacterState,
+  world: Pick<WorldGraph, 'buildItemEntity'> | undefined
+): CharacterState {
+  if (world === undefined) return state;
+  let joined = false;
+  const items = state.inventory.items.map((item): ItemEntity => {
+    if (item.source !== 'wire') return item;
+    const row = world.buildItemEntity(item.name, {
+      slot: item.slot,
+      ...(item.slotSource === undefined ? {} : { slotSource: item.slotSource }),
+      equipped: item.equipped,
+      charges: item.charges,
+      ...(item.count === undefined ? {} : { count: item.count })
+    });
+    if (row.source === 'wire') return item;
+    joined = true;
+    return row;
+  });
+  return joined ? { ...state, inventory: { ...state.inventory, items } } : state;
 }
 
 /**
