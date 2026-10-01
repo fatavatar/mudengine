@@ -3244,6 +3244,38 @@ describe('what is carried, between listings', () => {
     return made;
   };
 
+  /* `i` lists keys on their own line, so a dropped key comes off the ring.
+     Festus's festus.log, 2026-09-29: `drop 3 black star` with six on it. */
+  it('takes a dropped key off the key ring', () => {
+    const made = feeder();
+    made.feed('[HP=33]:');
+    made.feed('You are carrying a torch.');
+    made.feed('You have the following keys: golden idol, 6 black star key.');
+    made.feed('Wealth: 40 copper farthings');
+    made.feed('[HP=33]:');
+    made.feed('You dropped 3 black star key.');
+    expect(made.tracker.current.inventory.keys).toEqual([
+      'golden idol',
+      'black star key',
+      'black star key',
+      'black star key'
+    ]);
+  });
+
+  // A key picked up since the listing is in the pack, the rest on the ring.
+  it('takes what the pack did not give up of a counted drop off the ring', () => {
+    const made = feeder();
+    made.feed('[HP=33]:');
+    made.feed('You are carrying a torch.');
+    made.feed('You have the following keys: 3 black star key.');
+    made.feed('Wealth: 40 copper farthings');
+    made.feed('[HP=33]:');
+    made.feed('You took black star key.');
+    made.feed('You dropped 3 black star key.');
+    expect(held(made.tracker).some((name) => /black star/.test(name))).toBe(false);
+    expect(made.tracker.current.inventory.keys).toEqual(['black star key']);
+  });
+
   it('adds something this character picked up', () => {
     const { tracker, feed } = carrying();
     feed('You took a healing potion.');

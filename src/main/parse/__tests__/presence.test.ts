@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  alignmentOf,
   gangOf,
   percent,
   rankOf,
@@ -55,6 +56,9 @@ describe('reading a listing', () => {
         provisional: false
       }
     ]);
+    expect(alignmentOf(undefined)).toBe('Neutral');
+    expect(alignmentOf('')).toBe('Neutral');
+    expect(alignmentOf('Outlaw')).toBe('Outlaw');
     expect(gangOf(undefined)).toBeNull();
     expect(gangOf(' Rivals ')).toBe('Rivals');
   });
