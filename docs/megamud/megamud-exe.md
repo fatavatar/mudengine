@@ -248,6 +248,23 @@ chanting does not change combat choices.
   following the send.
 - The no-message watchdog has no equivalent.
 
+## Running away (`0x40e190`)
+
+Read for the upstream batch, 2026-10-01. The run check holds the PvP hang-up
+("[Delayed PvP Hangup (%s)]"), polite-attack running ("[Run 1: polite
+attacks]") and the health run. Before the health run (`0x40e4aa`) it returns
+without running when:
+- the character is following somebody (`e2e8`);
+- `a32c` is set;
+- all of `e184`, `e18c` and `e178` are off.
+
+Otherwise, with HP max (`d89c`) above 0 and `RunRooms` (`db80`) above 0, HP
+(`d894`) under `HpRun%` (`8b7c`, default 30) of max logs "Running: HP is too
+low", sets the run count (`db7c`) to `RunRooms`, and, with `ShowRunMsg`
+(`8c34`) on, prints "[Run %d: HP's too low (%d%%)]". So **a follower never
+runs on health**: the leader decides. Ours matches (`considerEscape`, upstream
+f01f986).
+
 ## Messages.md effects → state
 
 A row's effect bits (row `+0x114`) set these flags on onset (`0x46aada`–`0x46ab64`) and clear them on the row's ending (`0x46bc1e` on):
