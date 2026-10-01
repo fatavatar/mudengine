@@ -3517,6 +3517,63 @@ describe("acting on the realm's messages", () => {
     expect(manager.character.afflictions.held).toBe('no');
   });
 
+  /*
+   * 2026-10-01: an altar left skinny blind and dizzy, his next command came
+   * back *You fumble in confusion!*, and the `fumble` row held the lap for a
+   * confusion wear-off that blindness never sends. The sheet is the ground
+   * truth: what it reprints is still on, and a fumble is not an effect.
+   */
+  it('takes off at a stat sheet what the sheet no longer lists, and keeps what it does', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(acting, DEFAULT_CONFIG.connection.login);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'fumble',
+          match: 'You fumble in confusion',
+          endsWith: 'The effects of confusion wear off',
+          effects: ['confused', 'action-failed'],
+          action: 'wait'
+        },
+        {
+          ...blankTrigger(),
+          name: 'net',
+          match: 'You are entangled in a net!',
+          endsWith: 'You work yourself free.',
+          effects: ['held'],
+          action: 'wait'
+        }
+      ]
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('[HP=805/MA=772]:You fumble in confusion!\r\nYou are entangled in a net!\r\n');
+    await until(() => manager!.character.heard.length === 2);
+
+    socket.write(
+      [
+        '[HP=805/MA=772]:',
+        'Name: Skinny Fatterson                 Lives/CP:      9/0',
+        'Race: Wood-Elf    Exp: 4273359714      Perception:    239',
+        'Class: Necrolyte  Level: 66            Stealth:       136',
+        'Hits:   805/805   Armour Class: 122/4  Thievery:        0',
+        'Mana: * 772/772   Spellcasting: 425    Traps:           0',
+        '                                       Picklocks:       0',
+        'Strength:  100    Agility: 100         Tracking:        0',
+        'Intellect: 90     Health:  130         Martial Arts:   68',
+        'Willpower: 150    Charm:   85          MagicRes:      145',
+        'You are entangled in a net!',
+        '[HP=805/MA=772]:'
+      ].join('\r\n') + '\r\n'
+    );
+    await until(() => manager!.character.heard.length === 1);
+    expect(manager.character.heard[0]).toMatchObject({ name: 'net' });
+    expect(manager.character.afflictions.held).toBe('yes');
+  });
+
   it('ends the fight when a row says the realm has', async () => {
     const { sink } = collect();
     manager = new SessionManager(sink);

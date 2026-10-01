@@ -194,7 +194,7 @@ import {
   ROOM_READ_KEY,
   type CommandName
 } from '../../shared/commands';
-import { STATUS_LINE } from '../parse/patterns';
+import { sheetLines, STATUS_LINE } from '../parse/patterns';
 import {
   figuresOf,
   isFullStatline,
@@ -5296,6 +5296,13 @@ export class SessionManager {
     const roomBefore = this.tracker.current.room;
     const lineChanged = this.tracker.apply(block, undefined, collecting);
     const batchChanged = batch ? this.tracker.apply(batch, batch.rows) : false;
+    // The sheet lists what is still on; a held message it does not is over.
+    if (batch?.type === 'player-status') {
+      this.messages.settle(
+        sheetLines(batch.text).map((line) => line.sentence),
+        batch.at
+      );
+    }
     // After `apply`: the realm confirming a rank this client asked for must
     // already read as held, or it would ask again.
     if (partyChanged) this.routines.checkPartyRank(this.tracker.current);

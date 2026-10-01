@@ -5,6 +5,8 @@ import { Routines } from '../Routines';
 import { DEFAULT_CONFIG, type AutomationConfig } from '../../../shared/config';
 import { EMPTY_CHARACTER, type CharacterState } from '../../../shared/character';
 import { SET_STATLINE } from '../../../shared/statline';
+import { DEFAULT_INTERNAL } from '../../../shared/internal';
+import { t } from '../../app/i18n';
 
 /** Nothing sends: what matters here is what was *queued* and in which band. */
 function make(overrides: Partial<AutomationConfig> = {}): {
@@ -711,6 +713,67 @@ describe('asking for the stat sheet to settle a buff ending', () => {
     const { routines, queue } = make({ enabled: false });
     routines.askSheet(1_000);
     expect(commandsIn(queue)).toEqual([]);
+  });
+});
+
+/*
+ * While a condition is on, the sheet is asked for on a clock, because it is
+ * the ground truth on whether it still is (2026-10-01).
+ */
+describe('asking for the stat sheet while a condition is on', () => {
+  const sheets = (enqueue: { mock: { calls: Array<[{ command: string; reason?: string }]> } }) =>
+    enqueue.mock.calls.filter(
+      ([intent]) =>
+        intent.command === 'st' && intent.reason === t('automation.routines.reasonConditionCheck')
+    ).length;
+  const poisoned: CharacterState = {
+    ...inRealm,
+    afflictions: { ...inRealm.afflictions, poisoned: 'yes' }
+  };
+  const fumbling: CharacterState = {
+    ...inRealm,
+    heard: [{ name: 'fumble', effects: ['confused'], action: 'wait', since: 0 }]
+  };
+
+  it('asks every interval while one is on, and stops when none is', () => {
+    vi.useFakeTimers();
+    try {
+      const { routines, queue } = make({ onEnterRealm: [] });
+      const enqueue = vi.spyOn(queue, 'enqueue');
+      const every = DEFAULT_INTERNAL.tuning.spells.conditionSheetMs;
+      routines.onCharacter(poisoned);
+      vi.advanceTimersByTime(every - 1);
+      expect(sheets(enqueue)).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(sheets(enqueue)).toBe(1);
+      routines.onCharacter(fumbling);
+      vi.advanceTimersByTime(every);
+      expect(sheets(enqueue)).toBe(2);
+
+      routines.onCharacter(inRealm);
+      vi.advanceTimersByTime(every * 3);
+      expect(sheets(enqueue)).toBe(2);
+      routines.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not count a rest to full as a condition', () => {
+    vi.useFakeTimers();
+    try {
+      const { routines, queue } = make({ onEnterRealm: [] });
+      const enqueue = vi.spyOn(queue, 'enqueue');
+      routines.onCharacter({
+        ...inRealm,
+        heard: [{ name: 'weak', effects: [], action: 'rest-hp', since: 0 }]
+      });
+      vi.advanceTimersByTime(DEFAULT_INTERNAL.tuning.spells.conditionSheetMs * 2);
+      expect(sheets(enqueue)).toBe(0);
+      routines.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

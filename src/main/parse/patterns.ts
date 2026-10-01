@@ -120,9 +120,13 @@ export const AFFLICTION_ONSETS: ReadonlyArray<{
      * full health until the run was killed.
      *
      * A full stop rather than a bang, which is what the table states.
+     *
+     * `You are Poisoned!` is the sheet's own, printed under the effect's line
+     * while the poison lasts: eight `st` sheets in the logs, every one of them
+     * between a poisoning and its wear-off (2026-09-22, 2026-09-25).
      */
     pattern:
-      /^(?:You are dizzy and disoriented from poison!|Poison burns through your veins!|You feel ill\.)$/
+      /^(?:You are dizzy and disoriented from poison!|Poison burns through your veins!|You feel ill\.|You are Poisoned!)$/
   },
   {
     type: 'user-diseased',
@@ -185,6 +189,25 @@ export const AFFLICTION_ONSETS: ReadonlyArray<{
  * opens on it and by the tracker that has to know one is open.
  */
 export const PLAYER_STATUS_HEADER = /^Name:\s+[\w\s]+\s+Lives\/CP:\s+\d+\/\d+/;
+
+/**
+ * The `st` sheet's lines, each without the countdown Paramud prints after an
+ * active effect (`(42s)`). Read by `CharacterTracker.readSheet` and by
+ * `MessageTriggers.settle`, which must strip it the same way.
+ */
+export function sheetLines(text: string): Array<{ sentence: string; seconds: number | null }> {
+  const lines: Array<{ sentence: string; seconds: number | null }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const timed = /^(?<line>.+?)\s*\((?<seconds>\d+)s\)$/.exec(line);
+    lines.push({
+      sentence: timed?.groups?.['line'] ?? line,
+      seconds: timed ? Number(timed.groups?.['seconds']) : null
+    });
+  }
+  return lines;
+}
 
 /** Which condition a sentence announces the onset of, or null for any other. */
 export function afflictionOnset(sentence: string): keyof Afflictions | null {

@@ -131,6 +131,8 @@ export class Routines {
   private sheetAskedAt: number | null = null;
   /** A sheet asked for inside `sheetAskMs` of the last, sent when that has passed. */
   private sheetTimer: NodeJS.Timeout | null = null;
+  /** The next `st` checking a condition that is on. See `checkConditions`. */
+  private conditionTimer: NodeJS.Timeout | null = null;
   /** The wrong-book correction has run, so it can only run once. */
   private bookCorrected = false;
   /**
@@ -154,6 +156,7 @@ export class Routines {
   reset(): void {
     this.sheetAskedAt = null;
     this.stopSheetTimer();
+    this.stopConditionTimer();
     this.probed = false;
     this.toLookAt = [];
     this.lookedAt.clear();
@@ -189,6 +192,7 @@ export class Routines {
        */
       this.inRealm = false;
       this.stopIdle();
+      this.stopConditionTimer();
       return;
     }
     if (!this.inRealm) {
@@ -246,6 +250,32 @@ export class Routines {
      * busiest path in the client.
      */
     this.askRoster();
+    this.checkConditions(state);
+  }
+
+  /**
+   * While a condition is on, the stat sheet is asked for every
+   * `tuning.spells.conditionSheetMs`, and stops being asked for when none is.
+   *
+   * The sheet is the ground truth: it prints every timed effect on the
+   * character (`StatCommand.cs:50`), and `CharacterTracker.readSheet` and
+   * `MessageTriggers.settle` take off whatever it no longer lists. A condition
+   * whose ending was never said — a wear-off missed, or one that never comes,
+   * as when blindness made skinny fumble and the `fumble` row waited for
+   * confusion to wear off (2026-10-01) — is over at the next sheet rather than
+   * at `effectCeilingMs`.
+   */
+  private checkConditions(state: CharacterState): void {
+    if (!this.config.enabled || !conditionOn(state)) {
+      this.stopConditionTimer();
+      return;
+    }
+    if (this.conditionTimer !== null) return;
+    this.conditionTimer = setTimeout(() => {
+      this.conditionTimer = null;
+      this.askSheet(Date.now(), t('automation.routines.reasonConditionCheck'));
+    }, tuning().spells.conditionSheetMs);
+    this.conditionTimer.unref?.();
   }
 
   /**
@@ -673,7 +703,10 @@ export class Routines {
    * `routines.enabled`, as the level-up `exp` is: the client already asks
    * for this sheet on the way in.
    */
-  askSheet(now: number = Date.now()): void {
+  askSheet(
+    now: number = Date.now(),
+    reason: string = t('automation.routines.reasonBuffEnding')
+  ): void {
     if (!this.config.enabled) return;
     const floor = tuning().spells.sheetAskMs;
     if (this.sheetAskedAt !== null && now - this.sheetAskedAt < floor) {
@@ -699,7 +732,7 @@ export class Routines {
       command: 'st',
       priority: 'probe',
       coalesceKey: 'probe:st',
-      reason: t('automation.routines.reasonBuffEnding')
+      reason
     });
   }
 
@@ -817,6 +850,13 @@ export class Routines {
   dispose(): void {
     this.stopIdle();
     this.stopSheetTimer();
+    this.stopConditionTimer();
+  }
+
+  private stopConditionTimer(): void {
+    if (this.conditionTimer === null) return;
+    clearTimeout(this.conditionTimer);
+    this.conditionTimer = null;
   }
 
   private stopSheetTimer(): void {
@@ -880,4 +920,14 @@ export class Routines {
      */
     this.lookAt();
   }
+}
+
+/**
+ * Whether anything is on the character that a stat sheet would settle: an
+ * affliction flagged, or a message-table row held. Not a row's rest to full,
+ * which is let go at full (`SessionManager.releaseRestsIfFull`).
+ */
+function conditionOn(state: CharacterState): boolean {
+  if (Object.values(state.afflictions).includes('yes')) return true;
+  return state.heard.some((effect) => effect.action !== 'rest-hp' && effect.action !== 'rest-mana');
 }

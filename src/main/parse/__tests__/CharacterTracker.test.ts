@@ -9611,6 +9611,29 @@ describe('the spell message table and what it teaches', () => {
     expect(Object.keys(durations)).toEqual(['strange glow']);
     expect(durations['strange glow']).toBeCloseTo(90, 0);
   });
+
+  /*
+   * The sheet is the ground truth on a condition (2026-10-01): it prints every
+   * timed effect, so one it does not state is over, whatever ending was missed.
+   */
+  it('clears a condition a stat sheet no longer states, and keeps one it does', () => {
+    const cured = play(['[HP=334/KAI=2]:', 'Poison burns through your veins!', ...sheet()]);
+    expect(cured.current.afflictions.poisoned).toBe('no');
+
+    // The sheet's own poison line, and the effect's, as on 2026-09-22.
+    const still = play([
+      '[HP=334/KAI=2]:',
+      'Poison burns through your veins!',
+      ...sheet('You feel ill.', 'You are Poisoned!')
+    ]);
+    expect(still.current.afflictions.poisoned).toBe('yes');
+    const named = play([
+      '[HP=334/KAI=2]:',
+      'Poison burns through your veins!',
+      ...sheet('You are Poisoned!')
+    ]);
+    expect(named.current.afflictions.poisoned).toBe('yes');
+  });
 });
 
 /*

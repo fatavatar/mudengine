@@ -195,6 +195,33 @@ export class MessageTriggers {
     return any;
   }
 
+  /**
+   * A stat sheet, which prints every timed effect on the character
+   * (`StatCommand.cs:50`) in the sentence it started with: a held row whose
+   * onset it does not reprint is over. Not a rest to full, which is not an
+   * effect, and not a row that started after the sheet did (`at`).
+   *
+   * 2026-10-01: blindness made skinny fumble, and the `fumble` row held the
+   * lap for confusion's wear-off, which blindness never sends. `You fumble in
+   * confusion!` is a refusal rather than an effect, so no sheet prints it.
+   */
+  settle(sentences: readonly string[], at: number, now = Date.now()): void {
+    const onSheet = sentences.map((line) => line.trim()).filter((line) => line.length > 0);
+    const ended: MessageEffect[] = [];
+    let any = false;
+    for (const [key, { entry, stated }] of [...this.held]) {
+      if (RESTS.includes(entry.trigger.action) || stated.since > at) continue;
+      if (onSheet.some((line) => matchSentence(entry.onset, line) !== null)) continue;
+      this.held.delete(key);
+      ended.push(...entry.trigger.effects);
+      any = true;
+      this.record(now, entry.trigger, [
+        t('automation.messages.ended', { effects: this.describe(entry.trigger) })
+      ]);
+    }
+    if (any) this.announce([], ended);
+  }
+
   /** Death, or leaving the realm: nothing that was on the character still is. */
   clearEffects(): void {
     this.drop(() => true);
