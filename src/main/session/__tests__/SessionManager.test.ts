@@ -3473,6 +3473,55 @@ describe("answering the realm's messages", () => {
   });
 });
 
+/*
+ * 2026-10-01: skinny's `mahe` (healBelow 0.9) went out ahead of every rest
+ * and spent the round, and the HP regen was passed over rather than waited
+ * for, so he sat down without `rsto` every time. The regen is part of the
+ * rest decision, as MegaMUD's is (0x41518a), and goes first.
+ */
+describe('the HP regen ahead of the heal, on a line that rests', () => {
+  it('casts the regen before the heal, and the rest after it', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      {
+        ...DEFAULT_CONFIG.automation,
+        enabled: true,
+        idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+        onEnterRealm: [],
+        rules: [],
+        health: { ...DEFAULT_CONFIG.automation.health, restBelow: 0.8, restTo: 0.9 },
+        spells: {
+          ...DEFAULT_CONFIG.automation.spells,
+          heal: 'mahe',
+          healBelow: 0.9,
+          healTo: 0.9,
+          minMana: 0.15,
+          regen: { ...DEFAULT_CONFIG.automation.spells.regen, hp: 'rsto' }
+        }
+      },
+      DEFAULT_CONFIG.connection.login
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const sent = (): string[] =>
+      Buffer.concat(chunks)
+        .toString('latin1')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    socket.write('[HP=588/805,MA=412/772]:\r\n');
+    await until(() => sent().includes('rsto'));
+    socket.write('[HP=588/805,MA=362/772]:\r\n');
+    await until(() => sent().includes('rest'));
+    const commands = sent().filter((line) => ['rsto', 'mahe', 'rest'].includes(line));
+    expect(commands[0]).toBe('rsto');
+    expect(commands.indexOf('rest')).toBeGreaterThan(0);
+  });
+});
+
 describe("acting on the realm's messages", () => {
   const acting: AutomationConfig = {
     ...DEFAULT_CONFIG.automation,

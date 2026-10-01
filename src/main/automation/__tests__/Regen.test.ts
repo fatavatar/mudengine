@@ -130,6 +130,26 @@ describe('HP regen before a rest', () => {
     expect(sent).toEqual(['divine restoration', 'divine restoration']);
   });
 
+  /*
+   * 2026-10-01: `prfl`, then a `mahe` ahead of every rest, spent each round,
+   * and the regen was passed over rather than waited for, so skinny sat down
+   * without it every time. The rest waits for the round instead.
+   */
+  it('holds the rest for a round already spent, and casts when it has passed', () => {
+    const regen = make({ hp: 'lfst' });
+    let open = false;
+    regen.useCastGate({ mayCast: () => open, noteCast: () => {} });
+    expect(regen.beforeRest(state())).toBe(true);
+    expect(sent).toEqual([]);
+    open = true;
+    expect(regen.beforeRest(state())).toBe(true);
+    expect(sent).toEqual(['lfst']);
+    // And nothing to wait for where nothing can be cast.
+    const none = make({ hp: '' });
+    none.useCastGate({ mayCast: () => false, noteCast: () => {} });
+    expect(none.beforeRest(state())).toBe(false);
+  });
+
   /* The exe's thirty-second tick: a regen the realm never ends is forgotten when full. */
   it('is cast again after health and mana have both been full', () => {
     const regen = make({ hp: 'lfst' });

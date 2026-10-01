@@ -122,18 +122,31 @@ export class Regen {
   }
 
   /**
-   * Asked by `Recovery` before it sits the character down to rest: HP regen
-   * first, where it is wanted. True means it went out and the rest waits for
-   * the next line, as the exe's own pass ends on the cast.
+   * Asked before the character sits down to rest: HP regen first, where it is
+   * wanted. True means it went out, or is waiting for the round, and the rest
+   * waits for the next line, as the exe's own pass ends on the cast.
+   *
+   * A round already spent — a heal, a blessing, the mana regen a moment
+   * before — holds the rest rather than passing the regen over: sitting down
+   * first only has the cast stand the character up again a round later, and
+   * passed over, it never went out at all (2026-10-01). Bounded by the round
+   * (`spells.castRoundMs`).
    */
   beforeRest(state: CharacterState): boolean {
     if (!this.enabled || state.phase !== 'in-game') return false;
     const { hp, hpMax } = state.vitals;
     if (hp === null || hpMax === null || hp >= hpMax) return false;
     if (this.hpRegenerating(state) || !manaAtLeast(state, this.config.minMana)) return false;
-    if (!this.cast(state, 'hp', this.config.regen.hp)) return false;
+    const spell = this.config.regen.hp;
+    if (spell.length === 0 || !this.affordable(state, spell)) return false;
+    if (!this.gate.mayCast()) return true;
+    if (!this.cast(state, 'hp', spell)) return false;
     this.hpUp = true;
     return true;
+  }
+
+  private affordable(state: CharacterState, spell: string): boolean {
+    return canPayFor(state, spellCost(resolveSpell(spell, state.spellbook, this.realmSpell)));
   }
 
   private hpRegenerating(state: CharacterState): boolean {
