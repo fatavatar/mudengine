@@ -1952,6 +1952,28 @@ describe('sneaking before a route', () => {
   });
 
   /*
+   * A low Stealth refuses where the sheet cannot show it (the roll counts
+   * what is in the room too), so the answers decide: after `sneakGiveUp`
+   * refusals in a row the walk stops asking, said once (upstream 5ffdf91).
+   */
+  it('stops asking after too many sneaks refused in a row, and says so once', () => {
+    const walk = sneaking();
+    const base = at(1, 1);
+    walk.start(ROUTE, base);
+    vi.advanceTimersByTime(200);
+    expect(sent).toEqual(['sn', 'e']);
+    const limit = DEFAULT_INTERNAL.tuning.walk.sneakGiveUp;
+    for (let i = 0; i < limit; i += 1) walk.onBlock(block('user-sneak-failed'));
+    walk.onCharacter({ ...base, room: { ...base.room, number: 2 } });
+    vi.advanceTimersByTime(200);
+    expect(sent.length).toBeGreaterThan(2);
+    expect(sent.slice(2)).not.toContain('sn');
+    const said = t('automation.walk.sneakGaveUp', { count: limit });
+    expect(notices.filter((line) => line === said)).toHaveLength(1);
+    walk.dispose();
+  });
+
+  /*
    * `unknown` is not `sneaking` — nobody has said — so it still asks. Only a
    * character the server has actually confirmed is hidden is left alone.
    */
@@ -3606,6 +3628,28 @@ describe('walking while hurt', () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(sent).toEqual([]);
     expect(walk.progress.hold).toBe('health');
+    walk.dispose();
+  });
+
+  /*
+   * A fight turned down for health names the health it wants (upstream
+   * 5ffdf91, `AutoCombat.restingFor`): the walk stands still below it, above
+   * `restBelow`, so the rest towards it can happen.
+   */
+  it('holds below the health a refused fight wants, and walks on once it is there', async () => {
+    let current = hurt(0.7);
+    const walk = new Walker({ ...config, health: { ...config.health, restBelow: 0.5 } }, queue, {
+      notice: (m) => notices.push(m),
+      stateNow: () => current,
+      restFor: () => 90
+    });
+    expect(walk.start(ROUTE, current)).toBeNull();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(sent).toEqual([]);
+    expect(walk.progress.hold).toBe('health');
+    current = hurt(0.9);
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERNAL.tuning.walk.holdMs + 50);
+    expect(sent).toEqual(['e']);
     walk.dispose();
   });
 

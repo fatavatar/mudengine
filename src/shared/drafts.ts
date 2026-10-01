@@ -445,6 +445,8 @@ export interface ProfileDraft {
     maxTargetHealth: number;
     minMobs: number;
     maxMonsterExperience: number;
+    /** A fraction; 0 attacks whatever the odds. See `CombatConfig.minSurvival`. */
+    minSurvival: number;
   };
   /**
    * The three blocks a rule cannot hold, in MegaMUD's own tabs.
@@ -904,7 +906,8 @@ export function asProfileDraft(value: unknown): ProfileDraft | null {
       monsters: asMonsterRules(combat['monsters']),
       maxTargetHealth: Math.max(0, Math.round(Number(combat['maxTargetHealth']) || 0)),
       minMobs: Math.max(0, Math.min(99, Math.round(Number(combat['minMobs']) || 0))),
-      maxMonsterExperience: Math.max(0, Math.round(Number(combat['maxMonsterExperience']) || 0))
+      maxMonsterExperience: Math.max(0, Math.round(Number(combat['maxMonsterExperience']) || 0)),
+      minSurvival: Math.min(1, Math.max(0, Number(combat['minSurvival']) || 0))
     },
     /*
      * Every threshold is a fraction and every one is clamped here as well as in

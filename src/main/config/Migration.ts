@@ -276,6 +276,7 @@ function migrateAll(options: MigrationOptions): void {
   statedTheHealChoice(home, note, options.template);
   statedTheRegenSpells(home, note, options.template);
   statedThePartyRank(home, note, options.template);
+  statedTheSurvivalFloor(home, note, options.template);
 }
 
 /**
@@ -6532,6 +6533,48 @@ function statedTheAutoJoin(home: Home, note: (message: string) => void): void {
  * `party:` without them, off and mid, after `restWithLeader` with the
  * template's paragraphs (PR #41, 2026-09-30): MegaMUD's Party Rank.
  */
+/**
+ * `automation.combat.minSurvival` into every file that states `combat:`
+ * without it, off, after `maxMonsterExperience` with the template's paragraph
+ * (2026-10-01): upstream 5ffdf91's opening check, a choice the player makes
+ * rather than tuning that turns fights down by default.
+ */
+function statedTheSurvivalFloor(
+  home: Home,
+  note: (message: string) => void,
+  template: string | undefined
+): void {
+  const comment = templateComments(template, 'automation').get('automation.combat.minSurvival');
+  const files = [home.options, ...directories(home.profilesDir).map((id) => home.profile(id).file)];
+  const stated: string[] = [];
+
+  for (const file of files) {
+    edit(file, (document) => {
+      const combat = document.getIn(['automation', 'combat'], true);
+      if (!isMap(combat) || combat.has('minSurvival')) return false;
+      const pair = document.createPair(
+        'minSurvival',
+        DEFAULT_CONFIG.automation.combat.minSurvival
+      ) as Pair;
+      if (typeof comment === 'string' && isScalar(pair.key)) pair.key.commentBefore = comment;
+      const after = combat.items.findIndex(
+        (item) => isScalar(item.key) && item.key.value === 'maxMonsterExperience'
+      );
+      combat.items.splice(after === -1 ? combat.items.length : after + 1, 0, pair);
+      stated.push(file);
+      return true;
+    });
+  }
+
+  if (stated.length === 0) return;
+  const params = { count: stated.length, fileList: stated.join(', ') };
+  note(
+    stated.length === 1
+      ? t('notices.migration.survivalFloorStated.one', params)
+      : t('notices.migration.survivalFloorStated.many', params)
+  );
+}
+
 function statedThePartyRank(
   home: Home,
   note: (message: string) => void,
@@ -6992,6 +7035,20 @@ function theTuningBlockGainedKeys(
      */
     addKey('spells', 'manaRegenShortfall', DEFAULT_INTERNAL.tuning.spells.manaRegenShortfall);
     addKey('spells', 'manaTickWaitMs', DEFAULT_INTERNAL.tuning.spells.manaTickWaitMs);
+    /*
+     * Avoiding death (upstream 5ffdf91, ported 2026-10-01): when the room's
+     * simulated fight is too dangerous to stay in or to stay connected
+     * through, how long a monster run from is left alone, and how many refused
+     * sneaks stop the walk asking. Whether to open one is the player's
+     * `combat.minSurvival`.
+     */
+    const danger = DEFAULT_INTERNAL.tuning.combat;
+    addKey('combat', 'runRounds', danger.runRounds);
+    addKey('combat', 'runRisk', danger.runRisk);
+    addKey('combat', 'hangUpRisk', danger.hangUpRisk);
+    addKey('combat', 'fledLevels', danger.fledLevels);
+    addKey('combat', 'fledForgetMs', danger.fledForgetMs);
+    addKey('walk', 'sneakGiveUp', DEFAULT_INTERNAL.tuning.walk.sneakGiveUp);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {

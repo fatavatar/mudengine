@@ -648,6 +648,8 @@ interface CharacterForm {
   combatMaxTargetHealth: string;
   combatMinMobs: string;
   combatMaxMonsterExp: string;
+  /** `combat.minSurvival`, as a percentage string. */
+  combatMinSurvival: string;
   /** Health — resting and meditating. Percentages on screen, fractions on disk. */
   restBelow: string;
   restTo: string;
@@ -872,6 +874,7 @@ function formOf(entry: ProfileEditable): CharacterForm {
     combatMaxTargetHealth: String(entry.combat.maxTargetHealth),
     combatMinMobs: String(entry.combat.minMobs),
     combatMaxMonsterExp: String(entry.combat.maxMonsterExperience),
+    combatMinSurvival: percent(entry.combat.minSurvival),
     restBelow: percent(entry.health.restBelow),
     restTo: percent(entry.health.restTo),
     restBeforeTraps: percent(entry.health.restBeforeTraps),
@@ -1064,7 +1067,8 @@ function draftOf(form: CharacterForm): ProfileDraft {
       monsters: form.combatMonsters,
       maxTargetHealth: Math.max(0, Number.parseInt(form.combatMaxTargetHealth, 10) || 0),
       minMobs: Math.max(0, Number.parseInt(form.combatMinMobs, 10) || 0),
-      maxMonsterExperience: Math.max(0, Number.parseInt(form.combatMaxMonsterExp, 10) || 0)
+      maxMonsterExperience: Math.max(0, Number.parseInt(form.combatMaxMonsterExp, 10) || 0),
+      minSurvival: fractionOf(form.combatMinSurvival)
     },
     hangUp: {
       enabled: form.hangUp,
@@ -1447,6 +1451,7 @@ function emptyForm(
     combatMaxTargetHealth: String(combat.maxTargetHealth),
     combatMinMobs: String(combat.minMobs),
     combatMaxMonsterExp: String(combat.maxMonsterExperience),
+    combatMinSurvival: percent(combat.minSurvival),
     restBelow: percent(health.restBelow),
     restTo: percent(health.restTo),
     restBeforeTraps: percent(health.restBeforeTraps),
@@ -3153,6 +3158,13 @@ export default function SettingsScreen({
                               name="max-monster-exp"
                               onChange={(value) => patch({ combatMaxMonsterExp: value })}
                               value={form.combatMaxMonsterExp}
+                            />
+                            <NumberField
+                              hint={t('settings.combat.minSurvivalHint')}
+                              label={t('settings.combat.minSurvivalLabel')}
+                              name="min-survival"
+                              onChange={(value) => patch({ combatMinSurvival: value })}
+                              value={form.combatMinSurvival}
                             />
                           </fieldset>
 

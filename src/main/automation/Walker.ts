@@ -308,6 +308,12 @@ export interface WalkerEvents {
   /** A room re-read owed after a monster came, went or died. See `holdForRoom`. */
   roomUnsettled?(): boolean;
   /**
+   * Hit points a fight turned down for health wants first, or null
+   * (`AutoCombat.restingFor`): the walk stands still below it, as it does
+   * below `restBelow`, so the rest that follows can happen.
+   */
+  restFor?(): number | null;
+  /**
    * A fresh route from where the character is *now* to where it was going.
    *
    * Asked when a fight the route stood still for is over and the character is
@@ -681,6 +687,15 @@ export class Walker {
   private holdWhenHurt = true;
   /** Whether *Stealth 0, not sneaking* has been said this session. */
   private saidNoStealth = false;
+  /**
+   * Sneaks refused in a row (`You don't think you're sneaking.`), and the
+   * level they were counted at: at `tuning.walk.sneakGiveUp` the walk stops
+   * asking until a new connection or a new level, said once (upstream
+   * 5ffdf91). A low figure is a refusal the sheet cannot show
+   * (`SneakCommand.cs` rolls against Stealth less what is in the room), so it
+   * is read off the answers.
+   */
+  private sneakRefusals = { count: 0, level: null as number | null };
   /**
    * Whether a fight holds this walk rather than ending it.
    *
@@ -1328,6 +1343,7 @@ export class Walker {
 
   /** A new connection: forget everything. */
   reset(): void {
+    this.sneakRefusals = { count: 0, level: null };
     this.answers = [];
     this.stepSentAt = null;
     this.clearTimer();
@@ -1462,6 +1478,7 @@ export class Walker {
    */
   onBlock(block: Block): void {
     if (this.status !== 'walking') return;
+    if (block.type === 'user-sneak-failed') this.sneakRefused();
 
     /*
      * The character died, so the route is over and it is over for a *reason*.
@@ -4267,7 +4284,12 @@ export class Walker {
    * hidden and is not walks into a lair in the open.
    */
   private sneakFirst(state: CharacterState): void {
-    if (!this.config.movement.sneak || state.stealth === 'sneaking') return;
+    if (!this.config.movement.sneak) return;
+    // Sneaking, by the tracker's own reading: the refusals in a row are over.
+    if (state.stealth === 'sneaking') {
+      if (this.sneakRefusals.count < tuning().walk.sneakGiveUp) this.sneakRefusals.count = 0;
+      return;
+    }
     /*
      * **A sheet that says `Stealth: 0` is never asked to sneak** (todo 104).
      * `SneakCommand.cs` rolls `Stealth − (players − 1 + mobs) ≥ rand(1,100)`,
@@ -4284,12 +4306,24 @@ export class Walker {
       return;
     }
     if (cannotSneakHere(state)) return;
+    // Refused too often in a row at this level: stopped until it changes.
+    if (this.sneakRefusals.level !== state.progress.level) {
+      this.sneakRefusals = { count: 0, level: state.progress.level };
+    }
+    if (this.sneakRefusals.count >= tuning().walk.sneakGiveUp) return;
     this.queue.enqueue({
       command: 'sn',
       priority: 'movement',
       coalesceKey: 'sneak',
       reason: t('automation.walk.reasonSneak')
     });
+  }
+
+  /** One more sneak refused; at the limit, said once. See `sneakRefusals`. */
+  private sneakRefused(): void {
+    this.sneakRefusals.count += 1;
+    if (this.sneakRefusals.count !== tuning().walk.sneakGiveUp) return;
+    this.events.notice?.(t('automation.walk.sneakGaveUp', { count: this.sneakRefusals.count }));
   }
 
   /**
@@ -4864,6 +4898,8 @@ export class Walker {
   private wantsHealthHold(state: CharacterState): boolean {
     if (!this.holdWhenHurt) return false;
     const { hp, hpMax } = state.vitals;
+    const owed = this.events.restFor?.() ?? null;
+    if (owed !== null && hp !== null && hp < owed) return true;
     return healthHolding(
       this.config.health,
       hp,

@@ -465,6 +465,8 @@ describe('the round combat macro', () => {
       maxTargetHealth: 0,
       minMobs: 0,
       maxMonsterExperience: 0,
+      // And by `statedTheSurvivalFloor`, off.
+      minSurvival: 0,
       // And by `statedTheHideForOpener`, off.
       hideForOpener: false,
       // And by `statedTheMonsterRows`, empty, which is what the client already
@@ -2463,6 +2465,7 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       'leverErrandDepth',
       // How long a leader waits for the party through a text exit (PR #35).
       'partyCatchUpMs',
+      'sneakGiveUp',
       // How long a walk waits in a room too dark to read for the light that
       // fixes it. Appended by its own later pass: this file states no
       // `heldFallbackMs` to sit beside.
@@ -2522,7 +2525,8 @@ describe("the walk's nudge interval in an existing tuning file", () => {
       followSettleMs: DEFAULT_INTERNAL.tuning.walk.followSettleMs,
       errandAskMs: DEFAULT_INTERNAL.tuning.walk.errandAskMs,
       leverErrandDepth: DEFAULT_INTERNAL.tuning.walk.leverErrandDepth,
-      partyCatchUpMs: DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs
+      partyCatchUpMs: DEFAULT_INTERNAL.tuning.walk.partyCatchUpMs,
+      sneakGiveUp: DEFAULT_INTERNAL.tuning.walk.sneakGiveUp
     });
     expect(text).toContain("longer than this realm's own slowest answer");
     expect(text).not.toContain('so this is already the');
@@ -6653,5 +6657,50 @@ describe('the party rank is stated', () => {
     );
     migrate();
     expect(party()).toMatchObject({ autoRank: true, preferredRank: 'back' });
+  });
+});
+
+/* The opening check, a player's choice (2026-10-01): off, after maxMonsterExperience. */
+describe('the survival floor is stated', () => {
+  let home: Home;
+  let dir: string;
+  const said: string[] = [];
+
+  const migrate = (): void =>
+    migrateHome({ home, legacyOptions: [], note: (message) => said.push(message) });
+
+  const combat = (): Record<string, unknown> =>
+    ((parse(fs.readFileSync(home.options, 'utf8')).automation as Record<string, unknown>)[
+      'combat'
+    ] ?? {}) as Record<string, unknown>;
+
+  beforeEach(() => {
+    said.length = 0;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mudengine-survival-'));
+    home = homeAt(dir);
+    fs.mkdirSync(path.dirname(home.options), { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes it off after maxMonsterExperience, once', () => {
+    fs.writeFileSync(
+      home.options,
+      'automation:\n  combat:\n    maxMonsterExperience: 0\n    monsters: []\n',
+      'utf8'
+    );
+    migrate();
+    expect(combat()['minSurvival']).toBe(0);
+    const text = fs.readFileSync(home.options, 'utf8');
+    expect(text.indexOf('minSurvival:')).toBeGreaterThan(text.indexOf('maxMonsterExperience:'));
+    expect(said.filter((line) => line.includes('Only Open Fights Survived'))).toHaveLength(1);
+    migrate();
+    expect(fs.readFileSync(home.options, 'utf8')).toBe(text);
+  });
+
+  it('leaves a stated floor alone', () => {
+    fs.writeFileSync(home.options, 'automation:\n  combat:\n    minSurvival: 0.9\n', 'utf8');
+    migrate();
+    expect(combat()['minSurvival']).toBe(0.9);
   });
 });

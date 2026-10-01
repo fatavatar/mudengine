@@ -206,6 +206,9 @@ notices:
     autoJoinStated:
       many: 'Join When Invited was added, off, to {count} files: {fileList}'
       one: 'Join When Invited was added, off, to {fileList}'
+    survivalFloorStated:
+      many: 'Only Open Fights Survived % was added, off, to {count} files: {fileList}'
+      one: 'Only Open Fights Survived % was added, off, to {fileList}'
     partyRankStated:
       many: 'Auto-Rank (MegaMUD''s Party Rank) was added, off and at Mid, to {count} files: {fileList}'
       one: 'Auto-Rank (MegaMUD''s Party Rank) was added, off and at Mid, to {fileList}'
@@ -3285,6 +3288,10 @@ settings:
     maxMonsterExpHint: Will not attack anything worth more experience than this. 0 is off,
       unknown monsters will be attacked.
     maxMonsterExpLabel: Max Monster Experience
+    minSurvivalHint: Before attacking, the room's fight is simulated from your health now. Under
+      this share of fights survived, or where you would have to run at once, the fight is turned
+      down and you rest first. 0 is off and attacks whatever the odds.
+    minSurvivalLabel: Only Open Fights Survived %
     minMobsLabel: Min Monsters in Room
     minMobsHint:
       Will not open a fight in a room holding fewer than this — for a character whose value is an
@@ -4612,6 +4619,11 @@ session:
     fleeDropped: 'Not fleeing to {destination}: you were killed, and the realm has moved you.'
     hangUpRefused: Not hanging up — {why}. {reasons}. Disconnecting now would be penalised; walk out instead.
     hangingUpClean: 'Hanging up: {why}.'
+    beforeDeath: 'Hanging up: {why}. Dying would drop everything you carry.'
+    beforeDeathCharged: 'Hanging up: {why}. The hangup costs {cost} HP and some items; dying would drop everything you carry.'
+    beforeDeathUnknownCharge: 'Hanging up: {why}. This realm charges for a hangup and its menu has not said how much; dying would drop everything you carry.'
+    beforeDeathCostly: 'Not hanging up: {why}, but the hangup would cost {cost} HP and kill you.'
+    beforeDeathCostlyReason: the hangup would cost {cost} HP and kill
     hangingUpUncharged: 'Hanging up: {why}. {realm} charges nothing for a hang-up, by its own realm menu.'
     hangingUpUnchargedSetting: 'Hanging up: {why}. Your settings say this realm charges nothing for a hang-up.'
     realmCharges: '{realm} charges {percent}% for a hang-up, by its realm menu.'
@@ -4621,6 +4633,8 @@ session:
     pvpNoGang: 'Not telling anyone about {attacker}: the roster shows you in no gang.'
     pvpNoGangReason: the roster shows no gang to tell
     whyHealth: health at {percent}
+    whyNextRound: 'at {hp} HP the next round kills you {risk} of the time'
+    whyRisk: 'at {hp} HP this fight kills you {risk} of the time within {rounds} rounds'
     whyMana: mana at {percent}
     whyAttackers: '{count} attackers'
     whyCompany: Player present in room (PvP abort)
@@ -4923,6 +4937,12 @@ automation:
     refusedCostly: Attacking {target} causes an alignment penalty (-10 points).
     refusedEngageNone: engage is set to none, so nothing is opened unasked
     refusedTooTough: '{target} has {hp} health and maxTargetHealth is {cap}'
+    refusedFled: 'you ran from {target} at level {level}; it is left alone until level {until}'
+    refusedFledUnknown: you ran from {target}; it is left alone until your level is read
+    refusedOdds: 'you survive a fight with {target} here {survives} of the time at {hp} HP; attacking needs {needs}'
+    refusedOddsResting: 'you survive a fight with {target} here {survives} of the time at {hp} HP; attacking needs {needs}; resting to {rest} HP first'
+    refusedRisk: 'at {hp} HP, a fight with {target} here kills you {risk} of the time within {rounds} rounds, so you would have to run at once'
+    refusedRiskResting: 'at {hp} HP, a fight with {target} here kills you {risk} of the time within {rounds} rounds, so you would have to run at once; resting to {needs} HP first'
     refusedMaxMobs: '{here} monsters here, and maxMobs is {max}'
     refusedMinMobs: 'only {here} monsters here, and minMobs is {min}'
     refusedTooRich: '{target} is worth {exp} experience and maxMonsterExperience is {cap}'
@@ -5497,6 +5517,7 @@ automation:
     partyRejoining: Waiting here for {names} to join the party again.
     reasonPartyListing: checking who came on with the party after the text exit
     # Todo 104: the sheet's own figure decides, from `SneakCommand.cs`'s roll.
+    sneakGaveUp: 'Not sneaking before steps: the last {count} tries failed. Trying again after a level or a reconnect.'
     sneakNoSkill: 'Not sneaking before steps: this character has no Stealth (the sheet says 0), so the server refuses every attempt. Sneak Before Each Step is ignored for this session.'
     reasonStepping: walking to {stepName}
     reasonTimeout: nothing came back after {command}
