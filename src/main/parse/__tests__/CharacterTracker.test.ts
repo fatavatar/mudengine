@@ -2736,6 +2736,25 @@ describe('the party this character travels with', () => {
     expect(soul?.activity).toEqual({ state: 'resting' });
   });
 
+  /*
+   * 2026-10-02: under 10% the server pads the figure to three columns, the
+   * row went unread, and the listing of two read as no party — so the
+   * follower stopped following at the one moment it mattered.
+   */
+  it('reads a single-figure percentage, padded to three columns', () => {
+    const { tracker, feed } = feeder();
+    feed('[HP=81/MA=647]:');
+    feed('You are following Fatty.');
+    feed('The following people are in your travel party:');
+    feed('  Fatty Fatterson                (Skald)      [M: 59%] [H: 93%]   - Frontrank');
+    feed('  Skinny Fatterson               (Necrolyte)  [M:  8%] [H:  9%]   - Backrank');
+    feed('[HP=81/MA=647]:');
+    expect(tracker.current.party.following).toBe('Fatty');
+    const skinny = tracker.current.party.members[1];
+    expect(skinny?.health).toBeCloseTo(0.09);
+    expect(skinny?.mana).toBeCloseTo(0.08);
+  });
+
   /* A letter nothing has established keeps its letter and claims nothing. */
   it('keeps a flag it cannot name rather than expanding it', () => {
     const { tracker, feed } = feeder();

@@ -2222,7 +2222,7 @@ export interface BatchRule {
  * an absent field is usually a shape the server printed differently.
  */
 const PARTY_ROWS: RegExp[] = [
-  /^\s*(?<name>[A-Z][\w'-]*)(?: (?<last>[A-Z][\w'-]*))?\s*\((?<class>[\w ]+)\)\s*(?:\[(?<manaType>M|K):\s?(?<mana>\d+)%\]\s*)?\[H:\s?(?<health>\d+)%\]\s*(?<flag>[A-Za-z])?\s*-\s*(?<rank>\w+)\s*$/,
+  /^\s*(?<name>[A-Z][\w'-]*)(?: (?<last>[A-Z][\w'-]*))?\s*\((?<class>[\w ]+)\)\s*(?:\[(?<manaType>M|K):\s*(?<mana>\d+)%\]\s*)?\[H:\s*(?<health>\d+)%\]\s*(?<flag>[A-Za-z])?\s*-\s*(?<rank>\w+)\s*$/,
   /^\s*(?<name>[A-Z][\w'-]*)(?: (?<last>[A-Z][\w'-]*))?\s*\((?<class>[\w ]+)\)\s*\[(?<invited>Invited)\]\s*$/
 ];
 
@@ -2636,6 +2636,12 @@ export const BATCH_RULES: BatchRule[] = [
      * (live, 2026-08-27). The letter is glued to the bracket or spaced off it
      * depending on the realm, and its meanings are decided in `partyActivity`,
      * not here.
+     *
+     * **The percentages are right-aligned in three columns**: `[H:100%]`,
+     * `[H: 93%]`, `[H:  9%]`. The last went unread, and a two-row listing fell
+     * to one, which reads as no party at all — so at 81/825 skinny was no
+     * longer following Fatty, and the follower's guard against running did not
+     * hold (2026-10-02). He walked into the room the giants were in and died.
      *
      * **The rank is required, and `assemble` is why.** It was optional on the
      * reading that MajorMUD prints an empty one — but every single row in the
