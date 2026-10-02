@@ -3361,6 +3361,36 @@ describe('fleeing outright', () => {
     expect(notices.some((notice) => /Running \w+:|Fleeing to/.test(notice))).toBe(false);
   });
 
+  /*
+   * The player, 2026-10-02: a follower never runs from the party for its
+   * health. Skinny, following Fatty, walked out at 52/825 and sys goto'd.
+   */
+  it('never flees from the leader it follows', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      fleeing(),
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'sys-status'
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('You are following Fatty.\r\n');
+    await until(() => manager!.character.party.following === 'Fatty');
+    socket.write('Rat Cellar\r\nObvious exits: north, south\r\n');
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=15]:\r\n');
+
+    await until(() =>
+      notices.some((notice) => /Fatty is leading the party and decides/.test(notice))
+    );
+    expect(seen()).not.toMatch(/\b[nsew]\r\n|sys goto/);
+  });
+
   it('never fires with no destination configured', async () => {
     const { sink, notices } = collect();
     manager = new SessionManager(sink);

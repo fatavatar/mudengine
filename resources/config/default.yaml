@@ -2047,6 +2047,8 @@ automation:
     # retreat's belowHealth and above hangUp's. The fight is broken off the
     # way a retreat breaks it; once it is over, this sends `sys goto` to
     # `destination` instead of walking. Empty `destination` never sends it.
+    # A character following a leader never flees, nor retreats: it stays with
+    # the party, and the leader decides.
     fleeGoto:
       enabled: false
       belowHealth: 0.2

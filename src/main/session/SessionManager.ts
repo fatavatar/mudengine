@@ -8012,7 +8012,11 @@ export class SessionManager {
      * walks out alone leaves the party in the fight and is not beside it when
      * the leader moves on. MegaMUD skips its whole run check while following
      * (`e2e8` at `0x40e4aa`, before "Running: HP is too low"; megamud.exe,
-     * 2026-10-01). Not the `sys goto` flee, the desperate tier below.
+     * 2026-10-01). The `sys goto` flee too (the player, 2026-10-02: *when
+     * following, never run away from the party when health gets low*): a
+     * cyclops's opening blow took skinny to 52/825, and he walked out on Fatty
+     * and `sys goto`'d to the temple. The hang-up before a round that kills
+     * (`beforeDeath`) is not a run, and stays.
      */
     const leader = state.party.following;
     if (dreaded !== null) {
@@ -8084,11 +8088,12 @@ export class SessionManager {
      * fight and traced; the PvP retreat is its own switch and does not come
      * through here. `mudengine-automation` › *Running away is a direction*.
      *
-     * Not the `sys goto` flee: that is the desperate tier, set below the
-     * retreat's own threshold, and it is not a direction out of the room the
-     * player chose — it is leaving before the character dies in it.
+     * Not the `sys goto` flee, for a character on its own: that is the
+     * desperate tier, set below the retreat's own threshold, and it is not a
+     * direction out of the room the player chose — it is leaving before the
+     * character dies in it. A follower stays with the party even so.
      */
-    if (!fleeing && leader !== null) return this.stayPut(FOLLOWING, why, now, leader);
+    if (leader !== null) return this.stayPut(FOLLOWING, why, now, leader);
     if (!fleeing && !this.goingSomewhere()) return this.stayPut(STAYING, why, now, null);
 
     this.lastAskedToEscape = now;
