@@ -7049,6 +7049,11 @@ function theTuningBlockGainedKeys(
     addKey('combat', 'fledLevels', danger.fledLevels);
     addKey('combat', 'fledForgetMs', danger.fledForgetMs);
     addKey('walk', 'sneakGiveUp', DEFAULT_INTERNAL.tuning.walk.sneakGiveUp);
+    /*
+     * The `st` a condition is checked with (2026-10-01): the sheet lists what
+     * is still on, so a condition whose ending was never said is let go.
+     */
+    addKey('spells', 'conditionSheetMs', DEFAULT_INTERNAL.tuning.spells.conditionSheetMs);
 
     /** A key this build no longer reads, taken out rather than left to mean nothing. */
     const dropKey = (group: string, key: string): void => {

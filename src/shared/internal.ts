@@ -729,6 +729,16 @@ const TUNING_DEFAULTS = {
      */
     sheetAskMs: 30_000,
     /**
+     * How often an `st` is asked for while a condition is on — an affliction
+     * flagged or a message-table row held (2026-10-01). The sheet prints every
+     * timed effect on the character (`StatCommand.cs:50`), so it is the ground
+     * truth on whether one is still on. Measured that day: blindness made
+     * skinny fumble, the `fumble` row held his lap for a wear-off blindness
+     * never sends, and the walk stood still for ten minutes after `site` had
+     * cured him. Not below `sheetAskMs`, which floors every ask.
+     */
+    conditionSheetMs: 30_000,
+    /**
      * The longest a sentence nothing recognised may wait for a stat sheet and
      * still have the sheet's *silence* count against it (todo 00). The sheet
      * carries every lasting effect's own landing line, so one asked for after

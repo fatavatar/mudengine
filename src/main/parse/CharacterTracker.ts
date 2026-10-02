@@ -86,7 +86,7 @@ import {
   type SpellLore
 } from '../../shared/spell-messages';
 import { castIn, confuses, holdsMovement } from '../../shared/spellcraft';
-import { afflictionOnset, PLAYER_STATUS_HEADER, STATUS_LINE } from './patterns';
+import { afflictionOnset, PLAYER_STATUS_HEADER, sheetLines, STATUS_LINE } from './patterns';
 import type { Discovery } from '../../shared/memory';
 import { NO_FIGHTS, type FightSink } from '../../shared/fights';
 import { NO_BELONGINGS, type BelongingsSink } from '../../shared/belongings';
@@ -2915,16 +2915,7 @@ export class CharacterTracker {
     const up = new Set<string>();
     const timers = new Map<string, number>();
     const printed: string[] = [];
-    const lines: Array<{ sentence: string; seconds: number | null }> = [];
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim();
-      if (line.length === 0) continue;
-      const timed = /^(?<line>.+?)\s*\((?<seconds>\d+)s\)$/.exec(line);
-      lines.push({
-        sentence: timed?.groups?.['line'] ?? line,
-        seconds: timed ? Number(timed.groups?.['seconds']) : null
-      });
-    }
+    const lines = sheetLines(text);
     // First, so the line it names is read below as that spell's own.
     const sentences = lines.map((line) => line.sentence);
     const adopted = this.learnStartFromSheet(sentences, at);
@@ -3193,6 +3184,29 @@ export class CharacterTracker {
     const stated = start === null ? null : afflictionOnset(start);
     if (stated !== null && !conditions.includes(stated)) conditions.push(stated);
     return conditions;
+  }
+
+  /**
+   * The conditions a stat sheet states: a line that is a condition's own
+   * onset, a line that starts a spell causing one, an unnamed effect the lore
+   * suspects of one, and a message row still held for one.
+   */
+  private sheetConditions(text: string, heard: readonly StatedEffect[]): Set<keyof Afflictions> {
+    const stated = new Set<keyof Afflictions>();
+    for (const { sentence } of sheetLines(text)) {
+      const onset = afflictionOnset(sentence);
+      if (onset !== null) stated.add(onset);
+      for (const name of this.spellsBegunBy(sentence)) {
+        for (const condition of this.conditionsOf(name)) stated.add(condition);
+      }
+      const causes = this.spellLore.effects.seen(sentence)?.causes ?? {};
+      for (const condition of AFFLICTIONS)
+        if (causes[condition] !== undefined) stated.add(condition);
+    }
+    for (const [effect, condition] of STATED_AFFLICTIONS) {
+      if (heard.some((entry) => entry.effects.includes(effect))) stated.add(condition);
+    }
+    return stated;
   }
 
   /**
@@ -4297,6 +4311,18 @@ export class CharacterTracker {
               cleared = afflicted(cleared, condition, 'no') ?? cleared;
             }
           }
+        }
+        /*
+         * **And a condition nothing on it states** (2026-10-01). The sheet
+         * prints every timed effect on the character (`StatCommand.cs:50`),
+         * so it is the ground truth, and `Routines.checkConditions` asks for
+         * one while a condition is on. A held message row is left to
+         * `MessageTriggers.settle`, which reads the same sheet next.
+         */
+        const stated = this.sheetConditions(block.text, cleared.heard);
+        for (const condition of AFFLICTIONS) {
+          if (cleared.afflictions[condition] !== 'yes' || stated.has(condition)) continue;
+          cleared = afflicted(cleared, condition, 'no') ?? cleared;
         }
         return {
           ...cleared,

@@ -194,7 +194,7 @@ import {
   ROOM_READ_KEY,
   type CommandName
 } from '../../shared/commands';
-import { STATUS_LINE } from '../parse/patterns';
+import { sheetLines, STATUS_LINE } from '../parse/patterns';
 import {
   figuresOf,
   isFullStatline,
@@ -5296,6 +5296,13 @@ export class SessionManager {
     const roomBefore = this.tracker.current.room;
     const lineChanged = this.tracker.apply(block, undefined, collecting);
     const batchChanged = batch ? this.tracker.apply(batch, batch.rows) : false;
+    // The sheet lists what is still on; a held message it does not is over.
+    if (batch?.type === 'player-status') {
+      this.messages.settle(
+        sheetLines(batch.text).map((line) => line.sentence),
+        batch.at
+      );
+    }
     // After `apply`: the realm confirming a rank this client asked for must
     // already read as held, or it would ask again.
     if (partyChanged) this.routines.checkPartyRank(this.tracker.current);
@@ -5638,8 +5645,16 @@ export class SessionManager {
     // A blessing marked prioritizeOverHeal goes ahead of the heal: the
     // shield a caster dies without outranks the number that is already bad.
     if (!this.isRetreating()) this.blessings.urgent(state);
+    /*
+     * Except the HP regen of a line that would rest, which goes first: it is
+     * part of MegaMUD's rest decision (0x41518a), and a heal ahead of it
+     * spends the round it needs. 2026-10-01: `mahe` went out before every
+     * rest of skinny's, and `rsto` never found a round to be cast in.
+     */
+    const regenFirst =
+      !this.isRetreating() && this.recovery.wouldRest(state) && this.regen.beforeRest(state);
     // Healing before resting: a number a spell can fix now is not one to sit down over.
-    if (!this.isRetreating()) this.heal.onCharacter(state);
+    if (!this.isRetreating() && !regenFirst) this.heal.onCharacter(state);
     // And a potion beside the spell, under the same guard: nothing is drunk
     // on the way out of a room, because a move in flight is the escape.
     if (!this.isRetreating()) this.potions.onCharacter(state);
@@ -5648,10 +5663,10 @@ export class SessionManager {
     // the way out of a room, for the reason above.
     // Regen and the when-full spells are one action a line, as MegaMUD's rest
     // decision is: a line that cast one does not also sit the character down.
-    let regenCast = false;
+    let regenCast = regenFirst;
     if (!this.isRetreating()) {
       this.cures.onCharacter(state);
-      regenCast = this.regen.onCharacter(state);
+      regenCast = this.regen.onCharacter(state) || regenCast;
       this.blessings.onCharacter(state);
       // And the same question asked of the pack rather than the spellbook.
       // After the casts, because a bless this character can cast is the one
@@ -5974,10 +5989,12 @@ export class SessionManager {
     // because its leg is what walks a passage nothing else may act in.
     this.questRunner.onCharacter(state);
     if (this.underTimedSpell(state) !== null) return;
-    this.heal.onCharacter(state);
+    // The HP regen of a line that would rest ahead of the heal, as above.
+    const regenFirst = this.recovery.wouldRest(state) && this.regen.beforeRest(state);
+    if (!regenFirst) this.heal.onCharacter(state);
     this.potions.onCharacter(state);
     this.cures.onCharacter(state);
-    const regenCast = this.regen.onCharacter(state);
+    const regenCast = this.regen.onCharacter(state) || regenFirst;
     const away = this.restAway.consider(state, this.recovery.wouldRest(state));
     if (!regenCast && away !== 'took-over' && this.mayRest()) this.restNow(state);
   }
@@ -7995,7 +8012,11 @@ export class SessionManager {
      * walks out alone leaves the party in the fight and is not beside it when
      * the leader moves on. MegaMUD skips its whole run check while following
      * (`e2e8` at `0x40e4aa`, before "Running: HP is too low"; megamud.exe,
-     * 2026-10-01). Not the `sys goto` flee, the desperate tier below.
+     * 2026-10-01). The `sys goto` flee too (the player, 2026-10-02: *when
+     * following, never run away from the party when health gets low*): a
+     * cyclops's opening blow took skinny to 52/825, and he walked out on Fatty
+     * and `sys goto`'d to the temple. The hang-up before a round that kills
+     * (`beforeDeath`) is not a run, and stays.
      */
     const leader = state.party.following;
     if (dreaded !== null) {
@@ -8067,11 +8088,12 @@ export class SessionManager {
      * fight and traced; the PvP retreat is its own switch and does not come
      * through here. `mudengine-automation` › *Running away is a direction*.
      *
-     * Not the `sys goto` flee: that is the desperate tier, set below the
-     * retreat's own threshold, and it is not a direction out of the room the
-     * player chose — it is leaving before the character dies in it.
+     * Not the `sys goto` flee, for a character on its own: that is the
+     * desperate tier, set below the retreat's own threshold, and it is not a
+     * direction out of the room the player chose — it is leaving before the
+     * character dies in it. A follower stays with the party even so.
      */
-    if (!fleeing && leader !== null) return this.stayPut(FOLLOWING, why, now, leader);
+    if (leader !== null) return this.stayPut(FOLLOWING, why, now, leader);
     if (!fleeing && !this.goingSomewhere()) return this.stayPut(STAYING, why, now, null);
 
     this.lastAskedToEscape = now;

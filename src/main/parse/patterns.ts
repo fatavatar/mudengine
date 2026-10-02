@@ -120,9 +120,13 @@ export const AFFLICTION_ONSETS: ReadonlyArray<{
      * full health until the run was killed.
      *
      * A full stop rather than a bang, which is what the table states.
+     *
+     * `You are Poisoned!` is the sheet's own, printed under the effect's line
+     * while the poison lasts: eight `st` sheets in the logs, every one of them
+     * between a poisoning and its wear-off (2026-09-22, 2026-09-25).
      */
     pattern:
-      /^(?:You are dizzy and disoriented from poison!|Poison burns through your veins!|You feel ill\.)$/
+      /^(?:You are dizzy and disoriented from poison!|Poison burns through your veins!|You feel ill\.|You are Poisoned!)$/
   },
   {
     type: 'user-diseased',
@@ -185,6 +189,25 @@ export const AFFLICTION_ONSETS: ReadonlyArray<{
  * opens on it and by the tracker that has to know one is open.
  */
 export const PLAYER_STATUS_HEADER = /^Name:\s+[\w\s]+\s+Lives\/CP:\s+\d+\/\d+/;
+
+/**
+ * The `st` sheet's lines, each without the countdown Paramud prints after an
+ * active effect (`(42s)`). Read by `CharacterTracker.readSheet` and by
+ * `MessageTriggers.settle`, which must strip it the same way.
+ */
+export function sheetLines(text: string): Array<{ sentence: string; seconds: number | null }> {
+  const lines: Array<{ sentence: string; seconds: number | null }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const timed = /^(?<line>.+?)\s*\((?<seconds>\d+)s\)$/.exec(line);
+    lines.push({
+      sentence: timed?.groups?.['line'] ?? line,
+      seconds: timed ? Number(timed.groups?.['seconds']) : null
+    });
+  }
+  return lines;
+}
 
 /** Which condition a sentence announces the onset of, or null for any other. */
 export function afflictionOnset(sentence: string): keyof Afflictions | null {
@@ -2199,7 +2222,7 @@ export interface BatchRule {
  * an absent field is usually a shape the server printed differently.
  */
 const PARTY_ROWS: RegExp[] = [
-  /^\s*(?<name>[A-Z][\w'-]*)(?: (?<last>[A-Z][\w'-]*))?\s*\((?<class>[\w ]+)\)\s*(?:\[(?<manaType>M|K):\s?(?<mana>\d+)%\]\s*)?\[H:\s?(?<health>\d+)%\]\s*(?<flag>[A-Za-z])?\s*-\s*(?<rank>\w+)\s*$/,
+  /^\s*(?<name>[A-Z][\w'-]*)(?: (?<last>[A-Z][\w'-]*))?\s*\((?<class>[\w ]+)\)\s*(?:\[(?<manaType>M|K):\s*(?<mana>\d+)%\]\s*)?\[H:\s*(?<health>\d+)%\]\s*(?<flag>[A-Za-z])?\s*-\s*(?<rank>\w+)\s*$/,
   /^\s*(?<name>[A-Z][\w'-]*)(?: (?<last>[A-Z][\w'-]*))?\s*\((?<class>[\w ]+)\)\s*\[(?<invited>Invited)\]\s*$/
 ];
 
@@ -2613,6 +2636,12 @@ export const BATCH_RULES: BatchRule[] = [
      * (live, 2026-08-27). The letter is glued to the bracket or spaced off it
      * depending on the realm, and its meanings are decided in `partyActivity`,
      * not here.
+     *
+     * **The percentages are right-aligned in three columns**: `[H:100%]`,
+     * `[H: 93%]`, `[H:  9%]`. The last went unread, and a two-row listing fell
+     * to one, which reads as no party at all — so at 81/825 skinny was no
+     * longer following Fatty, and the follower's guard against running did not
+     * hold (2026-10-02). He walked into the room the giants were in and died.
      *
      * **The rank is required, and `assemble` is why.** It was optional on the
      * reading that MajorMUD prints an empty one — but every single row in the

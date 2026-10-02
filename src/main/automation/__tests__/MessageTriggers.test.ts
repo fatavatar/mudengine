@@ -190,6 +190,43 @@ describe('effects', () => {
     expect(messages.effects(10 * 60_000 + 1)).toEqual([]);
   });
 
+  /*
+   * 2026-10-01: blindness made skinny fumble, and the `fumble` row held his
+   * lap for confusion's wear-off, which blindness never sends. The sheet is
+   * what says it is over: it reprints what is on, and a fumble is not.
+   */
+  it('lets go of a held row a stat sheet does not reprint', () => {
+    messages.load([
+      confusion,
+      row({
+        name: 'fumble',
+        match: 'You fumble in confusion',
+        endsWith: 'The effects of confusion wear off',
+        effects: ['confused', 'action-failed'],
+        action: 'wait'
+      }),
+      row({ name: 'weak', match: 'You feel weak', endsWith: 'You feel strong', action: 'rest-hp' })
+    ]);
+    messages.onLine('You are confused!', false, false, 1_000);
+    messages.onLine('You fumble in confusion!', false, false, 2_000);
+    messages.onLine('You feel weak', false, false, 3_000);
+    // The fumble and the rest started after this sheet, so it says nothing of them.
+    messages.settle(['Name: Skinny Fatterson', 'You are confused!'], 1_500, 4_000);
+    expect(messages.effects(4_000).map((entry) => entry.name)).toEqual([
+      'confusion',
+      'fumble',
+      'weak'
+    ]);
+
+    messages.settle(['Name: Skinny Fatterson', 'You are confused!'], 4_000, 4_000);
+    expect(messages.effects(4_000).map((entry) => entry.name)).toEqual(['confusion', 'weak']);
+    expect(messages.firings.at(-1)).toEqual({
+      at: 4_000,
+      rule: 'Message: fumble',
+      commands: ['Confused, Last action failed over']
+    });
+  });
+
   it('does not hold a sentence with no ending, or one that means nothing', () => {
     messages.load([
       row({ match: 'You retch uncontrollably!', effects: ['action-failed'] }),

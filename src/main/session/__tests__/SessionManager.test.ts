@@ -3361,6 +3361,36 @@ describe('fleeing outright', () => {
     expect(notices.some((notice) => /Running \w+:|Fleeing to/.test(notice))).toBe(false);
   });
 
+  /*
+   * The player, 2026-10-02: a follower never runs from the party for its
+   * health. Skinny, following Fatty, walked out at 52/825 and sys goto'd.
+   */
+  it('never flees from the leader it follows', async () => {
+    const { sink, notices } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      fleeing(),
+      DEFAULT_CONFIG.connection.login,
+      DEFAULT_CONFIG.ui.rewrites,
+      'sys-status'
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const seen = wire(socket);
+    socket.write('Health: 100/100 [100%]\r\n');
+    socket.write('You are following Fatty.\r\n');
+    await until(() => manager!.character.party.following === 'Fatty');
+    socket.write('Rat Cellar\r\nObvious exits: north, south\r\n');
+    socket.write('*Combat Engaged*\r\n');
+    await until(() => manager!.character.inCombat);
+    socket.write('[HP=15]:\r\n');
+
+    await until(() =>
+      notices.some((notice) => /Fatty is leading the party and decides/.test(notice))
+    );
+    expect(seen()).not.toMatch(/\b[nsew]\r\n|sys goto/);
+  });
+
   it('never fires with no destination configured', async () => {
     const { sink, notices } = collect();
     manager = new SessionManager(sink);
@@ -3473,6 +3503,55 @@ describe("answering the realm's messages", () => {
   });
 });
 
+/*
+ * 2026-10-01: skinny's `mahe` (healBelow 0.9) went out ahead of every rest
+ * and spent the round, and the HP regen was passed over rather than waited
+ * for, so he sat down without `rsto` every time. The regen is part of the
+ * rest decision, as MegaMUD's is (0x41518a), and goes first.
+ */
+describe('the HP regen ahead of the heal, on a line that rests', () => {
+  it('casts the regen before the heal, and the rest after it', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(
+      {
+        ...DEFAULT_CONFIG.automation,
+        enabled: true,
+        idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+        onEnterRealm: [],
+        rules: [],
+        health: { ...DEFAULT_CONFIG.automation.health, restBelow: 0.8, restTo: 0.9 },
+        spells: {
+          ...DEFAULT_CONFIG.automation.spells,
+          heal: 'mahe',
+          healBelow: 0.9,
+          healTo: 0.9,
+          minMana: 0.15,
+          regen: { ...DEFAULT_CONFIG.automation.spells.regen, hp: 'rsto' }
+        }
+      },
+      DEFAULT_CONFIG.connection.login
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const sent = (): string[] =>
+      Buffer.concat(chunks)
+        .toString('latin1')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    socket.write('[HP=588/805,MA=412/772]:\r\n');
+    await until(() => sent().includes('rsto'));
+    socket.write('[HP=588/805,MA=362/772]:\r\n');
+    await until(() => sent().includes('rest'));
+    const commands = sent().filter((line) => ['rsto', 'mahe', 'rest'].includes(line));
+    expect(commands[0]).toBe('rsto');
+    expect(commands.indexOf('rest')).toBeGreaterThan(0);
+  });
+});
+
 describe("acting on the realm's messages", () => {
   const acting: AutomationConfig = {
     ...DEFAULT_CONFIG.automation,
@@ -3515,6 +3594,63 @@ describe("acting on the realm's messages", () => {
     socket.write('You work yourself free.\r\n');
     await until(() => manager!.character.heard.length === 0);
     expect(manager.character.afflictions.held).toBe('no');
+  });
+
+  /*
+   * 2026-10-01: an altar left skinny blind and dizzy, his next command came
+   * back *You fumble in confusion!*, and the `fumble` row held the lap for a
+   * confusion wear-off that blindness never sends. The sheet is the ground
+   * truth: what it reprints is still on, and a fumble is not an effect.
+   */
+  it('takes off at a stat sheet what the sheet no longer lists, and keeps what it does', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink);
+    manager.configure(acting, DEFAULT_CONFIG.connection.login);
+    manager.configureRealm({
+      ...NO_REALM,
+      messages: [
+        {
+          ...blankTrigger(),
+          name: 'fumble',
+          match: 'You fumble in confusion',
+          endsWith: 'The effects of confusion wear off',
+          effects: ['confused', 'action-failed'],
+          action: 'wait'
+        },
+        {
+          ...blankTrigger(),
+          name: 'net',
+          match: 'You are entangled in a net!',
+          endsWith: 'You work yourself free.',
+          effects: ['held'],
+          action: 'wait'
+        }
+      ]
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    socket.write('[HP=805/MA=772]:You fumble in confusion!\r\nYou are entangled in a net!\r\n');
+    await until(() => manager!.character.heard.length === 2);
+
+    socket.write(
+      [
+        '[HP=805/MA=772]:',
+        'Name: Skinny Fatterson                 Lives/CP:      9/0',
+        'Race: Wood-Elf    Exp: 4273359714      Perception:    239',
+        'Class: Necrolyte  Level: 66            Stealth:       136',
+        'Hits:   805/805   Armour Class: 122/4  Thievery:        0',
+        'Mana: * 772/772   Spellcasting: 425    Traps:           0',
+        '                                       Picklocks:       0',
+        'Strength:  100    Agility: 100         Tracking:        0',
+        'Intellect: 90     Health:  130         Martial Arts:   68',
+        'Willpower: 150    Charm:   85          MagicRes:      145',
+        'You are entangled in a net!',
+        '[HP=805/MA=772]:'
+      ].join('\r\n') + '\r\n'
+    );
+    await until(() => manager!.character.heard.length === 1);
+    expect(manager.character.heard[0]).toMatchObject({ name: 'net' });
+    expect(manager.character.afflictions.held).toBe('yes');
   });
 
   it('ends the fight when a row says the realm has', async () => {

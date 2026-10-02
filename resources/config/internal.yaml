@@ -618,6 +618,10 @@ tuning:
     # The least often an `st` is asked for to settle a buff ending nothing
     # recognised.
     sheetAskMs: 30000
+    # How often an `st` is asked for while a condition is on (an affliction, or
+    # a message held until it wears off). Whatever the sheet no longer lists is
+    # over.
+    conditionSheetMs: 30000
     # The longest a sentence nothing recognised may wait for an `st` and still
     # have the sheet's silence count as "not a lasting effect". Past this the
     # candidate is dropped unresolved instead.

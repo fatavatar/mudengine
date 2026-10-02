@@ -2736,6 +2736,25 @@ describe('the party this character travels with', () => {
     expect(soul?.activity).toEqual({ state: 'resting' });
   });
 
+  /*
+   * 2026-10-02: under 10% the server pads the figure to three columns, the
+   * row went unread, and the listing of two read as no party — so the
+   * follower stopped following at the one moment it mattered.
+   */
+  it('reads a single-figure percentage, padded to three columns', () => {
+    const { tracker, feed } = feeder();
+    feed('[HP=81/MA=647]:');
+    feed('You are following Fatty.');
+    feed('The following people are in your travel party:');
+    feed('  Fatty Fatterson                (Skald)      [M: 59%] [H: 93%]   - Frontrank');
+    feed('  Skinny Fatterson               (Necrolyte)  [M:  8%] [H:  9%]   - Backrank');
+    feed('[HP=81/MA=647]:');
+    expect(tracker.current.party.following).toBe('Fatty');
+    const skinny = tracker.current.party.members[1];
+    expect(skinny?.health).toBeCloseTo(0.09);
+    expect(skinny?.mana).toBeCloseTo(0.08);
+  });
+
   /* A letter nothing has established keeps its letter and claims nothing. */
   it('keeps a flag it cannot name rather than expanding it', () => {
     const { tracker, feed } = feeder();
@@ -9610,6 +9629,29 @@ describe('the spell message table and what it teaches', () => {
     sheet().forEach((line, row) => feed(line, row === 0 ? 1_000 : 1));
     expect(Object.keys(durations)).toEqual(['strange glow']);
     expect(durations['strange glow']).toBeCloseTo(90, 0);
+  });
+
+  /*
+   * The sheet is the ground truth on a condition (2026-10-01): it prints every
+   * timed effect, so one it does not state is over, whatever ending was missed.
+   */
+  it('clears a condition a stat sheet no longer states, and keeps one it does', () => {
+    const cured = play(['[HP=334/KAI=2]:', 'Poison burns through your veins!', ...sheet()]);
+    expect(cured.current.afflictions.poisoned).toBe('no');
+
+    // The sheet's own poison line, and the effect's, as on 2026-09-22.
+    const still = play([
+      '[HP=334/KAI=2]:',
+      'Poison burns through your veins!',
+      ...sheet('You feel ill.', 'You are Poisoned!')
+    ]);
+    expect(still.current.afflictions.poisoned).toBe('yes');
+    const named = play([
+      '[HP=334/KAI=2]:',
+      'Poison burns through your veins!',
+      ...sheet('You are Poisoned!')
+    ]);
+    expect(named.current.afflictions.poisoned).toBe('yes');
   });
 });
 

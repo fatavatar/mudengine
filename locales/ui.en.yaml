@@ -5428,6 +5428,7 @@ automation:
       have all changed
     reasonStatsTrained: the stats were retrained, so the sheet has changed
     reasonBuffEnding: a sentence nothing recognised may have ended a buff; the stat sheet says which
+    reasonConditionCheck: a condition is on; the stat sheet says whether it still is
     reasonStatline: setting the status line, so every prompt carries the maxima, the experience and the purse
     reasonProfile: reading which status line the realm holds
     spellbookCorrected: Asked for the wrong book — the realm says to list {book}, so asking that instead.
