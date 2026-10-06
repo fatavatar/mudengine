@@ -701,13 +701,13 @@ export class Routines {
    * entry probe's own key for the command, so an `st` already queued is
    * this ask rather than a second one. Unconditional within
    * `routines.enabled`, as the level-up `exp` is: the client already asks
-   * for this sheet on the way in.
+   * for this sheet on the way in. Returns whether a sheet is coming.
    */
   askSheet(
     now: number = Date.now(),
     reason: string = t('automation.routines.reasonBuffEnding')
-  ): void {
-    if (!this.config.enabled) return;
+  ): boolean {
+    if (!this.config.enabled) return false;
     const floor = tuning().spells.sheetAskMs;
     if (this.sheetAskedAt !== null && now - this.sheetAskedAt < floor) {
       /*
@@ -725,7 +725,7 @@ export class Routines {
         );
         this.sheetTimer.unref?.();
       }
-      return;
+      return true;
     }
     this.sheetAskedAt = now;
     this.queue.enqueue({
@@ -734,6 +734,7 @@ export class Routines {
       coalesceKey: 'probe:st',
       reason
     });
+    return true;
   }
 
   /**

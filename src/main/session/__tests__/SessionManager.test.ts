@@ -4629,6 +4629,57 @@ describe('a follower asking its leader to wait', () => {
   });
 });
 
+/* Skinny, 2026-10-04: `{HP=936/916,…}` to Fatty, who could not read it, fifty-two times. */
+describe('answering @health over a stale maximum', () => {
+  it('reads the stat sheet first, and answers with its maximum', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      remotes: {
+        ...DEFAULT_CONFIG.automation.remotes,
+        enabled: true,
+        players: { soul: { allow: ['health'], deny: [] } }
+      }
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const wire = (): string => Buffer.concat(chunks).toString('latin1');
+
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   900/916   Armour Class: 112/4  Thievery:        0\r\n' +
+        '[HP=900/MA=500]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => manager!.character.vitals.hpMax === 916);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = wire()
+      .split('\r\n')
+      .filter((line) => line === 'st').length;
+    socket.write('[HP=936/MA=500]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.vitals.hp === 936);
+    socket.write('Soul telepaths: @health\r\n[HP=936/MA=500]:' + PROMPT_REPAINT);
+    await until(
+      () =>
+        wire()
+          .split('\r\n')
+          .filter((line) => line === 'st').length > before
+    );
+    expect(wire()).not.toContain('/Soul {');
+
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   936/956   Armour Class: 112/4  Thievery:        0\r\n' +
+        '[HP=936/MA=500]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => wire().includes('/Soul {HP=936/956'));
+  });
+});
+
 describe('a follower pacing the loop', () => {
   /** A manager whose remotes answer Soul and Yang the pacing pair. */
   function pacedManager(

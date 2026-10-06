@@ -258,6 +258,11 @@ export interface RemoteEvents {
    * waits on.
    */
   comeBack?(from: string, map: number, room: number): boolean;
+  /**
+   * The stat sheet, asked for because a figure is over its cached maximum.
+   * Returns whether one is coming — false where nothing will ask for it.
+   */
+  sheet?(): boolean;
 }
 
 /**
@@ -292,6 +297,11 @@ export class Remotes {
   private seen = false;
   /** The leader a `join` went to (`joinKey`), until the next prompt, which follows its answer. */
   private joinSentTo: string | null = null;
+  /**
+   * `@health` answers held for the stat sheet, by asker: who to tell and on
+   * which channel. See `answerHealth`.
+   */
+  private readonly healthOwed = new Map<string, { who: string; prefix: string }>();
   /** The last command a leader's `@party` had this character run, and when. See `ranForParty`. */
   private partyRan: { command: string; at: number } | null = null;
 
@@ -561,6 +571,7 @@ export class Remotes {
    */
   onCharacter(state: CharacterState): void {
     if (this.config.enabled && this.config.remotes.enabled) this.sweep(Date.now());
+    if (this.healthOwed.size > 0 && !overMax(state)) this.payHealth(state);
     this.askForHeal(state);
     this.askForListing(state);
     // Independent of `remotes.enabled` on purpose: this never answers a
@@ -842,6 +853,7 @@ export class Remotes {
   reset(): void {
     this.waitingFor = null;
     this.asked.clear();
+    this.healthOwed.clear();
     this.askedForHealAt = null;
     this.wantsHeal = false;
     this.seen = false;
@@ -1034,18 +1046,9 @@ export class Remotes {
     }
 
     switch (command.name) {
-      case 'health': {
-        const { hp, hpMax, mana, manaMax } = state.vitals;
-        const body = formatVitals(hp, hpMax, mana, manaMax);
-        if (body === null) {
-          // No maximum has arrived, so there is no pair to state. Saying so
-          // beats sending a number that reads as full health.
-          this.events.notice?.(t('automation.remotes.healthUnknown', { from }));
-          return;
-        }
-        this.reply(from, body, prefix);
+      case 'health':
+        this.answerHealth(from, prefix, state);
         return;
-      }
 
       /*
        * The questions, each in the shape MegaMUD 2.1 answered it (captures/215)
@@ -1484,6 +1487,44 @@ export class Remotes {
     });
   }
 
+  /**
+   * `@health`, answered from the prompt's figures and the sheet's maximums.
+   *
+   * **Over its maximum, the sheet first.** The prompt says `HP=936` and
+   * nothing about the maximum, which is the last stat sheet's: a buff that
+   * raised it since leaves `{HP=936/916,…}`, which MegaMUD does not read —
+   * so Fatty asked again, and was told the same thing fifty-two times
+   * (skinny, 2026-10-04). The answer is held, `st` is asked for, and it goes
+   * out once the figures fit their maximums or the sheet has landed.
+   */
+  private answerHealth(from: string, prefix: string, state: CharacterState): void {
+    const body = healthBody(state);
+    if (body === null) {
+      // No maximum has arrived, so there is no pair to state. Saying so
+      // beats sending a number that reads as full health.
+      this.events.notice?.(t('automation.remotes.healthUnknown', { from }));
+      return;
+    }
+    if (overMax(state) && this.events.sheet?.() === true) {
+      this.healthOwed.set(playerKey(from), { who: from, prefix });
+      return;
+    }
+    this.reply(from, body, prefix);
+  }
+
+  /**
+   * The held `@health` answers, sent. On the sheet itself as well as on the
+   * figures fitting, so an answer never waits on a maximum the sheet did not
+   * move.
+   */
+  payHealth(state: CharacterState): void {
+    const body = healthBody(state);
+    if (body !== null) {
+      for (const { who, prefix } of this.healthOwed.values()) this.reply(who, body, prefix);
+    }
+    this.healthOwed.clear();
+  }
+
   /** Replies with a formatted answer, or says locally why there is none yet. */
   private say(from: string, command: RemoteCall, body: string | null, prefix: string): void {
     if (body === null) {
@@ -1492,6 +1533,27 @@ export class Remotes {
     }
     this.reply(from, body, prefix);
   }
+}
+
+/** Whether a prompt figure is over the maximum the last stat sheet stated. */
+function overMax(state: CharacterState): boolean {
+  const { hp, hpMax, mana, manaMax } = state.vitals;
+  return (
+    (hp !== null && hpMax !== null && hp > hpMax) ||
+    (mana !== null && manaMax !== null && mana > manaMax)
+  );
+}
+
+/**
+ * The `@health` body, with no figure over its maximum: one that still is,
+ * with no sheet to say otherwise, is at least that maximum, and a pair
+ * MegaMUD can read beats one it asks again about.
+ */
+function healthBody(state: CharacterState): string | null {
+  const { hp, hpMax, mana, manaMax } = state.vitals;
+  const top = (now: number | null, max: number | null): number | null =>
+    now === null || max === null ? max : Math.max(now, max);
+  return formatVitals(hp, top(hp, hpMax), mana, top(mana, manaMax));
 }
 
 /** Everybody besides this character who has joined its party, by name. */

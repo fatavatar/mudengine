@@ -2643,6 +2643,8 @@ export class SessionManager {
     });
     this.remotes = new Remotes(automation, this.queue, {
       notice: (message) => this.sink.notice(message),
+      // A `@health` answer whose figure is over the cached maximum waits for this.
+      sheet: () => this.routines.askSheet(Date.now(), t('automation.remotes.reasonHealthSheet')),
       // What the character is doing, for `@status`, at the moment it is asked.
       progress: () => ({ walk: this.walker.progress, loop: this.loops.progress }),
       /*
@@ -5307,6 +5309,8 @@ export class SessionManager {
         sheetLines(batch.text).map((line) => line.sentence),
         batch.at
       );
+      // And states the maximums a held `@health` answer was waiting on.
+      this.remotes.payHealth(this.tracker.current);
     }
     // After `apply`: the realm confirming a rank this client asked for must
     // already read as held, or it would ask again.
