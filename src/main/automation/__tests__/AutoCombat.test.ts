@@ -210,6 +210,9 @@ describe('opening a fight', () => {
     auto.onCharacter(rat);
     drain();
     expect(sent).toEqual(['a giant rat']);
+    // Still the fight's kit until the fight opens (skinny, 2026-10-03).
+    expect(auto.awaitingKit).toBe(true);
+    auto.onCharacter({ ...rat, inCombat: true });
     expect(auto.awaitingKit).toBe(false);
   });
 

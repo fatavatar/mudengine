@@ -5355,6 +5355,7 @@ automation:
     comebackUnreadable: '{from} sent @comeback-room without a readable map/room address, so nothing
       was walked.'
     reasonAnswering: answering {name}
+    reasonHealthSheet: a @health answer is over the stat sheet's maximum; reading the sheet first
     reasonAsking: asking {who} {body}
     reasonAskingHeal: 'asking the party for a heal (@heal): health is at {percent}%'
     reasonAutoInvite: 'Auto Invite when seen: {name} is in the room'

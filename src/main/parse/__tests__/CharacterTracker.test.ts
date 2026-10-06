@@ -7495,6 +7495,22 @@ describe('lives, and the word for the load', () => {
     expect(tracker.current.vitals.manaMax).toBe(321);
   });
 
+  /*
+   * Skinny, 2026-10-06: the last sheet said 810, a buff wore off, and `med`
+   * at `MA=760` was refused 131 times until the next sheet said 760.
+   */
+  it('takes a refused meditation as mana at its maximum, and asks for the sheet', () => {
+    const tracker = play([
+      'Name:   Skinny             Lives/CP: 9/6',
+      'Hits:   998/998    Armour Class: 12/3   Thievery:    5',
+      'Mana: * 792/810   Spellcasting: 407    Traps:           0',
+      '[HP=998/MA=760]:',
+      'Meditation will not help at this time.'
+    ]);
+    expect(tracker.current.vitals.manaMax).toBe(760);
+    expect(tracker.takeSheetRequest()).toBe(true);
+  });
+
   /* An unknown plus two is not two. */
   it('does not count a gain before any sheet has stated a total', () => {
     const tracker = play(['[HP=98/MA=50]:', 'You gain 2 additional lives.']);

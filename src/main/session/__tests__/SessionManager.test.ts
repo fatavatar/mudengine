@@ -3552,6 +3552,118 @@ describe('the HP regen ahead of the heal, on a line that rests', () => {
   });
 });
 
+/*
+ * 2026-10-03, skinny: sitting in his meditating kit when a guard captain came
+ * in. The fight's kit went on, `dfur guard captain` went out, and the status
+ * line before `*Combat Engaged*` read as no fight and still seated — so the
+ * sitting kit went back on, and the fight's again after it.
+ */
+describe('the kit for a fight about to open', () => {
+  it('stays on from the attack to the fight, not swapped back for the seat', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm: [],
+      rules: [],
+      combat: { ...DEFAULT_CONFIG.automation.combat, enabled: true, engage: 'all' },
+      gear: {
+        ...DEFAULT_CONFIG.automation.gear,
+        enabled: true,
+        sets: [
+          { name: 'Fighting', when: 'always', mob: '', wear: ['firestone pendant'] },
+          { name: 'Meditating', when: 'meditating', mob: '', wear: ['jeweled moonstone medallion'] }
+        ]
+      }
+    });
+    // Both on the neck, as the realm's item table has them.
+    vi.spyOn(manager as unknown as { gearSlotOf: () => string }, 'gearSlotOf').mockReturnValue(
+      'Neck'
+    );
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const wire = (): string => Buffer.concat(chunks).toString('latin1');
+    const medallion = (): number => wire().split('wear jeweled moonstone medallion').length - 1;
+
+    socket.write(
+      '[HP=900/MA=700]:i\r\n' +
+        'You are carrying jeweled moonstone medallion (Neck), firestone pendant.\r\n' +
+        'Wealth: 0 copper farthings\r\n' +
+        'Encumbrance: 100/4128 - None [2%]\r\n' +
+        '[HP=900/MA=700]: (Meditating) \r\n'
+    );
+    await until(() => manager!.character.inventory.listedAt !== null);
+    socket.write(
+      'Black Fortress\r\nAlso here: guard captain.\r\nObvious exits: north\r\n' +
+        '[HP=900/MA=700]: (Meditating) \r\n'
+    );
+    await until(() => wire().includes('wear firestone pendant'));
+    socket.write(
+      'You have removed jeweled moonstone medallion.\r\nYou are now wearing firestone pendant.\r\n' +
+        '[HP=900/MA=700]: (Meditating) \r\n'
+    );
+    await until(() => /guard captain\r\n/.test(wire()));
+    const before = medallion();
+    // The line between the attack and its answer.
+    socket.write('[HP=900/MA=700]: (Meditating) \r\n');
+    await settled(900);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(medallion()).toBe(before);
+    expect(wire().split('wear firestone pendant')).toHaveLength(2);
+  });
+});
+
+/* MegaMUD's rest decision is not reached beside a monster it would attack (`0x472830`). */
+describe('resting beside a fight', () => {
+  it('does not sit down beside a monster it is about to attack', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm: [],
+      rules: [],
+      health: { ...DEFAULT_CONFIG.automation.health, restBelow: 0.8, restTo: 0.9 },
+      combat: { ...DEFAULT_CONFIG.automation.combat, enabled: true, engage: 'all' },
+      // A kit to wait for, as skinny's fight waited for his: the rest got in
+      // while it did.
+      gear: {
+        ...DEFAULT_CONFIG.automation.gear,
+        enabled: true,
+        sets: [{ name: 'Fighting', when: 'always', mob: '', wear: ['firestone pendant'] }]
+      }
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const wire = (): string => Buffer.concat(chunks).toString('latin1');
+
+    socket.write(
+      '[HP=1000/1000,MA=700/700]:i\r\n' +
+        'You are carrying firestone pendant.\r\n' +
+        'Wealth: 0 copper farthings\r\n' +
+        'Encumbrance: 100/4128 - None [2%]\r\n' +
+        '[HP=1000/1000,MA=700/700]:\r\n'
+    );
+    await until(() => manager!.character.inventory.listedAt !== null);
+    socket.write(
+      'Black Fortress\r\nAlso here: guard captain.\r\nObvious exits: north\r\n' +
+        '[HP=500/1000,MA=700/700]:\r\n'
+    );
+    await until(() => wire().includes('wear firestone pendant'));
+    socket.write('[HP=500/1000,MA=700/700]:\r\n');
+    await settled(500);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(wire()).not.toMatch(/(^|\n)rest\r\n/);
+    socket.write('You are now wearing firestone pendant.\r\n[HP=500/1000,MA=700/700]:\r\n');
+    await until(() => /guard captain\r\n/.test(wire()));
+  });
+});
+
 describe("acting on the realm's messages", () => {
   const acting: AutomationConfig = {
     ...DEFAULT_CONFIG.automation,
@@ -4514,6 +4626,99 @@ describe('a follower asking its leader to wait', () => {
     await until(() => wire().includes('/Soul @wait'));
     socket.write('You can move again!\r\n[HP=100/MA=50]:' + PROMPT_REPAINT);
     await until(() => wire().includes('/Soul @ok'));
+  });
+});
+
+/* Skinny, 2026-10-06: `med` at full mana, refused 131 times, toward a maximum a buff had taken. */
+describe('meditating toward a stale maximum', () => {
+  it('stops at the first refusal, and reads the sheet', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm: [],
+      rules: [],
+      health: { ...DEFAULT_CONFIG.automation.health, meditateBelow: 0.95 }
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const lines = (): string[] => Buffer.concat(chunks).toString('latin1').split('\r\n');
+    const count = (command: string): number => lines().filter((line) => line === command).length;
+
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   998/998   Armour Class: 112/4  Thievery:        0\r\n' +
+        'Mana: * 792/810   Spellcasting: 407    Traps:           0\r\n' +
+        '[HP=998/MA=792]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => manager!.character.vitals.manaMax === 810);
+    socket.write('[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await until(() => count('med') === 1);
+    const sheets = count('st');
+    socket.write('Meditation will not help at this time.\r\n[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.vitals.manaMax === 760);
+    await until(() => count('st') > sheets);
+    socket.write('[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await settled(998);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    socket.write('[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(count('med')).toBe(1);
+  });
+});
+
+/* Skinny, 2026-10-04: `{HP=936/916,…}` to Fatty, who could not read it, fifty-two times. */
+describe('answering @health over a stale maximum', () => {
+  it('reads the stat sheet first, and answers with its maximum', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      remotes: {
+        ...DEFAULT_CONFIG.automation.remotes,
+        enabled: true,
+        players: { soul: { allow: ['health'], deny: [] } }
+      }
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const wire = (): string => Buffer.concat(chunks).toString('latin1');
+
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   900/916   Armour Class: 112/4  Thievery:        0\r\n' +
+        '[HP=900/MA=500]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => manager!.character.vitals.hpMax === 916);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = wire()
+      .split('\r\n')
+      .filter((line) => line === 'st').length;
+    socket.write('[HP=936/MA=500]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.vitals.hp === 936);
+    socket.write('Soul telepaths: @health\r\n[HP=936/MA=500]:' + PROMPT_REPAINT);
+    await until(
+      () =>
+        wire()
+          .split('\r\n')
+          .filter((line) => line === 'st').length > before
+    );
+    expect(wire()).not.toContain('/Soul {');
+
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   936/956   Armour Class: 112/4  Thievery:        0\r\n' +
+        '[HP=936/MA=500]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => wire().includes('/Soul {HP=936/956'));
   });
 });
 

@@ -4092,6 +4092,21 @@ export class CharacterTracker {
         };
 
       /*
+       * `med` refused at full mana: the realm saying the prompt's figure is
+       * the maximum. The last sheet's can be higher — a buff that raised it
+       * has worn off — and meditating toward it was `med` on every status
+       * line, 131 times, until the next sheet (skinny, 2026-10-06). The
+       * figure is taken as the maximum, and a sheet is asked for to say so
+       * in its own words.
+       */
+      case 'meditation-refused': {
+        const { mana, manaMax } = s.vitals;
+        if (mana === null || manaMax === null || mana >= manaMax) return null;
+        this.sheetWanted = true;
+        return { ...s, vitals: { ...s.vitals, manaMax: mana } };
+      }
+
+      /*
        * This character died.
        *
        * The whole of what is done here is *forgetting*: every expectation in

@@ -1884,8 +1884,13 @@ export class SessionManager {
         // cast: the equipment manager's off-round invocation (todo 00).
         round: (state) => this.gear.round(state),
         // The fighting kit before the fight, as a step waits for its kit
-        // (`kitReady` on the walker): a weapon put on ends a fight here.
+        // (`kitReady` on the walker): a weapon put on ends a fight here. And
+        // the seat stood down as the step stands it, because MegaMUD's
+        // post-rest command goes out before an attack as before a move
+        // (`megamud.exe` `0x413c50`): left seated, the line between the
+        // swing and `*Combat Engaged*` dressed for sitting again.
         kitReady: (state) => {
+          this.recovery.stand();
           if (this.tracker.pendingMoves === 0) {
             this.gear.onCharacter(
               state,
@@ -2638,6 +2643,8 @@ export class SessionManager {
     });
     this.remotes = new Remotes(automation, this.queue, {
       notice: (message) => this.sink.notice(message),
+      // A `@health` answer whose figure is over the cached maximum waits for this.
+      sheet: () => this.routines.askSheet(Date.now(), t('automation.remotes.reasonHealthSheet')),
       // What the character is doing, for `@status`, at the moment it is asked.
       progress: () => ({ walk: this.walker.progress, loop: this.loops.progress }),
       /*
@@ -5302,6 +5309,8 @@ export class SessionManager {
         sheetLines(batch.text).map((line) => line.sentence),
         batch.at
       );
+      // And states the maximums a held `@health` answer was waiting on.
+      this.remotes.payHealth(this.tracker.current);
     }
     // After `apply`: the realm confirming a rank this client asked for must
     // already read as held, or it would ask again.
@@ -5825,6 +5834,16 @@ export class SessionManager {
     if (this.roomUnsettled()) return false;
     // A message said not to rest here (`run`): not in this room, for a while.
     if (this.restBarredHere()) return false;
+    /*
+     * Nor beside something about to be fought. MegaMUD does not reach its rest
+     * decision while the room holds a monster it would attack (`megamud.exe`:
+     * `0x472830` counted at `0x40c1d9`, ahead of `0x414300`): skinny's `rest`
+     * a second after a guard captain walked in, the sitting kit with it, and
+     * the fight's kit straight after (2026-10-03). Not where the fight was
+     * turned down for the health this rest is for (`restingFor`), which would
+     * be neither.
+     */
+    if (this.combat.restingFor === null && this.combat.quarry(this.tracker.current)) return false;
     // Under a timed spell the way in cast, sitting down is drowning (todo 104).
     if (this.underTimedSpell(this.tracker.current) !== null) return false;
     // An escape whose answer has not come is a room the character may still

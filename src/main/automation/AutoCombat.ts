@@ -469,9 +469,18 @@ export class AutoCombat {
    * The monster a fight is waiting to open on until the kit is on (`kitReady`),
    * by `mobKey`. Read by the session as part of the kit's situation
    * (`awaitingKit`), so every pass dresses for the fight and not only the one
-   * the swing asked for. Let go when the fight opens, or the monster goes.
+   * the swing asked for. Let go when the fight opens, or the monster goes —
+   * **not when the swing goes out**: the status line between `dfur orc rogue`
+   * and `*Combat Engaged*` read as no fight, put the sitting kit back on, and
+   * the fight's own kit went on again a line later (skinny, 2026-10-03).
    */
   private kitFor: string | null = null;
+  /**
+   * When the fight `kitFor` waits on was asked for, or 0 while it still waits
+   * on the kit. The engage's own expiry bounds it: an attack the server never
+   * answered is not a fight coming.
+   */
+  private kitAsked = 0;
   /**
    * What the fight is repeating: the spell it was engaged with, null for the
    * melee verb, undefined when nothing here knows (no fight, or one this
@@ -767,6 +776,7 @@ export class AutoCombat {
     this.roomSeen = null;
     this.inFlight = null;
     this.kitFor = null;
+    this.kitAsked = 0;
     this.clearRound();
   }
 
@@ -1286,12 +1296,18 @@ export class AutoCombat {
     const hp = state.vitals.hp;
     if (this.owed !== null && hp !== null && hp >= this.owed) this.owed = null;
     this.forgetGone(state);
-    // The monster the kit was going on for has gone: nothing to dress for.
+    // The fight the kit was going on for opened, or its monster has gone, or
+    // the attack went unanswered: nothing left to dress ahead of.
     if (
       this.kitFor !== null &&
-      !state.room.occupants.some((who) => who.kind === 'mob' && mobKey(who.name) === this.kitFor)
+      (state.inCombat ||
+        !state.room.occupants.some(
+          (who) => who.kind === 'mob' && mobKey(who.name) === this.kitFor
+        ) ||
+        (this.kitAsked > 0 && Date.now() - this.kitAsked >= tuning().combat.engageCooldownMs))
     ) {
       this.kitFor = null;
+      this.kitAsked = 0;
     }
     // A new target: what the fight repeats against it is nobody's to say.
     const switching = this.stillSwitching(state);
@@ -2595,15 +2611,20 @@ export class AutoCombat {
     if (asked !== undefined && now - asked < cooldown) return false;
     if (this.state !== null && this.events.kitReady !== undefined) {
       this.kitFor = key;
+      this.kitAsked = 0;
       if (!this.events.kitReady(this.state)) return false;
     }
-    this.kitFor = null;
 
     const opener = this.opener(this.state, target);
     const aimed = this.aimedAt(target);
     const cast = opener === null && aimed !== null ? this.openingCast(aimed, target) : null;
     const verb = opener ?? this.config.attack;
-    if (cast === null && verb.length === 0) return false;
+    if (cast === null && verb.length === 0) {
+      this.kitFor = null;
+      return false;
+    }
+    // Held until the fight opens: see `kitFor`.
+    if (this.kitFor !== null) this.kitAsked = now;
 
     // Past the cooldown an entry answers nothing, so the map holds only what
     // is still deciding something — the room's occupants, at most.

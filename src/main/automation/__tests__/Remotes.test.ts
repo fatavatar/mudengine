@@ -166,6 +166,61 @@ describe('answering @health', () => {
     expect(sent).toEqual([]);
     expect(notices.join(' ')).toContain('no stat sheet');
   });
+
+  /*
+   * Skinny, 2026-10-04: `{HP=936/916,MA=742/742}` to Fatty fifty-two times. The
+   * prompt's figure was over the last sheet's maximum, MegaMUD could not read
+   * the answer, and asked again.
+   */
+  describe('with a figure over the maximum the last sheet stated', () => {
+    const stale = who({
+      vitals: { ...EMPTY_CHARACTER.vitals, hp: 936, hpMax: 916, mana: 742, manaMax: 742 }
+    });
+    const read = who({
+      vitals: { ...EMPTY_CHARACTER.vitals, hp: 936, hpMax: 956, mana: 742, manaMax: 742 }
+    });
+    let sheets: number;
+    const asking = (coming: boolean): Remotes => {
+      sheets = 0;
+      return new Remotes(config, queue, {
+        notice: (m) => notices.push(m),
+        sheet: () => {
+          sheets += 1;
+          return coming;
+        }
+      });
+    };
+
+    it('reads the sheet first, and answers with its maximum', () => {
+      const remotes = asking(true);
+      remotes.onBlock(said('conversation-telepath', 'Soul', '@health'), stale);
+      remotes.onBlock(said('conversation-telepath', 'Soul', '@health'), stale);
+      drain();
+      expect(sheets).toBe(2);
+      expect(sent).toEqual([]);
+      remotes.onCharacter(stale);
+      drain();
+      expect(sent).toEqual([]);
+      remotes.onCharacter(read);
+      drain();
+      expect(sent).toEqual(['/Soul {HP=936/956,MA=742/742}']);
+    });
+
+    it('answers on the sheet, even one that left the figure over', () => {
+      const remotes = asking(true);
+      remotes.onBlock(said('conversation-telepath', 'Soul', '@health'), stale);
+      remotes.payHealth(stale);
+      drain();
+      expect(sent).toEqual(['/Soul {HP=936/936,MA=742/742}']);
+    });
+
+    it('answers at once, readably, where no sheet is coming', () => {
+      const remotes = asking(false);
+      remotes.onBlock(said('conversation-telepath', 'Soul', '@health'), stale);
+      drain();
+      expect(sent).toEqual(['/Soul {HP=936/936,MA=742/742}']);
+    });
+  });
 });
 
 describe('answering the questions MegaMUD 2.1 was seen to answer', () => {
