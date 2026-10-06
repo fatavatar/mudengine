@@ -203,6 +203,24 @@ describe('which kit to be in', () => {
   });
 
   /*
+   * Skinny, 2026-10-03: the situation flipped twice before the server answered,
+   * and every flip sent the `wear`s again — `wear firestone pendant` three
+   * times in one second. A command on its way is not asked for twice.
+   */
+  it('does not send a swap again while the first is still unanswered', () => {
+    const manager = make();
+    const pack = [
+      worn('plate boots', 'Feet'),
+      worn('lifestealer', WEAPON_HAND),
+      carried('brown leather boots')
+    ];
+    manager.onCharacter(standing(pack), true, null);
+    manager.onCharacter(standing(pack), false, null);
+    manager.onCharacter(standing(pack), true, null);
+    expect(sent).toEqual(['wear brown leather boots']);
+  });
+
+  /*
    * Fatty's Pre/Post Rest commands, `eq healing stone` and `eq ruby-eyed
    * amulet` (fatty.ini): the stone and the amulet share the neck, so the base
    * set naming the amulet is what brings it back.
@@ -274,6 +292,32 @@ describe('which kit to be in', () => {
     clock += 60_000;
     expect(swallowed.dressing).toBe(false);
     expect(make(gear({ enabled: false })).dressing).toBe(false);
+  });
+
+  /*
+   * Skinny, 2026-10-04: the sitting kit's `wear`s were still unanswered when
+   * he was led into a wererat knight's room, and the fight's kit — the pack
+   * as it stood — read as on, so `dfur` went out ahead of the swap.
+   */
+  it('is dressing while a swap is unanswered, though the pack still shows the kit wanted', () => {
+    const config = gear({
+      sets: [
+        { name: 'Fighting', when: 'always', mob: '', wear: ['firestone pendant'] },
+        { name: 'Meditating', when: 'meditating', mob: '', wear: ['jeweled moonstone medallion'] }
+      ]
+    });
+    const manager = make(config, { slotOf: () => 'Neck' });
+    const pack = [worn('firestone pendant', 'Neck'), carried('jeweled moonstone medallion')];
+    manager.onCharacter(standing(pack), false, 'meditating');
+    expect(sent).toEqual(['wear jeweled moonstone medallion']);
+    // Led into a fight before the answer: the fight's kit is what the pack shows.
+    manager.onCharacter(standing(pack), false, null, true);
+    expect(manager.dressing).toBe(true);
+    // The answer lands, and the fight's kit goes back on before the fight.
+    const swapped = [worn('jeweled moonstone medallion', 'Neck'), carried('firestone pendant')];
+    manager.onCharacter(standing(swapped), false, null, true);
+    expect(sent).toEqual(['wear jeweled moonstone medallion', 'wear firestone pendant']);
+    expect(manager.dressing).toBe(true);
   });
 
   it('says what a set names and the pack does not hold, once', () => {

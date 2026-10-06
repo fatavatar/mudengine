@@ -20,10 +20,12 @@ import type { Priority } from '../../shared/automation';
 import type { CharacterState } from '../../shared/character';
 import type { GearConfig } from '../../shared/config';
 import {
+  equip,
   kitFor,
   offRoundPlan,
   overlayFor,
   swapPlan,
+  unequip,
   type GearSituation,
   type GearPlan
 } from '../../shared/gear';
@@ -43,7 +45,11 @@ export interface EquipmentEvents {
 export class EquipmentManager {
   /** The set last dressed for, by name, so an unchanged situation sends nothing. */
   private wearing: string | null = null;
-  /** When each command was last proposed, so one the server swallowed is not resent per line. */
+  /**
+   * When each command was last proposed, so one still on its way, or one the
+   * server swallowed, is not resent per line. Forgotten once the pack shows
+   * it done (`answered`), and only then.
+   */
   private readonly askedAt = new Map<string, number>();
   /** Items said to be missing, once each, until the situation changes. */
   private readonly saidMissing = new Set<string>();
@@ -136,16 +142,21 @@ export class EquipmentManager {
     const set = overlayFor(this.config.sets, now);
     const name = set?.name ?? '';
     if (name !== this.wearing) {
-      /*
-       * The situation changed, so the floor below has nothing to say about it.
-       * Keeping it would be the bug it exists to prevent, inverted: a
-       * character that fights, walks and fights again inside half a minute
-       * would have the second swap refused by the first one's clock, and
-       * stand in the fight in its walking boots.
-       */
-      this.askedAt.clear();
       this.saidMissing.clear();
       this.wearing = name;
+    }
+    /*
+     * A command the pack shows done has been answered, so the floor below has
+     * nothing more to say about it: a character that fights, walks and fights
+     * again inside half a minute has its second swap sent, not refused by the
+     * first one's clock. The floor used to be cleared by the situation
+     * changing instead, and a situation that flipped twice before the server
+     * answered sent every `wear` again — skinny's `wear firestone pendant`
+     * three times in one second, each after the first answered `You do not
+     * have firestone pendant left unequipped.` (2026-10-03).
+     */
+    for (const command of this.askedAt.keys()) {
+      if (answered(command, state.inventory.items)) this.askedAt.delete(command);
     }
 
     const kit = kitFor(this.config.sets, now, (item) => this.sources.slotOf(item));
@@ -164,8 +175,15 @@ export class EquipmentManager {
           this.config.sets.some((set) => set.wear.some((name) => sameItem(name, item)))
       }
     );
-    // On, or as far on as the pack allows: nothing left for a step to wait for.
-    if (plan.commands.length === 0) this.dressingUntil = 0;
+    /*
+     * On, or as far on as the pack allows: nothing left for a step to wait for
+     * — unless a swap of ours is still unanswered, because the pack it was
+     * planned against is about to change. skinny sat to meditate, was led
+     * into a wererat knight's room before the sitting kit's `wear`s were
+     * answered, and the fight's kit read as on: `dfur` went out, the sitting
+     * kit landed, and the fight's kit put back broke the fight (2026-10-04).
+     */
+    if (plan.commands.length === 0 && !this.unanswered()) this.dressingUntil = 0;
     this.send(plan, now.fighting ? 'combat' : 'probe', set);
   }
 
@@ -221,6 +239,15 @@ export class EquipmentManager {
     this.events.notice?.(t('automation.gear.offRound', { item, target }));
   }
 
+  /** Whether a command sent is still on its way: unanswered, and not yet expired unsent. */
+  private unanswered(): boolean {
+    const at = this.now();
+    for (const asked of this.askedAt.values()) {
+      if (at - asked < tuning().spells.buffExpiresMs) return true;
+    }
+    return false;
+  }
+
   /** One plan, enqueued, with what it could not do said out loud. */
   private send(plan: GearPlan, priority: Priority, set: { name: string } | null): void {
     const at = this.now();
@@ -258,4 +285,12 @@ export class EquipmentManager {
       );
     }
   }
+}
+
+/** Whether the pack shows a proposed `wear` or `remove` done: the server's answer to it. */
+function answered(command: string, items: CharacterState['inventory']['items']): boolean {
+  const on = command.startsWith(equip('')) ? true : command.startsWith(unequip('')) ? false : null;
+  if (on === null) return false;
+  const name = command.slice((on ? equip('') : unequip('')).length);
+  return items.some((item) => item.equipped && sameItem(item.name, name)) === on;
 }
