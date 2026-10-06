@@ -844,6 +844,8 @@ export type BlockType =
    * repaint — or, with no `state`, a meditation that ended by itself.
    */
   | 'user-rests'
+  /** `Meditation will not help at this time.` — `med` refused at full mana. */
+  | 'meditation-refused'
   /* Party membership, announced rather than asked for. */
   | 'party-invited'
   | 'party-joined'
@@ -1065,6 +1067,7 @@ const DOMAIN_OF: Record<BlockType, BlockDomain> = {
   'player-dies': 'presence',
   'player-rests': 'presence',
   'user-rests': 'status',
+  'meditation-refused': 'status',
   'party-invited': 'presence',
   'party-joined': 'presence',
   'party-left': 'presence',

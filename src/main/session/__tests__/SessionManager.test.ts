@@ -4629,6 +4629,48 @@ describe('a follower asking its leader to wait', () => {
   });
 });
 
+/* Skinny, 2026-10-06: `med` at full mana, refused 131 times, toward a maximum a buff had taken. */
+describe('meditating toward a stale maximum', () => {
+  it('stops at the first refusal, and reads the sheet', async () => {
+    const { sink } = collect();
+    manager = new SessionManager(sink, undefined, {
+      ...DEFAULT_CONFIG.automation,
+      enabled: true,
+      idle: { ...DEFAULT_CONFIG.automation.idle, enabled: false },
+      onEnterRealm: [],
+      rules: [],
+      health: { ...DEFAULT_CONFIG.automation.health, meditateBelow: 0.95 }
+    });
+    await manager.connect({ host: '127.0.0.1', port, encoding: 'cp437' });
+    const socket = await client();
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    const lines = (): string[] => Buffer.concat(chunks).toString('latin1').split('\r\n');
+    const count = (command: string): number => lines().filter((line) => line === command).length;
+
+    socket.write(
+      'Name: Skinny Fatterson                 Lives/CP:      9/6\r\n' +
+        'Hits:   998/998   Armour Class: 112/4  Thievery:        0\r\n' +
+        'Mana: * 792/810   Spellcasting: 407    Traps:           0\r\n' +
+        '[HP=998/MA=792]:' +
+        PROMPT_REPAINT
+    );
+    await until(() => manager!.character.vitals.manaMax === 810);
+    socket.write('[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await until(() => count('med') === 1);
+    const sheets = count('st');
+    socket.write('Meditation will not help at this time.\r\n[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await until(() => manager!.character.vitals.manaMax === 760);
+    await until(() => count('st') > sheets);
+    socket.write('[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await settled(998);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    socket.write('[HP=998/MA=760]:' + PROMPT_REPAINT);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(count('med')).toBe(1);
+  });
+});
+
 /* Skinny, 2026-10-04: `{HP=936/916,…}` to Fatty, who could not read it, fifty-two times. */
 describe('answering @health over a stale maximum', () => {
   it('reads the stat sheet first, and answers with its maximum', async () => {

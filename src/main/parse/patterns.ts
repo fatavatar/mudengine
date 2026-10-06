@@ -584,6 +584,12 @@ export const RULES: Rule[] = [
     pattern:
       /^You (?:are now (?<state>resting|meditating)\.|awake from deep meditation feeling stronger!)$/
   },
+  /*
+   * `med` refused because mana is full: all 141 in skinny's logs to
+   * 2026-10-06 came at the stat sheet's own maximum, or at the one the next
+   * sheet stated (131 at `MA=760` against a stale 810, `Mana: 741/760` after).
+   */
+  { type: 'meditation-refused', pattern: /^Meditation will not help at this time\.$/ },
 
   /* ----------------------------------------------------------- combat */
   { type: 'combat-status', pattern: /^\*Combat (?<status>Engaged|Off)\*/ },
