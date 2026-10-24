@@ -1,7 +1,7 @@
 /**
  * Builds, runs and pushes the container image.
  *
- *   npm run docker:build          build rayzorben/mudengine:<package version>
+ *   npm run docker:build          build ghcr.io/fatavatar/mudengine:<package version>
  *   npm run docker:run            run what was just built, on port 8080
  *   npm run docker:push           push the version tag and `latest`
  *   npm run docker:build -- --list   say what would happen, do nothing
@@ -11,7 +11,7 @@
  * disagrees with the version for the desktop artefacts, for a stated reason —
  * the tag names the release and `package.json` names every file inside it — and
  * an image is one more artefact of that release. Typing `:0.5.0` by hand is how
- * `rayzorben/mudengine:0.5.0` comes to hold the 0.6.0 build.
+ * `ghcr.io/fatavatar/mudengine:0.5.0` comes to hold the 0.6.0 build.
  *
  * **Pushing is a separate command and never happens as part of a build.** An
  * image push is public and cannot be taken back — the tag can be overwritten
@@ -20,7 +20,7 @@
  * asked for. `--list` says what a push *would* do without doing it.
  *
  * CI does the same three steps in `.github/workflows/release.yml`, from a tag,
- * with the Docker Hub credentials in repository secrets. This script is the
+ * signed in to the GitHub Container Registry with the workflow's own token. This script is the
  * local equivalent, and it is what proves the Dockerfile still builds before a
  * tag is pushed.
  */
@@ -34,7 +34,7 @@ import { buildStamp } from './lib/build-stamp.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The repository the image is published under. */
-const IMAGE = process.env['MUDENGINE_IMAGE'] ?? 'rayzorben/mudengine';
+const IMAGE = process.env['MUDENGINE_IMAGE'] ?? 'ghcr.io/fatavatar/mudengine';
 
 /**
  * The host port `docker:run` publishes the container's 8080 on.
@@ -226,7 +226,9 @@ if (action === 'run') {
 }
 
 if (action === 'push') {
-  console.log(`About to push ${versioned} and ${latest} to Docker Hub.`);
+  console.log(
+    `About to push ${versioned} and ${latest} to the GitHub Container Registry (docker login ghcr.io first).`
+  );
   console.log('A push is public and the layers cannot be recalled from anybody who pulled them.');
   console.log('Ctrl-C now if that is not what you meant.\n');
   run('docker', ['push', versioned]);

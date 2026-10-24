@@ -1,6 +1,11 @@
-# Installable redistributables for Linux, Windows and macOS, on a release tag.
+# Installable redistributables for Linux, Windows and macOS, and the container
+# image, on a release tag:
 #
-#   git tag v0.6.0 && git push origin v0.6.0
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Push that one tag, never `--tags`: the clone holds upstream's own tags
+# (v0.8.1 to v0.9.5, fetched with `upstream`), which name another project's
+# releases. The version in package.json must match the tag.
 #
 # Each platform is built on its own runner, because none of them can be built
 # properly from another: a .dmg is made with Apple's hdiutil, the NSIS installer
@@ -152,53 +157,50 @@ jobs:
   # perfectly good image behind a Windows toolchain problem it shares no code
   # with.
   #
-  # **Pushes only from a tag, or a dispatch that asked to publish.** Everything
-  # else builds the image and throws it away, which is the check worth having
-  # on a pull request: the Dockerfile still builds.
+  # **Pushed to the GitHub Container Registry**, as `ghcr.io/<owner>/mudengine`,
+  # with the workflow's own token: no account or secret to keep (2026-10-24,
+  # in place of upstream's Docker Hub image). Pushed only from a tag, or a
+  # dispatch that asked to publish. Everything else builds the image and
+  # throws it away, which is the check worth having: the Dockerfile still
+  # builds.
   docker:
     name: Container image
     needs: verify
     runs-on: ubuntu-latest
-    env:
-      IMAGE: rayzorben/mudengine
-      # Read into the job's environment once, because `secrets` is not among
-      # the contexts a step-level `if:` may name — a step `if` that reads
-      # `secrets.X` is refused at parse time and the whole run fails, where
-      # the intent was to skip one step. `env` is available to a step `if`.
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
       # The tag comes out of package.json, never out of the git ref. `verify`
       # has already refused a tag that disagrees with it, so by here the two
       # are the same number — and reading the file is what keeps that true for
-      # a `workflow_dispatch` run, which has no tag at all.
-      - name: The version to tag the image with
+      # a `workflow_dispatch` run, which has no tag at all. The registry wants
+      # the owner in lower case.
+      - name: The image and the version to tag it with
         id: v
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mudengine" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
-      # No credentials, no login, and the build below still runs. A fork's pull
-      # request has no access to the secrets and must not fail for it.
-      #
-      # The condition reads the *job's* `env`, set from the secret above. A
-      # step's own `env:` is applied after its `if` is evaluated, so that
-      # would always compare against an empty string; and `secrets` itself is
-      # not a context a step `if` may name, so reading it here is refused at
-      # parse time and fails the whole run. The job-level `env` is the one
-      # shape that is both evaluated in time and allowed.
-      - name: Sign in to Docker Hub
-        if: env.DOCKERHUB_USERNAME != ''
+      - name: Sign in to the GitHub Container Registry
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # linux/amd64 only. Nothing in the image is architecture-specific any
       # more — it is Node and JavaScript, since the web host replaced the
       # framebuffer image — so an arm64 build is one line here plus a QEMU
       # setup step, and waits for somebody to want it.
+      #
+      # The labels are what the registry shows: `source` links the package to
+      # this repository, and its README is the package's page.
       - name: Build, and push only when this is a release
         uses: docker/build-push-action@v6
         with:
@@ -207,10 +209,15 @@ jobs:
           # `.git` is not in the context, so the build is told its commit.
           build-args: |
             MUDENGINE_COMMIT=${{ github.sha }}
-          push: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.publish) && env.DOCKERHUB_USERNAME != '' }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
           tags: |
-            ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
-            ${{ env.IMAGE }}:latest
+            ${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}
+            ${{ steps.v.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Client, terminal and automation engine for MajorMUD, GreaterMUD and Paradigm, in a browser.
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           # The layer cache lives in the Actions cache, so an unchanged
           # dependency layer is not a thousand-package install every run.
           cache-from: type=gha
@@ -219,40 +226,14 @@ jobs:
       - name: What was published
         run: |
           if [ "${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}" = "true" ]; then
-            echo "Pushed ${IMAGE}:${{ steps.v.outputs.version }} and ${IMAGE}:latest"
+            echo "Pushed ${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }} and :latest"
           else
-            echo "Built ${IMAGE}:${{ steps.v.outputs.version }} without pushing (not a release)."
+            echo "Built ${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }} without pushing (not a release)."
           fi
-
-      # The Hub page is not the image: `docker push` sets nothing on it. So
-      # the description is uploaded beside the push, from `docker/README.md`,
-      # under exactly the condition the push has and with the same
-      # credentials — a page that describes an image nobody pushed would be
-      # a page ahead of its image.
-      #
-      # The short description is Hub's one-line summary, capped at 100
-      # characters, so it is stated here rather than read from package.json,
-      # whose line is longer than that.
-      #
-      # **The token needs read/write/delete scope**, which is more than a
-      # push needs, and this comment said read-and-write until 2026-09-07:
-      # v0.6.1's run pushed both tags with such a token and then took
-      # `Error: Forbidden` on the PATCH below. The action's README states
-      # the requirement; a token that pushes images is not evidence that
-      # this step will be allowed.
-      - name: Publish the Docker Hub description
-        if: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.publish) && env.DOCKERHUB_USERNAME != '' }}
-        uses: peter-evans/dockerhub-description@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ env.IMAGE }}
-          short-description: Client, terminal and automation engine for MajorMUD, GreaterMUD and Paradigm, in a browser.
-          readme-filepath: ./docker/README.md
 
   release:
     name: Publish the release
-    needs: build
+    needs: [build, docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -289,9 +270,10 @@ jobs:
       # `gh` is on the runner and needs no third-party action. Published
       # outright: it was `--draft` so somebody read the notes before it was
       # announced, and the cost was that a draft never appears on the
-      # repository's front page — v0.5.0 sat there as one, and the front page
-      # showed no release at all. The notes are the fixed text above, so
-      # there is nothing to read before publishing that was not read here.
+      # repository's front page. The notes are the install text below and
+      # GitHub's list of the pull requests merged since the last release, so
+      # there is nothing to write by hand. It waits on `docker` as well as
+      # `build`, so the page never names an image that was not pushed.
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -300,30 +282,40 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           case "$tag" in v*) ;; *) tag="v${version}" ;; esac
 
-          cat > notes.md <<'NOTES'
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mudengine"
+
+          cat > notes.md <<NOTES
+          ### This version
+
+          A fork that has gone its own way from
+          [rayzorben/mudengine](https://github.com/rayzorben/mudengine) since the
+          end of September 2026. Every character is played by a port of MegaMUD's
+          own engine (\`megamud.exe\`, rewritten function by function), with
+          MegaMUD's settings, in place of upstream's automation. See the README's
+          *Where this version comes from*.
+
           ### Install
 
           | | |
           |---|---|
-          | **Windows** | `-win-x64-setup.exe` — the installer. `-win-x64.zip` if you would rather not install. |
-          | **macOS** | `-mac-arm64.dmg` on Apple silicon, `-mac-x64.dmg` on Intel. |
-          | **Linux** | `.AppImage` runs anywhere (`chmod +x`, then run it). `.deb` for Debian and Ubuntu. |
+          | **Docker** | \`docker run -d -p 8080:8080 -v mudengine:/config ${image}:${version}\`, then open http://localhost:8080/ and sign in with the password the first start printed. |
+          | **Windows** | \`-win-x64-setup.exe\` is the installer; \`-win-x64.zip\` if you would rather not install. |
+          | **macOS** | \`-mac-arm64.dmg\` on Apple silicon, \`-mac-x64.dmg\` on Intel. |
+          | **Linux** | \`.AppImage\` runs anywhere (\`chmod +x\`, then run it). \`.deb\` for Debian and Ubuntu. |
 
           ### These builds are not signed
 
           Windows shows a SmartScreen warning: **More info → Run anyway**.
           macOS refuses on a double-click: **Ctrl-click the app → Open**, or
-          `xattr -dr com.apple.quarantine /Applications/mudengine.app`.
+          \`xattr -dr com.apple.quarantine /Applications/mudengine.app\`.
 
-          ### What is in it
-
-          Paradigm's six realms are configured out of the box — the four game
-          realms and the two test realms — and the world the client walks is
-          built from Paradigm's own database, 57,511 rooms. Add your account on
-          the Characters page in Settings; it is kept on your own machine and
-          nothing else reads it.
+          ### What changed
           NOTES
 
+          # GitHub's own list of the pull requests merged since the last
+          # release follows the text above (`--generate-notes`), so the notes
+          # need no hand-kept changelog.
           gh release create "$tag" artifacts/* \
             --title "mudengine $version" \
-            --notes-file notes.md
+            --notes-file notes.md \
+            --generate-notes

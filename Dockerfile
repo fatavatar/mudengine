@@ -32,8 +32,8 @@
 #
 # ## Building
 #
-#   docker build -t rayzorben/mudengine:0.6.1 .
-#   docker run --rm -p 8080:8080 -v mudengine:/config rayzorben/mudengine:0.6.1
+#   docker build -t ghcr.io/fatavatar/mudengine:1.0.0 .
+#   docker run --rm -p 8080:8080 -v mudengine:/config ghcr.io/fatavatar/mudengine:1.0.0
 #
 # `npm run docker:build` does the first line with the version read out of
 # package.json, so the tag cannot drift from the artefacts the release names.

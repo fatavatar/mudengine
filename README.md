@@ -16,6 +16,27 @@ Communities run servers to this day, and people still play.
 and the games descended from it, built for today's computers — Windows, Mac and
 Linux — with everything the old tools did and a great deal they never could.
 
+## Where this version comes from
+
+This is a fork of [rayzorben/mudengine](https://github.com/rayzorben/mudengine).
+The two shared their code until the end of September 2026 and have gone their
+own ways since.
+
+**The biggest difference is the engine.** Here, every character is played by a
+port of MegaMUD itself: `megamud.exe`'s decision engine, read from the
+original program and rewritten function by function. That covers combat,
+resting and healing, blessings, the party, walking paths and loops, and the
+`@` remote commands. The port was decided on 12 October 2026 and took over
+from the client's own automation on 14 October. The settings are MegaMUD's
+own, under MegaMUD's names, and a character does what it would do under
+MegaMUD. How the port sits in the client is in
+[`docs/codebase/engine.md`](docs/codebase/engine.md); what MegaMUD does, with
+the addresses it was read from, is in [`docs/megamud/`](docs/megamud/).
+
+Fixes from upstream are still brought over by hand where they fit, such as the
+game-text parser, connections and browser tabs. Upstream's own automation,
+route planner and game view are not part of this version.
+
 ## What it does
 
 **It shows you the game clearly.** The game itself sits in the middle of the
@@ -65,7 +86,7 @@ server, the window is served to your browser, and the game sockets, the files
 and the automation stay in the container.
 
 ```
-docker run --rm -p 8080:8080 -v mudengine:/config rayzorben/mudengine:latest
+docker run --rm -p 8080:8080 -v mudengine:/config ghcr.io/fatavatar/mudengine:latest
 ```
 
 Then open `http://localhost:8080/` and sign in with the password the
@@ -125,7 +146,7 @@ run web`.
 
 ## Where it stands
 
-Everything described above works today. The project is not yet at version 1.0 —
-polish, deeper automation and packaged installers for every platform are still
-being finished — but it is played on daily, against real servers, with real
-characters.
+Everything described above works today, and 1.0.0 is its first release as a
+fork in its own right. It is played on daily, against real servers, with real
+characters. The installers are not yet signed, so Windows and macOS each ask
+once before opening them.

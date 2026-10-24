@@ -1,16 +1,16 @@
 {
   "name": "mudengine",
-  "version": "0.7.0",
+  "version": "1.0.0",
   "description": "Modern cross-platform client, terminal and reactive automation engine for MajorMUD / GreaterMUD / Paradigm",
   "author": "Raymond Bennett <raymond.bennett@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/rayzorben/mudengine",
+  "homepage": "https://github.com/fatavatar/mudengine",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rayzorben/mudengine.git"
+    "url": "git+https://github.com/fatavatar/mudengine.git"
   },
   "bugs": {
-    "url": "https://github.com/rayzorben/mudengine/issues"
+    "url": "https://github.com/fatavatar/mudengine/issues"
   },
   "type": "module",
   "main": "./out/main/index.js",
@@ -77,7 +77,7 @@
     "probe:signal": "node scripts/signal-probe.mjs"
   },
   "build": {
-    "appId": "com.raymondbennett.mudengine",
+    "appId": "com.fatavatar.mudengine",
     "productName": "mudengine",
     "copyright": "Copyright © 2026 Raymond Bennett",
     "directories": {
